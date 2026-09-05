@@ -98,6 +98,26 @@ else
   say "        node $REPO/packages/mcp/dist/index.js"
 fi
 
+# An MCP stdio server is not a daemon — the client spawns one per session, so
+# there is nothing to start here. What CAN go wrong is registering a server that
+# does not work: the entry is added, `claude mcp list` looks healthy, and the
+# failure only appears when an agent first tries to use it. So actually speak
+# the protocol to it once and count what it offers.
+TOOLS="$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"install","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  | node "$REPO/packages/mcp/dist/index.js" 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+      const line=d.trim().split("\n").filter(Boolean).pop()||"";
+      try{process.stdout.write(String(JSON.parse(line).result.tools.length))}catch(e){process.stdout.write("0")}})' 2>/dev/null || echo 0)"
+if [ "${TOOLS:-0}" -gt 0 ]; then
+  good "the server answers and offers $TOOLS tools"
+else
+  bad "the MCP server did not answer an initialize handshake — agents will not"
+  say "        be able to use it. Try: node $REPO/packages/mcp/dist/index.js"
+fi
+
 # ------------------------------------------------------------- VS Code extension
 #
 # `code --install-extension` is the documented way, but on macOS that command

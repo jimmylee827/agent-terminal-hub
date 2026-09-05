@@ -40,9 +40,16 @@ bash scripts/install.sh
 
 That is the whole install. It checks prerequisites first and stops with a clear
 message if `tmux` or a recent Node are missing, builds everything, puts `ath` on
-your PATH, installs the Claude Code skill, registers the MCP server, installs the
-VS Code extension, and then **proves it works** by creating a session, running a
-command in it and checking the exit code comes back.
+your PATH, installs the Claude Code skill, registers the MCP server, and installs
+the VS Code extension.
+
+It then **proves each half works** rather than assuming: it speaks the MCP
+protocol to the server and reports how many tools it offers, and it creates a
+session, runs a command in it, and checks the exit code comes back.
+
+The MCP server is a stdio server, so there is no daemon to start — your agent
+spawns one per session. Registering it is all that is needed; verifying it
+answers is what tells you the registration is worth anything.
 
 Everything is symlinked into the repo, so updating is `git pull && npm run
 build` — nothing needs reinstalling. The script is safe to re-run.
