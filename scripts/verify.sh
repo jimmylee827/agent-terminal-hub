@@ -1328,6 +1328,62 @@ check "but no request is filed, because nothing is waiting" "0" "${n:-x}"
 $ATH kill nr --force >/dev/null 2>&1
 
 echo
+echo "-- exit_code says when it is only part of the story"
+# The shell reports the LAST segment's status. `sudo -n true 2>&1; echo "exit=$?"`
+# came back exit_code 0 while its own output read exit=1, and a line ending in
+# `grep -c` returned 1 for finding nothing though the real work succeeded. The
+# one machine-readable field was the one most likely to mislead, twice in one
+# session.
+$ATH kill xc --force >/dev/null 2>&1
+$ATH new xc >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^xc ' && break; sleep 1; done
+cav() { $ATH run xc --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"flagged":"silent")}catch(e){console.log("x")}})'; }
+check "a trailing echo hiding a failure is flagged" "flagged" "$(cav 'false; echo done')"
+check "a pipeline whose last stage sets the code is flagged" "flagged" "$(cav 'echo hi | grep -c nope')"
+check "a simple command is not flagged" "silent" "$(cav 'echo plain')"
+check "a separator inside quotes is not a compound command" "silent" "$(cav 'echo "a;b"')"
+check "an && chain is not flagged — there the status is the answer" "silent" "$(cav 'true && echo ok')"
+$ATH kill xc --force >/dev/null 2>&1
+
+echo
+echo "-- killing a session someone is attached to is not silent"
+# A session was destroyed while the human was still attached, having just typed
+# a password into it, and the only output was "destroyed". The client count is
+# in `list`; staying quiet about it is the tool withholding what the caller
+# needed. Tested as a predicate because an attached tmux CLIENT cannot be
+# created in a non-interactive environment, and this guard must not be the
+# untested branch.
+g=$(node -e '
+const f=require("./packages/core/dist/index.js").attachedClientsNote;
+const r=[f(0)?1:0, f(1)?1:0, f(3)?1:0].join("");
+console.log(r === "011" ? "correct" : "wrong:"+r);' 2>/dev/null)
+check "says so when clients were attached, silent when none" "correct" "${g:-x}"
+# Reporting, not refusing: the VS Code panel attaches a client to every session
+# it displays, so refusing would block ordinary cleanup whenever the panel is
+# open. The case that must never be lost — an unanswered human request — is
+# guarded separately and outranks --force.
+m=$(node -e '
+const f=require("./packages/core/dist/index.js").attachedClientsNote;
+console.log(/editor panel/.test(f(1)||"") ? "hedged" : "overclaims");' 2>/dev/null)
+check "and does not claim a person was definitely there" "hedged" "${m:-x}"
+
+echo
+echo "-- an unknown parameter is refused, not ignored"
+# `new` accepted a `session` parameter it does not have, ignored it, and
+# returned success — "how an agent convinces itself a flag works when it
+# doesn't". Every schema already said additionalProperties:false; nothing
+# enforced it.
+mcpcall() { printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  "$1" | node packages/mcp/dist/index.js 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result;console.log(r.isError?"refused":"accepted")}catch(e){console.log("x")}})'; }
+r=$(mcpcall '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list","arguments":{"bogus_param":1}}}')
+check "a parameter the tool does not have is refused" "refused" "${r:-x}"
+r=$(mcpcall '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list","arguments":{}}}')
+check "and a valid call still works" "accepted" "${r:-x}"
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?

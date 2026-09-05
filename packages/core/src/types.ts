@@ -89,6 +89,8 @@ export interface RunResult {
   command: string;
   /** A problem with the command itself that the hub can see but cannot fix. */
   warning?: string;
+  /** Set when `exitCode` is the status of only part of a compound command. */
+  exitCaveat?: string;
   /** null when the command did not finish (timed out or is awaiting input). */
   exitCode: number | null;
   /** Combined stdout+stderr for this command only, ANSI-stripped. */

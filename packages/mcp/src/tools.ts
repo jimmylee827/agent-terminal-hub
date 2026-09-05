@@ -45,7 +45,8 @@ export const TOOL_DEFINITIONS = [
       'stdout+stderr and the real exit code. IMPORTANT: if the result has needsInput=true, the ' +
       'command is waiting on a password or a confirmation prompt. Do NOT attempt to answer it and ' +
       'never send a credential — report it to the human, who is attached to the same terminal and ' +
-      'will type it. Then continue with the `read` tool.',
+      'will type it. Then continue with the `read` tool. (The CLI signals these as exit codes 75 ' +
+      'and 76; here they are the `needs_input` and `timed_out` fields instead.)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,6 +206,12 @@ export const TOOL_DEFINITIONS = [
       properties: {
         session: { type: 'string' },
         handle: { type: 'string', description: 'From `start`. Omit to use the command in flight.' },
+        since: {
+          type: 'number',
+          description:
+            'Return only output produced after this byte offset, as `poll` does. Without it the ' +
+            'whole command window comes back, which on a chatty command is a lot of context.',
+        },
         timeout_seconds: {
           type: 'number',
           description: 'Give up waiting after this long. Default 300.',

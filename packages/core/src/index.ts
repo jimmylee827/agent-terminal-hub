@@ -43,6 +43,7 @@ export {
   gc,
   get,
   kill,
+  attachedClientsNote,
   list,
   paneStatus,
   rename,

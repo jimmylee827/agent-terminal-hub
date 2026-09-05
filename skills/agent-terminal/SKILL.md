@@ -292,6 +292,19 @@ A plain `exit` there returns you one level, it does not end the session.
   cannot see the instant a command ended, only when something first noticed. It
   is exact only while the command is still running. If you need a real duration,
   time the command itself.
+- **If the ssh connection drops**, the session does not die and does not hang.
+  The next command reconnects automatically and comes back with
+  `reconnecting: true` — the working directory and anything this session
+  *exported* are restored. Background jobs, shell functions and unexported
+  variables are NOT: they lived in the process the dropped link took with it,
+  so re-export what you need. If the link cannot be restored you get
+  `remote_disconnected` and **nothing is sent** — a keystroke meant for the
+  remote host is never typed into your local shell.
+- The reported exit code is the status of the LAST command on the line. `a; b`
+  reports b's, and a pipeline reports its last stage's — so `sudo -n true; echo
+  done` looks successful and `… | grep -c` looks failed. The hub flags this
+  whenever it sees `;` or `|`, but read the output rather than trusting the
+  number.
 - `ath send` takes tmux **key names**, not prose. `ath send x -- 'hello world'`
   is rejected; use `--text` to type literal text.
 - A reconnect restores the working directory and the variables **this session

@@ -616,6 +616,33 @@ export interface KillOptions {
   force?: boolean;
 }
 
+/**
+ * What to tell the caller about clients attached to a session being killed.
+ *
+ * A session was destroyed while the human was still attached — they had just
+ * typed a password into it — and the only output was `Session "box2"
+ * destroyed.` The client count sits right there in `list`; not mentioning it is
+ * the tool knowing something the caller needed and staying quiet.
+ *
+ * REPORTS, does not refuse. Refusing was the first attempt and the suite caught
+ * it immediately: the VS Code panel attaches a client to every session it
+ * displays, so an agent tidying up its own session would be blocked whenever
+ * the user happened to have the panel open. That trades a rare silent loss for
+ * constant friction, and it is not what was asked for — the ask was that the
+ * tool say what it knows. The case that genuinely must not be lost, an
+ * unanswered human request, is already guarded above and outranks --force.
+ *
+ * Split out as a plain function because an attached tmux CLIENT cannot reliably
+ * be created in a test environment, and this should not be an untested branch.
+ */
+export function attachedClientsNote(attached: number): string | undefined {
+  if (attached <= 0) return undefined;
+  return (
+    `${attached} client(s) were attached — someone may have been looking at it, or typing. ` +
+    `Note this counts the editor panel too, so it is not proof a person was there.`
+  );
+}
+
 export async function kill(
   name: string,
   reason = 'killed from the hub',

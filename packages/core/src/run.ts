@@ -1029,6 +1029,7 @@ async function runLocked(
     // Only when no wall fired: if one did, the request exists and the warning
     // would be noise. The dangerous case is the SILENT one.
     ...(!needsHuman && credentialBlindSpot(command) ? { warning: credentialBlindSpot(command) } : {}),
+    ...(compoundExitCaveat(command) ? { exitCaveat: compoundExitCaveat(command) } : {}),
     timedOut: false,
     needsInput: state === 'needs-input',
     state,
@@ -1612,6 +1613,33 @@ async function hooksActive(name: string, session: Session): Promise<boolean> {
  */
 const HUMAN_WALL_RE =
   /a (?:password|passphrase) is required|^\[sudo\] password for|sudo: no tty present|Permission denied \(publickey|Authentication failure|must be run as root|are you root\?/im;
+
+/**
+ * Warn when `exit_code` is not the status of the command the caller means.
+ *
+ * The shell reports the LAST segment's status, which is correct and is exactly
+ * what misleads. `sudo -n true 2>&1; echo "exit=$?"` came back as
+ * `exit_code: 0` while its own output read `exit=1`, because the last command
+ * was the echo. The same agent was bitten again by a line ending in `grep -c`,
+ * which returned 1 for finding zero matches even though the real work had
+ * succeeded. Its point stands: the one machine-readable field in the response
+ * is the one most likely to be wrong about what the caller asked.
+ *
+ * `&&` and `||` are excluded on purpose — there the propagated status is
+ * usually the answer you wanted. It is `;` and `|` that hide it.
+ */
+function compoundExitCaveat(command: string): string | undefined {
+  // Ignore separators inside quotes: `echo "a;b"` is not a compound command.
+  const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+  const hasSemicolon = /;/.test(bare);
+  const hasPipe = /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
+  if (!hasSemicolon && !hasPipe) return undefined;
+  return (
+    `exit_code is the status of the LAST ${hasPipe && !hasSemicolon ? 'stage of the pipeline' : 'command on the line'}, ` +
+    `not of the whole line — an earlier failure can be hidden by a later success, and vice versa. ` +
+    `Read the output, or run the part you care about on its own.`
+  );
+}
 
 /** Commands that can stop at a credential wall. */
 const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|gpg)\b/;

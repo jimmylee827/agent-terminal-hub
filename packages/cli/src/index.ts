@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import {
   assertNotCredentialPrompt,
   assertRemoteConnected,
+  attachedClientsNote,
   AthError,
   SOCKET,
   TMUX_CONF,
@@ -444,8 +445,16 @@ async function main(): Promise<number> {
 
     case 'kill': {
       const name = requireName(positional[0]);
+      // Look BEFORE destroying it: once the session is gone the client count
+      // is gone with it, and "destroyed." on its own told a caller nothing
+      // about the person who was attached at the time.
+      const attached = await get(name)
+        .then((s) => s.attached)
+        .catch(() => 0);
       await kill(name, 'killed from the hub', { force: flagBool(flags, 'force') });
+      const note = attachedClientsNote(attached);
       console.log(`${name} killed`);
+      if (note) console.error(c.yellow(`[ath] ${note}`));
       return 0;
     }
 

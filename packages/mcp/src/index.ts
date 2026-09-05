@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   assertRemoteConnected,
+  attachedClientsNote,
   AthError,
   create,
   get,
@@ -58,7 +59,31 @@ function jsonWithOutput(value: Record<string, unknown>, output: string): ToolRes
   return { content: blocks };
 }
 
+/**
+ * Refuse arguments the tool does not have.
+ *
+ * `new` accepted a `session` parameter that is not in its schema, ignored it,
+ * and returned success — which is, as the agent that hit it put it, "how an
+ * agent convinces itself a flag works when it doesn't". Every schema here
+ * already declares `additionalProperties: false`; nothing was enforcing it.
+ */
+function rejectUnknownArgs(name: string, args: Record<string, unknown>): string | undefined {
+  const def = TOOL_DEFINITIONS.find((t) => t.name === name);
+  const schema = def?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  if (!schema?.properties) return undefined;
+  const known = new Set(Object.keys(schema.properties));
+  const unknown = Object.keys(args).filter((k) => !known.has(k));
+  if (unknown.length === 0) return undefined;
+  return (
+    `${name} has no parameter${unknown.length > 1 ? 's' : ''} ${unknown.map((u) => `"${u}"`).join(', ')}. ` +
+    `Nothing was run. Valid: ${[...known].join(', ') || '(none)'}.`
+  );
+}
+
 async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  const bad = rejectUnknownArgs(name, args);
+  if (bad) return text(bad, true);
+
   switch (name) {
     case 'list': {
       const sessions = await list();
@@ -135,6 +160,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // agent then reasonably concluded no request existed, and only found out
       // by checking a second surface. The run result and the request queue
       // must not disagree.
+      if (result.exitCaveat) payload.exit_code_caveat = result.exitCaveat;
+
       if (result.needsHuman) {
         payload.human_requested = true;
         payload.what_to_do =
@@ -371,16 +398,30 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         if (!alive) {
           return json({ outcome: 'session_gone', note: 'The session died; any answer was lost.' });
         }
-        const res = await poll(session, handle).catch(() => undefined);
+        const res = await poll(session, handle, Number(args.since ?? 0)).catch(() => undefined);
         if (res?.done) {
           const code = res.exitCode ?? 0;
           await reapResolvedRequests(session).catch(() => undefined);
+          const answered = code !== 130 && code !== 143;
           return jsonWithOutput(
             {
-              outcome: code === 130 || code === 143 ? 'interrupted' : 'answered',
+              outcome: answered ? 'answered' : 'interrupted',
               exit_code: code,
               session,
               handle,
+              next_offset: res.nextOffset,
+              // Say that the credential is now cached, rather than leaving it to
+              // be guessed. An agent guessed "the usual 15 minutes" and said it
+              // was gambling — a wrong guess costs the human a second
+              // interruption for nothing.
+              ...(answered
+                ? {
+                    note:
+                      'If that was a sudo password, its timestamp is now cached for THIS session ' +
+                      '(~15 min, per-tty). Further sudo commands here will not prompt again — ' +
+                      'confirm with `sudo -n true`. Another session will still prompt.',
+                  }
+                : {}),
             },
             res.output,
           );
@@ -400,8 +441,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // Deliberately never forced. A pin is how the human sharing this
       // terminal says "not this one"; an agent that could override it would
       // make the pin meaningless.
+      const attached = await get(session)
+        .then((x) => x.attached)
+        .catch(() => 0);
       await kill(session);
-      return text(`Session "${session}" destroyed.`);
+      const note = attachedClientsNote(attached);
+      return text(`Session "${session}" destroyed.${note ? ` ${note}` : ''}`);
     }
 
     default:
