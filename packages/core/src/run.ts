@@ -12,6 +12,7 @@ import {
   rotateIfNeeded,
 } from './paths';
 import {
+  assertNotCredentialPrompt,
   capturePane,
   get,
   installHelper,
@@ -23,7 +24,7 @@ import {
   validateName,
 } from './session';
 import { ensureControlDir, sshLaunchLine } from './ssh';
-import { requestHuman } from './requests';
+import { listRequests, requestHuman } from './requests';
 import { classify, couldBePrompting, isNesting, isShell, looksLikePrompt } from './state';
 import type { PollResult, RunOptions, RunResult, Session, StartResult } from './types';
 import { randomNonce, shellQuote, sleep, stripAnsi, toLines, trimBlankEdges } from './util';
@@ -593,9 +594,27 @@ async function runLocked(
     session = await get(clean);
   }
 
+  // A session held at a PROMPT is not "busy", and must not be described as it.
+  //
+  // Both cases used to raise the same SessionBusy: `already running "zsh" …
+  // queue behind it with --wait`. Every part of that misleads at a password
+  // prompt. It is not running zsh, it is stopped waiting for a person; and
+  // --wait, the one remedy offered, blocks until its timeout because nothing
+  // will move until a human types — while nobody has told the human. An agent
+  // that follows the advice burns its timeout and reports the session as stuck.
+  if (session.state === 'needs-input') {
+    throw new AthError(
+      'needs_human',
+      `Session "${clean}" is stopped at a prompt that only a person can answer, so ` +
+        `nothing was sent. Do NOT queue behind it with --wait: nothing will run until ` +
+        `it is answered. Tell the user, then let them answer it with ` +
+        `"ath attach ${clean}" — or interrupt it with "ath send ${clean} -- C-c". ` +
+        `See what it is asking with "ath read ${clean}".`,
+    );
+  }
   // The lock stops other ath callers; this catches a command started with
   // `start()` or typed directly by the human, neither of which holds it.
-  if (session.state === 'busy' || session.state === 'needs-input') {
+  if (session.state === 'busy') {
     if (!options.waitForIdle) {
       throw new SessionBusy(clean, `"${session.currentCommand || 'something'}"`);
     }
@@ -609,6 +628,13 @@ async function runLocked(
       throw new SessionBusy(clean, `"${session.currentCommand || 'something'}"`);
     }
   }
+
+  // Same guard as `start()`: a prompt the classifier has not caught up with
+  // still reads as `busy`, and the state check above lets the command through
+  // to be typed into it. Refusing costs a caller one clear error; the
+  // alternative spends the human's password prompt on a failed login attempt
+  // made of the command text.
+  await assertNotCredentialPrompt(clean);
 
   // A remote session whose ssh has died falls back to the LOCAL shell while
   // still being labelled remote everywhere. Running here would execute a
@@ -1133,9 +1159,31 @@ export async function start(name: string, command: string): Promise<StartResult>
       await respawn(clean, session.cwd);
       session = await get(clean);
     }
-    if (session.state === 'busy' || session.state === 'needs-input') {
+    // Same distinction as `run`: a prompt is not a busy command, and telling a
+    // caller to wait it out is the one piece of advice that cannot work.
+    if (session.state === 'needs-input') {
+      throw new AthError(
+        'needs_human',
+        `Session "${clean}" is stopped at a prompt that only a person can answer, so ` +
+          `nothing was started. Tell the user, then let them answer it with ` +
+          `"ath attach ${clean}" — or interrupt it with "ath send ${clean} -- C-c".`,
+      );
+    }
+    if (session.state === 'busy') {
       throw new SessionBusy(clean, `"${session.currentCommand || 'something'}"`);
     }
+
+    // Never type a command into a live password prompt.
+    //
+    // `state === 'needs-input'` above catches the case the hub has already
+    // classified, but classification lags the pane: a prompt that appeared
+    // between the last poll and now still reads as `busy`, and the command was
+    // typed straight into it. Whatever is typed then becomes a login attempt —
+    // the command text goes into the auth log as a failed password, the prompt
+    // is consumed, and the human walking over to answer finds it gone. That is
+    // exactly what a cold agent hit: its `sudo -v` prompt was "dismissed before
+    // you could type".
+    await assertNotCredentialPrompt(clean);
 
     await rotateIfNeeded(clean).catch(() => undefined);
 
@@ -1210,6 +1258,36 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
 
   const session = await get(clean).catch(() => null);
   if (!session) throw new SessionGone(clean);
+
+  // A BACKGROUND command stopped at a prompt must ask for a human too.
+  //
+  // `start()` returns before the command has run, so it can never see a
+  // credential prompt, and only `run()` filed requests. The result was that the
+  // hub's loudest case — a long job parked on a password — raised nothing: no
+  // editor notification, no request for `ath requests` or `ath await` to find.
+  // The human was never told, and the agent was left polling a job that would
+  // never move.
+  //
+  // Poll is the first moment anything observes the prompt, so it is where the
+  // ask belongs. The handle goes with it, so whoever picks it up collects the
+  // OUTCOME rather than re-running the command and asking a second time.
+  if (!done && session.state === 'needs-input') {
+    // File once. Poll is called in a loop by design, and a request per poll
+    // would bury the editor in notifications for a single prompt.
+    const already = await listRequests()
+      .then((rs) => rs.some((r) => r.session === clean && r.handle === handle && !r.resolvedAt))
+      .catch(() => false);
+    if (!already) {
+      await requestHuman(
+        clean,
+        `"${(session.lastCommand ?? 'a background command').slice(0, 80)}" is waiting at a ` +
+          `prompt in "${clean}". Attach with "ath attach ${clean}" and answer it.`,
+        'agent',
+        handle,
+        true,
+      ).catch(() => undefined);
+    }
+  }
 
   return {
     session: clean,

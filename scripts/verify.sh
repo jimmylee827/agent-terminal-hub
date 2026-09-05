@@ -1053,6 +1053,74 @@ check "echoed marker text is not mistaken for a real handle" "ok" "$got"
 $ATH kill awt --force >/dev/null 2>&1
 
 echo
+echo "-- a live prompt survives, and is never described as a busy command"
+# A prompt is the one thing in this system that a person must reach before
+# anything else happens, so nothing may consume it and nothing may send an
+# agent away from it. Both failures were reported from a real run.
+TMX() { tmux -L "${ATH_SOCKET:-ath}" "$@"; }
+$ATH new cred >/dev/null 2>&1; sleep 1
+$ATH run cred --timeout 4 -- 'printf "Password: "; read -rs p; echo "GOT=[$p]"' >/dev/null 2>&1
+sleep 1
+alive() { TMX capture-pane -p -t ath-cred -S -3 2>/dev/null | grep -c 'Password:' ; }
+check "a run that times out leaves the prompt standing" "1" "$([ "$(alive)" -ge 1 ] && echo 1 || echo 0)"
+
+# The command text must never become the password. Typing it would submit a
+# failed login AND consume the prompt the human is walking towards.
+out=$($ATH run cred -- 'echo INTRUDER' 2>&1); rc=$?
+check "a second command is refused, not typed into the prompt" "1" "$rc"
+check "and the prompt is still there afterwards" "1" "$([ "$(alive)" -ge 1 ] && echo 1 || echo 0)"
+case "$out" in
+  *"already running"*) v="called a prompt a busy command" ;;
+  *"only a person can answer"*) v=ok ;;
+  *) v="$out" ;;
+esac
+check "the refusal says a person is needed" "ok" "$v"
+# --wait is the one remedy that cannot work here: nothing moves until a human
+# types, so queueing just burns the timeout while nobody has been told.
+out=$($ATH run cred --wait --timeout 3 -- 'echo INTRUDER' 2>&1)
+case "$out" in *"only a person can answer"*) v=ok ;; *) v="$out" ;; esac
+check "--wait refuses immediately instead of queueing behind a human" "ok" "$v"
+$ATH send cred -- C-c >/dev/null 2>&1; sleep 1
+$ATH kill cred --force >/dev/null 2>&1
+
+echo
+echo "-- a BACKGROUND command parked on a prompt still asks for a human"
+# `start()` returns before the command runs, so it can never see a prompt, and
+# only `run` filed requests. The hub's loudest case — a long job stopped on a
+# password — therefore raised nothing at all: no editor notification, nothing
+# for `ath requests` or `ath await` to find, and an agent polling forever.
+$ATH new bgp >/dev/null 2>&1; sleep 1
+h=$($ATH start bgp -- 'printf "Password: "; read -rs p' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
+sleep 3
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="bgp").length))' 2>/dev/null)
+check "start alone files nothing — it cannot see the prompt yet" "0" "${n:-x}"
+$ATH poll bgp --handle "$h" >/dev/null 2>&1
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="bgp").length))' 2>/dev/null)
+check "the first poll asks for a human" "1" "${n:-x}"
+# Poll is called in a loop by design; one prompt must not mean one notification
+# per poll or the editor is buried.
+$ATH poll bgp --handle "$h" >/dev/null 2>&1
+$ATH poll bgp --handle "$h" >/dev/null 2>&1
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="bgp").length))' 2>/dev/null)
+check "repeated polls do not file duplicate requests" "1" "${n:-x}"
+
+# The whole point, end to end: a person answers at the terminal and the agent
+# is told. Every link in this chain was broken before.
+bgtmp=$(mktemp)
+( $ATH await bgp >"$bgtmp" 2>&1; echo "rc=$?" >>"$bgtmp" ) &
+bgpid=$!
+sleep 2
+TMX send-keys -t ath-bgp 'hunter2' Enter
+wait "$bgpid" 2>/dev/null
+brc=$(grep -o 'rc=[0-9]*' "$bgtmp" | tail -1 | cut -d= -f2)
+check "when the human answers, await reports it" "0" "${brc:-missing}"
+case "$(cat "$bgtmp")" in *"answered"*) v=ok ;; *) v="$(cat "$bgtmp")" ;; esac
+check "and says answered, in words" "ok" "$v"
+rm -f "$bgtmp"
+node -e 'const m=require("./packages/core/dist/index.js");m.listRequests().then(async r=>{for(const x of r)if(x.session==="bgp")await m.clearRequest(x.id)})' 2>/dev/null
+$ATH kill bgp --force >/dev/null 2>&1
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?
