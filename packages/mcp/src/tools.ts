@@ -9,7 +9,7 @@
  */
 export const TOOL_DEFINITIONS = [
   {
-    name: 'terminal_list',
+    name: 'list',
     annotations: { title: 'List terminals', readOnlyHint: true, destructiveHint: false },
     description:
       'List the terminal sessions in the hub, with their state (idle, busy, needs-input, dead), ' +
@@ -18,7 +18,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
-    name: 'terminal_new',
+    name: 'new',
     annotations: { title: 'Open a terminal', readOnlyHint: false, destructiveHint: false },
     description:
       'Create a persistent terminal session. Unlike a normal shell tool call, this session stays ' +
@@ -38,14 +38,14 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'terminal_run',
+    name: 'run',
     annotations: { title: 'Run a command', readOnlyHint: false, destructiveHint: false },
     description:
       'Run a command in a session and wait for it to finish. Returns the exact combined ' +
       'stdout+stderr and the real exit code. IMPORTANT: if the result has needsInput=true, the ' +
       'command is waiting on a password or a confirmation prompt. Do NOT attempt to answer it and ' +
       'never send a credential — report it to the human, who is attached to the same terminal and ' +
-      'will type it. Then continue with terminal_read.',
+      'will type it. Then continue with the `read` tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -65,7 +65,7 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'terminal_read',
+    name: 'read',
     annotations: { title: 'Read terminal output', readOnlyHint: true, destructiveHint: false },
     description:
       'Read recent output from a session without running anything. Use this after a human has ' +
@@ -87,13 +87,13 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'terminal_start',
+    name: 'start',
     annotations: { title: 'Start a background command', readOnlyHint: false, destructiveHint: false },
     description:
       'Start a command WITHOUT waiting for it, returning a handle. Use this for anything ' +
       'long-lived — a dev server, a long build, a migration — where blocking is the wrong shape. ' +
-      'Poll it with terminal_poll to get incremental output and, eventually, the real exit code. ' +
-      'For ordinary commands prefer terminal_run, which just waits.',
+      'Poll it with the `poll` tool to get incremental output and, eventually, the real exit code. ' +
+      'For ordinary commands prefer the `run` tool, which just waits.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -105,10 +105,10 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'terminal_poll',
+    name: 'poll',
     annotations: { title: 'Check a running command', readOnlyHint: true, destructiveHint: false },
     description:
-      'Check a command started with terminal_start. Returns only output produced since the ' +
+      'Check a command started by the `start` tool. Returns only output produced since the ' +
       'offset you pass, plus `done` and the exit code once it finishes. Pass the previous ' +
       'response\'s `next_offset` as `since` on each call. Do not poll in a tight loop — space ' +
       'calls out sensibly for the work you are waiting on.',
@@ -116,15 +116,15 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         session: { type: 'string' },
-        handle: { type: 'string', description: 'The handle from terminal_start.' },
-        since: { type: 'number', description: 'Offset from terminal_start or the last poll.' },
+        handle: { type: 'string', description: 'The handle returned by `start`.' },
+        since: { type: 'number', description: 'Offset from `start` or the last poll.' },
       },
       required: ['session', 'handle'],
       additionalProperties: false,
     },
   },
   {
-    name: 'terminal_send',
+    name: 'send',
     annotations: { title: 'Send keys to a terminal', readOnlyHint: false, destructiveHint: false },
     description:
       'Send raw keys to a session without waiting: tmux key names like C-c, Up, Enter, or single ' +
@@ -144,7 +144,7 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'terminal_request_human',
+    name: 'request_human',
     annotations: { title: 'Ask the human for help', readOnlyHint: true, destructiveHint: false },
     description:
       'Ask the human to come to a terminal. Raises a notification in their editor with a button ' +
@@ -165,7 +165,7 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'terminal_kill',
+    name: 'kill',
     annotations: { title: 'Close a terminal', readOnlyHint: false, destructiveHint: true },
     description:
       'Permanently destroy a session and its shell state. Only do this when the human asked, or ' +

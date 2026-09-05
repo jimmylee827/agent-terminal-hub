@@ -29,10 +29,10 @@ function json(value: unknown): ToolResult {
 
 async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   switch (name) {
-    case 'terminal_list': {
+    case 'list': {
       const sessions = await list();
       if (sessions.length === 0) {
-        return text('No sessions yet. Create one with terminal_new.');
+        return text('No sessions yet. Create one with the `new` tool.');
       }
       return json(
         sessions.map((s) => ({
@@ -54,7 +54,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       );
     }
 
-    case 'terminal_new': {
+    case 'new': {
       const session = await create({
         name: args.name as string | undefined,
         cwd: args.cwd as string | undefined,
@@ -72,7 +72,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       });
     }
 
-    case 'terminal_run': {
+    case 'run': {
       const session = String(args.session ?? '');
       const command = String(args.command ?? '');
       const result = await run(session, command, {
@@ -91,13 +91,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         payload.needs_input = true;
         payload.what_to_do =
           'This command is waiting for a human. Do not answer it and do not send any credential. ' +
-          `Call terminal_request_human with session "${session}" and what is needed, tell the user, ` +
-          'then stop. After they respond, use terminal_read to see the result.';
+          `Call the request_human tool with session "${session}" and what is needed, tell the user, ` +
+          'then stop. After they respond, use `read` to see the result.';
       }
       if (result.timedOut && !result.needsInput) {
         payload.timed_out = true;
         payload.what_to_do =
-          'Still running; the output above is partial. Poll with terminal_read, or re-run with a ' +
+          'Still running; the output above is partial. Poll with `read`, or re-run with a ' +
           'larger timeout_seconds.';
       }
       if (result.shellExited) {
@@ -109,7 +109,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       return json(payload);
     }
 
-    case 'terminal_read': {
+    case 'read': {
       const session = String(args.session ?? '');
       if (args.since !== undefined) {
         const result = await readSince(session, Number(args.since));
@@ -123,7 +123,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       return text(await readTail(session, Number(args.lines ?? 200)));
     }
 
-    case 'terminal_start': {
+    case 'start': {
       const session = String(args.session ?? '');
       const started = await start(session, String(args.command ?? ''));
       return json({
@@ -131,12 +131,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         handle: started.handle,
         next_offset: started.offset,
         note:
-          'Running in the background. Check it with terminal_poll using this handle and ' +
+          'Running in the background. Check it with `poll` using this handle and ' +
           'next_offset. Space your polls to match the work — do not spin.',
       });
     }
 
-    case 'terminal_poll': {
+    case 'poll': {
       const session = String(args.session ?? '');
       const result = await poll(session, String(args.handle ?? ''), Number(args.since ?? 0));
       const payload: Record<string, unknown> = {
@@ -151,12 +151,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         payload.needs_input = true;
         payload.what_to_do =
           'Waiting for a human. Do not answer it and do not send any credential. Call ' +
-          'terminal_request_human, tell the user, then stop.';
+          'the `request_human` tool, tell the user, then stop.';
       }
       return json(payload);
     }
 
-    case 'terminal_send': {
+    case 'send': {
       // Same guard as run(): never type into the local shell what was meant
       // for another machine.
       await assertRemoteConnected(args.session as string);
@@ -164,10 +164,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const keys = String(args.keys ?? '').split(/\s+/).filter(Boolean);
       if (keys.length === 0) return text('No keys given.', true);
       await sendKeys(session, keys);
-      return text(`Sent ${keys.join(' ')} to "${session}". Use terminal_read to see the effect.`);
+      return text(`Sent ${keys.join(' ')} to "${session}". Use the read tool to see the effect.`);
     }
 
-    case 'terminal_request_human': {
+    case 'request_human': {
       const session = String(args.session ?? '');
       const reason = String(args.reason ?? 'input needed');
       const request = await requestHuman(session, reason);
@@ -181,7 +181,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       });
     }
 
-    case 'terminal_kill': {
+    case 'kill': {
       const session = String(args.session ?? '');
       // Deliberately never forced. A pin is how the human sharing this
       // terminal says "not this one"; an agent that could override it would
@@ -210,10 +210,17 @@ async function main(): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    // `annotations` must be forwarded, not dropped. Without a title a client
-    // asks a person to approve "mcp__ath__terminal_start" — a symbol, not an
-    // action — and the readOnly/destructive hints are what let it decide which
-    // calls are worth asking about at all.
+    // `annotations` must be forwarded, not dropped — this map is easy to write
+    // as name/description/inputSchema and silently lose them, which is exactly
+    // what happened the first time and left every title blank.
+    //
+    // Titles are still not the whole story, so the NAMES have to read well on
+    // their own. Claude Code's CLI builds "<server> - <title> (MCP)" from the
+    // title, but its VS Code panel ignores annotations entirely and renders
+    // `humanizedServerName [rawToolName]`. That renderer is why the server is
+    // registered as `agent_terminal` and the tools are bare verbs: it is the
+    // only combination that reads as "Agent Terminal [run]" rather than as an
+    // identifier. Renaming either half changes what a human sees there.
     tools: TOOL_DEFINITIONS.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -239,7 +246,7 @@ async function main(): Promise<void> {
                   ? 'The human killed this session. Do not recreate it silently — say so, and ask ' +
                     'whether to continue in a new one.'
                   : err.code === 'session_busy'
-                    ? 'Something is already running there. Use terminal_read to see it, or pass ' +
+                    ? 'Something is already running there. Use `read` to see it, or pass ' +
                       'wait_for_idle.'
                     : undefined,
             },

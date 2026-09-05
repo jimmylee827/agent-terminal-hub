@@ -92,13 +92,23 @@ if command -v claude >/dev/null 2>&1; then
   # "✔ Connected" when run from the repo — and an agent started from any other
   # directory sees no MCP tools at all. That is not "installed on this machine",
   # which is the only thing anyone means by installing it.
-  claude mcp remove ath >/dev/null 2>&1 || true
-  claude mcp remove ath --scope user >/dev/null 2>&1 || true
-  if claude mcp add ath --scope user -- node "$REPO/packages/mcp/dist/index.js" >/dev/null 2>&1; then
-    good "registered with Claude Code as 'ath' (user scope — every directory)"
+  #
+  # The server name is not just a key: Claude Code's VS Code panel labels every
+  # call `<HumanizedServerName> [<rawToolName>]` and never consults the tool's
+  # title annotation. `ath` rendered as "Ath [terminal_new]" — an identifier, not
+  # language. `agent_terminal` plus bare verbs renders "Agent Terminal [new]".
+  #
+  # `ath` is removed first so an upgrade does not leave both registered and the
+  # same nine tools offered twice under different names.
+  for stale in ath agent_terminal; do
+    claude mcp remove "$stale" >/dev/null 2>&1 || true
+    claude mcp remove "$stale" --scope user >/dev/null 2>&1 || true
+  done
+  if claude mcp add agent_terminal --scope user -- node "$REPO/packages/mcp/dist/index.js" >/dev/null 2>&1; then
+    good "registered with Claude Code as 'agent_terminal' (user scope — every directory)"
   else
     bad "could not register automatically. Run:"
-    say "        claude mcp add ath --scope user -- node $REPO/packages/mcp/dist/index.js"
+    say "        claude mcp add agent_terminal --scope user -- node $REPO/packages/mcp/dist/index.js"
   fi
 else
   bad "the 'claude' CLI was not found, so MCP was not registered."
@@ -135,18 +145,26 @@ fi
 # who clicks "for this project" gets nothing the next directory along.
 #
 # Reading output and running a command are the ordinary path and are allowed.
-# terminal_kill destroys a session someone may be attached to, so it stays on
-# `ask`, which outranks `allow` and therefore keeps prompting even if a broader
-# rule is added later.
+# `kill` destroys a session someone may be attached to, so it stays on `ask`,
+# which outranks `allow` and therefore keeps prompting even if a broader rule is
+# added later.
 say ""
 say "==> allowing the hub's tools without a prompt each time"
 PERM_OUT="$(node -e '
 const fs=require("fs"), os=require("os"), path=require("path");
 const file = path.join(os.homedir(), ".claude", "settings.json");
-const ALLOW = ["terminal_list","terminal_new","terminal_run","terminal_read",
-               "terminal_start","terminal_poll","terminal_send",
-               "terminal_request_human"].map(t => "mcp__ath__" + t);
-const ASK = ["mcp__ath__terminal_kill"];
+const PREFIX = "mcp__agent_terminal__";
+const ALLOW = ["list","new","run","read","start","poll","send","request_human"]
+                .map(t => PREFIX + t);
+const ASK = [PREFIX + "kill"];
+
+// Rules this installer wrote before the server was renamed. The `ath` server no
+// longer exists, so they match nothing and are dead weight in a file the user
+// reads. Only these exact strings are removed — never a rule someone else put
+// there, and never one that is merely similar.
+const OBSOLETE = new Set(
+  ["list","new","run","read","start","poll","send","request_human","kill"]
+    .map(t => "mcp__ath__terminal_" + t));
 
 let settings = {}, existed = fs.existsSync(file);
 if (existed) {
@@ -164,16 +182,23 @@ const arr = k => Array.isArray(p[k]) ? p[k] : [];
 const blocked = new Set([...arr("deny"), ...arr("ask")]);
 const wanted  = ALLOW.filter(r => !blocked.has(r));
 
-let added = 0;
+let changed = 0;
 const merge = (key, rules) => {
   const cur = arr(key);
   const missing = rules.filter(r => !cur.includes(r));
-  if (missing.length) { p[key] = cur.concat(missing); added += missing.length; }
+  if (missing.length) { p[key] = cur.concat(missing); changed += missing.length; }
 };
 merge("allow", wanted);
 merge("ask", ASK.filter(r => !arr("deny").includes(r)));
 
-if (!added) { console.log("UNCHANGED"); process.exit(0); }
+// Sweep the pre-rename rules out of every list they could be in.
+for (const key of ["allow", "ask", "deny"]) {
+  if (!Array.isArray(p[key])) continue;
+  const kept = p[key].filter(r => !OBSOLETE.has(r));
+  if (kept.length !== p[key].length) { changed += p[key].length - kept.length; p[key] = kept; }
+}
+
+if (!changed) { console.log("UNCHANGED"); process.exit(0); }
 
 // Back up before the first modification, then write atomically — a settings.json
 // truncated by a crash mid-write disables every setting in it silently.
@@ -182,16 +207,16 @@ fs.mkdirSync(path.dirname(file), { recursive: true });
 const tmp = file + ".ath-tmp";
 fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
 fs.renameSync(tmp, file);
-console.log("CHANGED " + added);
+console.log("CHANGED " + changed);
 ' 2>/dev/null || echo ERROR)"
 
 case "$PERM_OUT" in
   UNCHANGED)  good "already allowed in ~/.claude/settings.json" ;;
-  CHANGED*)   good "allowed in ~/.claude/settings.json (terminal_kill still asks)"
+  CHANGED*)   good "allowed in ~/.claude/settings.json ('kill' still asks)"
               say "        previous file kept as ~/.claude/settings.json.before-ath" ;;
   PARSE_FAIL) bad "~/.claude/settings.json is not valid JSON, so it was left untouched."
               say "        Fix it, re-run this script, or add these to permissions.allow:"
-              say "        mcp__ath__terminal_run, _read, _start, _poll, _send, _new, _list, _request_human" ;;
+              say "        mcp__agent_terminal__ + run, read, start, poll, send, new, list, request_human" ;;
   *)          bad "could not update ~/.claude/settings.json; the tools will prompt each call." ;;
 esac
 

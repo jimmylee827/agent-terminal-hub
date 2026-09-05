@@ -110,7 +110,7 @@ export interface ClaimOptions {
  * Written for the VSCode extension. It activates in every open window, each
  * window runs its own watcher against the same global tmux server, and the
  * dedupe state is per-window — so without this, one sudo prompt raises one
- * popup per window, and an explicit `terminal_request_human` shows up
+ * popup per window, and an explicit `request_human` call shows up
  * everywhere at once.
  *
  * Throws only on genuinely unexpected filesystem errors. Callers on a

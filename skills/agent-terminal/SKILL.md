@@ -62,8 +62,9 @@ Pass the previous `nextOffset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin.
 
-With MCP available, prefer the typed tools (`terminal_list`, `terminal_run`,
-`terminal_read`, `terminal_send`, `terminal_request_human`) — same semantics.
+With MCP available, prefer the typed tools — same semantics. They are namespaced
+under the `agent_terminal` server, so your tool list shows them as
+`mcp__agent_terminal__list`, `__run`, `__read`, `__send`, `__request_human`.
 
 ## When a command needs a password
 
@@ -114,7 +115,7 @@ Your job when it fires:
 2. **Stop.** Do not poll in a loop, do not try `sudo -S`, do not route around it.
 3. When they say go, `ath read vpn` to see the outcome and carry on.
 
-`terminal_request_human` (MCP) additionally raises a notification in the user's
+`mcp__agent_terminal__request_human` additionally raises a notification in the user's
 editor with a button that attaches them to the session. Use it when available;
 the request is already filed either way.
 

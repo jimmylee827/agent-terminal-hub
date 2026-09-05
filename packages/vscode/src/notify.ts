@@ -387,7 +387,7 @@ export async function joinNeedsInputElection(name: string): Promise<void> {
 }
 
 /**
- * Fired when an agent explicitly calls terminal_request_human. Distinct from
+ * Fired when an agent explicitly calls the MCP `request_human` tool. Distinct from
  * the heuristic above: the agent has told us exactly what it needs, so the
  * message quotes its reason rather than guessing from the pane.
  *

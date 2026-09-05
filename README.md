@@ -60,11 +60,20 @@ The installer also adds the hub's tools to `permissions.allow` in
 `~/.claude/settings.json`, because a registered server whose every call raises a
 prompt is not usable: the dialog offers only *once* or *this project*, so an
 agent doing ten terminal operations interrupts you ten times, and choosing *this
-project* buys nothing in the next directory. `terminal_kill` is deliberately
-left on `ask` — it destroys a session someone may be attached to. Your own
-`deny` and `ask` entries are never overridden, a malformed settings file is left
-untouched rather than rewritten, and the previous file is kept as
-`settings.json.before-ath`. To undo it, delete the `mcp__ath__*` lines.
+project* buys nothing in the next directory. `kill` is deliberately left on
+`ask` — it destroys a session someone may be attached to. Your own `deny` and
+`ask` entries are never overridden, a malformed settings file is left untouched
+rather than rewritten, and the previous file is kept as
+`settings.json.before-ath`. To undo it, delete the `mcp__agent_terminal__*`
+lines.
+
+The server is registered as **`agent_terminal`** and its tools are bare verbs
+(`run`, `read`, `new`, `kill`…) rather than `ath` and `terminal_run`. That is a
+display decision, not a stylistic one: Claude Code's VS Code panel labels every
+call `<ServerName> [<toolName>]` and never reads the tool's title annotation, so
+the old names rendered as `Ath [terminal_run]`. These render as **`Agent
+Terminal [run]`**. Upgrading from an older install rewrites the registration and
+sweeps the dead `mcp__ath__*` permission rules out of your settings.
 
 Everything is symlinked into the repo, so updating is `git pull && npm run
 build` — nothing needs reinstalling. The script is safe to re-run.
