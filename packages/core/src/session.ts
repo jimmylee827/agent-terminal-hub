@@ -844,8 +844,22 @@ export async function installHelper(
   const shell = await awaitMarker(name, probe, 8000);
   if (shell !== 'zsh' && shell !== 'bash') return; // no hooks available here
 
+  // Tell the shell how deep it is, because it cannot work that out alone.
+  //
+  // The hooks set `__ath_lvl0` from `$SHLVL` — correct for the shell the hub
+  // started, wrong for one nested inside it, which sees only its own SHLVL and
+  // concludes it is at the baseline. zsh cannot export functions OR the
+  // baseline to a child, so on a zsh host a nested bash had no way to know, and
+  // the prompt depth marker never appeared.
+  //
+  // The hub can count the shells on the pane's tty, so it supplies the offset
+  // and the shell subtracts. Depth 1 is the session's own shell and yields the
+  // unmodified value.
+  const depth = await shellDepth(name).catch(() => 1);
+  const offset = Math.max(0, depth - 1);
   const ready = randomToken();
-  await sendLine(name, frameHooksFor(shell, ready)).catch(() => undefined);
+  const baseline = offset > 0 ? `__ath_lvl0=$((SHLVL-${offset})); export __ath_lvl0; ` : '';
+  await sendLine(name, baseline + frameHooksFor(shell, ready)).catch(() => undefined);
   if ((await awaitMarker(name, ready, 8000)) === undefined) return;
 
   const current = await get(name)

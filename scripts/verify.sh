@@ -1,32 +1,50 @@
 #!/usr/bin/env bash
-# The project's tests, in one place.
+# The project's tests.
 #
-#   bash scripts/testing.sh                    the regression suite (self-contained)
-#   bash scripts/testing.sh <session> [label]  the edge battery against a live session
+#   verify.sh                              local only (default)
+#   verify.sh --local                      local only
+#   verify.sh --remote HOST[,HOST...]      those hosts only
+#   verify.sh --local --remote a,b         local and those hosts
+#   verify.sh --all-remote                 every reachable host in ~/.ssh/config
+#   verify.sh --all                        local and every reachable host
+#   verify.sh --session NAME [LABEL]       an existing session, as it stands
 #
-# The suite creates and destroys its own sessions and needs nothing set up. The
-# battery runs against a session you already have, which is what lets the same
-# checks run in every context that matters — local, remote, a nested shell, a
-# container — by pointing it at each in turn:
+# `--session` is the one that cannot be automated away: testing a NESTED shell
+# or a container means putting a session into that state first, which only you
+# can decide. Stage it, then point this at it:
 #
-#   ath new work --cwd ~            && bash scripts/testing.sh work "LOCAL"
-#   ath new box --remote myserver   && bash scripts/testing.sh box  "REMOTE"
-#   ath send box --text -- bash     && bash scripts/testing.sh box  "NESTED"
+#   ath send box --text -- bash                 && verify.sh --session box NESTED
+#   ath send box --text -- 'docker exec -it X sh' && verify.sh --session box CONTAINER
 #
-# Honours ATH_SOCKET / ATH_HOME so a run never touches your real sessions.
+# Sessions this script creates are named `_t<pid>-*` and are destroyed
+# afterwards; your own sessions are never touched. Honours ATH_SOCKET/ATH_HOME.
 #
-# NOTE: neither branch below is indented. The battery contains here-documents
-# whose terminator must sit in column 0 — indenting them for tidiness silently
-# breaks those cases while the rest still passes.
+# NOTE: the two test bodies below are deliberately NOT indented. The battery
+# contains here-documents whose terminator must sit in column 0 — indenting
+# them for tidiness silently breaks those cases while the rest still passes.
 set -uo pipefail
 
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
-  exit 0
-fi
+ATH_BIN="${ATH_BIN:-ath}"
+DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0
 
-if [ -n "${1:-}" ]; then
-S="$1"; LABEL="${2:-$1}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --local)      DO_LOCAL=1; EXPLICIT=1; shift ;;
+    --remote)     HOSTS="${2:-}"; EXPLICIT=1; shift 2 ;;
+    --all-remote) ALL_REMOTE=1; EXPLICIT=1; shift ;;
+    --all)        DO_LOCAL=1; ALL_REMOTE=1; EXPLICIT=1; shift ;;
+    --session)    SESSION="${2:-}"; SLABEL="${3:-$2}"; shift 2; [ $# -gt 0 ] && shift ;;
+    --suite-only) INTERNAL_SUITE=1; shift ;;
+    --nesting)    INTERNAL_NESTING=1; shift ;;
+    --no-nesting) SKIP_NESTING=1; shift ;;
+    --battery)    INTERNAL_BATTERY=1; S="${2:-}"; LABEL="${3:-$2}"; shift 3 ;;
+    *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# ---- internal modes: one target, one body. The orchestrator re-invokes these.
+if [ "${INTERNAL_BATTERY:-0}" = "1" ]; then
 # Edge-case harness. Runs the same battery against any session, local or remote.
 ATH=ath
 pass=0; fail=0; failed=()
@@ -163,10 +181,64 @@ hyg "no leaked tag acks"            '<ATHT:'
 echo "  ── $LABEL: passed $pass, failed $fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"
-
 exit $?
 fi
 
+if [ "${INTERNAL_NESTING:-0}" = "1" ]; then
+# ---- nesting depth: bare -> 1 layer -> 2 layers -> back to bare -------------
+#
+# The prompt gains one `↳` per level below the shell the hub set up, so a
+# human can see that `exit` will drop them a level rather than end the session.
+# Nothing tested it, so neither the author nor the user could say whether it
+# still worked — which is the same as it not working.
+#
+# Runs on a BASH session: the marker is set by the bash prompt hook, so a zsh
+# session has nothing to show. ATH_SHELL makes that explicit rather than
+# depending on whatever the machine's login shell happens to be.
+pass=0; fail=0; failed=()
+chk() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$1")
+  printf '  FAIL %s\n       expected: %s\n       actual:   %s\n' "$1" "$2" "$3"; fi; }
+N="_tn$$"
+echo "═══ NESTING ═══"
+ATH_SHELL=/bin/bash $ATH_BIN new "$N" --cwd /tmp >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8; do $ATH_BIN ls 2>/dev/null | grep -q "^$N .*idle" && break; sleep 1; done
+sleep 1
+prompt() { tmux -L "${ATH_SOCKET:-ath}" capture-pane -p -t "ath-$N" 2>/dev/null | grep -v '^$' | tail -1; }
+
+$ATH_BIN run "$N" -- 'echo bare' >/dev/null 2>&1
+chk "depth 0: no marker"        "no"  "$(case "$(prompt)" in *↳*) echo yes ;; *) echo no ;; esac)"
+chk "depth 0: exit code"        "5"   "$($ATH_BIN run "$N" -- '(exit 5)' >/dev/null 2>&1; echo $?)"
+
+$ATH_BIN send "$N" --text -- bash >/dev/null 2>&1; sleep 2
+$ATH_BIN run "$N" -- 'echo one' >/dev/null 2>&1
+chk "depth 1: one marker"       "1"   "$(prompt | grep -o '↳' | wc -l | tr -d ' ')"
+chk "depth 1: exit code"        "17"  "$($ATH_BIN run "$N" -- '(exit 17)' >/dev/null 2>&1; echo $?)"
+chk "depth 1: state persists"   "kept" "$($ATH_BIN run "$N" -- 'X=kept; echo $X' 2>&1)"
+
+$ATH_BIN send "$N" --text -- bash >/dev/null 2>&1; sleep 2
+$ATH_BIN run "$N" -- 'echo two' >/dev/null 2>&1
+chk "depth 2: two markers"      "2"   "$(prompt | grep -o '↳' | wc -l | tr -d ' ')"
+chk "depth 2: exit code"        "23"  "$($ATH_BIN run "$N" -- '(exit 23)' >/dev/null 2>&1; echo $?)"
+chk "depth 2: multi-line"       "$(printf 'a\nb')" "$($ATH_BIN run "$N" -- 'echo a
+echo b' 2>&1)"
+
+$ATH_BIN send "$N" --text -- exit >/dev/null 2>&1; sleep 2
+$ATH_BIN run "$N" -- 'echo back1' >/dev/null 2>&1
+chk "back to depth 1"           "1"   "$(prompt | grep -o '↳' | wc -l | tr -d ' ')"
+
+$ATH_BIN send "$N" --text -- exit >/dev/null 2>&1; sleep 2
+$ATH_BIN run "$N" -- 'echo back0' >/dev/null 2>&1
+chk "back to depth 0: marker gone" "0" "$(prompt | grep -o '↳' | wc -l | tr -d ' ')"
+chk "back to depth 0: exit code"   "9" "$($ATH_BIN run "$N" -- '(exit 9)' >/dev/null 2>&1; echo $?)"
+chk "back to depth 0: still framed" "framed" "$(tmux -L "${ATH_SOCKET:-ath}" capture-pane -p -t "ath-$N" -S -6 2>/dev/null | grep -q 'AGENT INPUT ID' && echo framed || echo wrapper)"
+
+$ATH_BIN kill "$N" --force >/dev/null 2>&1 || true
+printf '  ── NESTING: passed %d, failed %d\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
+exit "$fail"
+fi
+
+if [ "${INTERNAL_SUITE:-0}" = "1" ]; then
 # End-to-end checks against real tmux. Every assertion here corresponds to a
 # behaviour the hub promises; if one fails, something users depend on is broken.
 set -uo pipefail
@@ -871,4 +943,89 @@ $ATH kill mlmeta --force >/dev/null 2>&1
 echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
+exit $?
+fi
 
+# ---- orchestrator ----------------------------------------------------------
+[ "$EXPLICIT" = "0" ] && [ -z "$SESSION" ] && DO_LOCAL=1
+
+# A host is "available" only if a batch-mode ssh actually connects. Listing it
+# in ~/.ssh/config proves someone once wrote it down, not that it answers — and
+# a run that hangs on a dead host looks like a hung test, not a dead host.
+if [ "$ALL_REMOTE" = "1" ]; then
+  for h in $(awk '/^[Hh]ost / {for(i=2;i<=NF;i++) if ($i !~ /[*?!]/) print $i}' \
+              "$HOME/.ssh/config" 2>/dev/null | sort -u); do
+    if ssh -o BatchMode=yes -o ConnectTimeout=6 "$h" true >/dev/null 2>&1; then
+      HOSTS="${HOSTS:+$HOSTS,}$h"
+    else
+      printf '  \033[33mskip\033[0m %s — did not answer\n' "$h"
+    fi
+  done
+fi
+
+rc=0
+
+# Nesting always runs unless explicitly skipped.
+#
+# It is the sequence a human actually performs — enter a shell, enter another,
+# come back — and it was broken for months on a zsh host with nothing to catch
+# it, because no test ever went two levels down and back. Making it opt-out
+# rather than opt-in is the whole reason it is now known to work.
+if [ "$SKIP_NESTING" = "0" ]; then
+  bash "$0" --nesting || rc=1
+fi
+
+run() {  # label -> re-invoke ourselves for one target, keep going on failure
+  bash "$0" --battery "$1" "$2" || rc=1
+}
+
+if [ -n "$SESSION" ]; then
+  run "$SESSION" "${SLABEL:-$SESSION}"
+fi
+
+if [ "$DO_LOCAL" = "1" ]; then
+  echo "═══ REGRESSION SUITE ═══"
+  bash "$0" --suite-only || rc=1
+  s="_t$$-local"
+  $ATH_BIN new "$s" --cwd "$HOME" >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8; do
+    $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle" && break
+    sleep 1
+  done
+  sleep 1
+  run "$s" "LOCAL"
+  $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+fi
+
+IFS=','
+for h in $HOSTS; do
+  [ -z "$h" ] && continue
+  s="_t$$-$h"
+  if ! $ATH_BIN new "$s" --remote "$h" >/dev/null 2>&1; then
+    printf '  \033[31mFAIL\033[0m could not create a session on %s\n' "$h"; rc=1; continue
+  fi
+  # Wait for the session to be genuinely ready, not for a guessed number of
+  # seconds. A battery that starts too early makes the first command self-heal,
+  # which types the fallback wrapper into the pane — and the wrapper's own text
+  # contains "<ATHE:", so the console-hygiene check then reports a leak that is
+  # really just this script being impatient.
+  # Poll the session's STATE. Do not probe by running a command: a probe sent
+  # before the far side is integrated self-heals, which types the fallback
+  # wrapper into the pane — and the wrapper's text contains "<ATHE:", so the
+  # console-hygiene check then reports a leak caused by the probe itself.
+  ready=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle"; then ready=1; break; fi
+    sleep 2
+  done
+  sleep 1
+  if [ "$ready" = "0" ]; then
+    printf '  \033[31mFAIL\033[0m %s never became ready\n' "$h"; rc=1
+    $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true; continue
+  fi
+  run "$s" "REMOTE $h"
+  $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+done
+unset IFS
+
+exit $rc

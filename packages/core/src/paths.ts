@@ -217,7 +217,14 @@ const HOOKS_BOTH =
   // shell you started in, and a plain `exit` will not log you out.
   `if [ -z "$__ath_ps1" ] && [ "\${SHLVL:-1}" -gt "\${__ath_lvl0:-1}" ]; then __ath_ps1=1; ` +
   `__ath_d=$((SHLVL-__ath_lvl0)); __ath_mk=""; ` +
-  `while [ "$__ath_d" -gt 0 ]; do __ath_mk="$__ath_mk\u21b3"; __ath_d=$((__ath_d-1)); done; ` +
+  // The arrow is built from an OCTAL ESCAPE, never typed as a literal.
+  //
+  // Remote hooks travel base64-encoded and arrive byte-exact, but local hooks
+  // are typed into the shell — and a multibyte character sent that way came
+  // back mangled, rendering the depth marker as replacement characters. Octal
+  // escapes keep the whole payload ASCII, so no transport can corrupt it.
+  `__ath_ar="$(printf '\\342\\206\\263')"; ` +
+  `while [ "$__ath_d" -gt 0 ]; do __ath_mk="$__ath_mk$__ath_ar"; __ath_d=$((__ath_d-1)); done; ` +
   `PS1="$__ath_mk $PS1"; fi; ` +
   `[ -n "$__ath_n" ] && { printf '\\036<ATHE:%s:%d:%s:%s>\\036\\r\\033[K' "$__ath_n" "$__ath_rc" "$(pwd 2>/dev/null | base64 2>/dev/null | tr -d '\\n')" "$__ath_env"; __ath_n=""; }; ` +
   // bash has no preexec, so the tag is recovered from history instead. It is
@@ -235,8 +242,13 @@ const HOOKS_BOTH =
   // TypeScript template literal — that exact escaping shipped a payload the
   // shell echoed instead of running.
   '__ath_env=""; __ath_cmd="\${__ath_last#*[0-9]  }"; ' +
-  'case "$__ath_cmd" in "export "[A-Za-z_]*=*|[A-Za-z_]*=*) ' +
-  '__ath_env="$(printf %s "$__ath_cmd" | base64 2>/dev/null | tr -d \'\\n\')" ;; esac; ' +
+  // A REGEX, not a glob. `[A-Za-z_]*=*` looks like "a name, then =", but glob
+  // `*` spans anything: it matched every command containing an `=` anywhere —
+  // including the base64 padding inside a wrapper invocation, which was then
+  // captured as if it were a variable and stuffed into every end marker.
+  // The anchored form requires the `=` to follow the name immediately.
+  'if [[ "$__ath_cmd" =~ ^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*= ]]; then ' +
+  '__ath_env="$(printf %s "$__ath_cmd" | base64 2>/dev/null | tr -d \'\\n\')"; fi; ' +
   `case "$__ath_last" in *"\u2193\u2193\u2193 AGENT INPUT ID: "*) ` +
   `__ath_pending="\${__ath_last#*AGENT INPUT ID: }"; __ath_pending="\${__ath_pending%% *}"; ` +
   `printf '\\036<ATHT:%s>\\036\\r\\033[K' "$__ath_pending" ;; esac; ` +

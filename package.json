@@ -20,7 +20,7 @@
     "build": "npm run build --workspace @ath/core && npm run build --workspace @ath/cli && npm run build --workspace @ath/mcp && npm run build --prefix packages/vscode",
     "build:vscode": "cd packages/vscode && npm run build",
     "clean": "rm -rf packages/*/dist packages/vscode/out",
-    "test": "bash scripts/testing.sh",
+    "test": "bash scripts/verify.sh",
     "install-hub": "bash scripts/install.sh"
   }
 }

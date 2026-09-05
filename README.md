@@ -231,7 +231,7 @@ record is a human's decision, not an agent's.
 ## Verify
 
 ```bash
-bash scripts/testing.sh
+bash scripts/verify.sh
 ```
 
 The regression suite — 111 assertions against real tmux: exit-code fidelity for
@@ -239,16 +239,16 @@ every shape of command, stdout+stderr capture, state persistence, output
 integrity, survival of `exit`, locking, claims, and the framing protocol.
 
 ```bash
-bash scripts/testing.sh <session> "LABEL"
+bash scripts/verify.sh <session> "LABEL"
 ```
 
 The edge battery — 70 assertions run against a session you already have, so the
 same checks can be pointed at every context that matters:
 
 ```bash
-ath new work --cwd ~           && bash scripts/testing.sh work "LOCAL"
-ath new box --remote myserver  && bash scripts/testing.sh box  "REMOTE"
-ath send box --text -- bash    && bash scripts/testing.sh box  "NESTED"
+ath new work --cwd ~           && bash scripts/verify.sh work "LOCAL"
+ath new box --remote myserver  && bash scripts/verify.sh box  "REMOTE"
+ath send box --text -- bash    && bash scripts/verify.sh box  "NESTED"
 ```
 
 It covers exit codes across compound commands, quoting, output that impersonates

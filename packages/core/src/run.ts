@@ -745,7 +745,7 @@ async function runLocked(
     // self-heal run. The error was described in the code as expected; expected
     // is not the same as acceptable when a red line lands in a shared terminal.
     if (!(await wrapperReady(clean))) {
-      await installHelper(clean, session.remote, { wrapperOnly: true });
+      await installHelper(clean, session.remote);
       await setMeta(clean, 'wrap', '1').catch(() => undefined);
     }
     await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
@@ -760,23 +760,39 @@ async function runLocked(
   // is what makes driving a remote host work at all, without special-casing
   // ssh anywhere in the protocol.
   if (completion.kind === 'lost') {
-    // A shell we did not set up gets the WRAPPER, never the hooks.
+    // Install the HOOKS into a shell we did not set up, not just the wrapper.
     //
-    // Hooks depend on shell-specific machinery — bash's DEBUG trap fires inside
-    // subshells, where the state it sets is lost, so `(exit 9)` reported 0: a
-    // silently wrong exit code, which is the one class of failure this project
-    // refuses. The wrapper evaluates the command directly and is verified
-    // correct in every shell, so a self-healed shell uses it.
-    await installHelper(clean, session.remote, { wrapperOnly: true });
+    // This used to be wrapper-only, because bash's DEBUG trap fired inside
+    // subshells where the state it set was lost — `(exit 9)` reported 0. That
+    // trap is gone: bash frames from PROMPT_COMMAND alone now, which sees a
+    // compound command like any other. The restriction outlived its reason.
+    //
+    // It matters beyond tidiness. A nested shell with no hooks has no prompt
+    // depth marker, so a human cannot see that `exit` drops them a level
+    // rather than ending the session — and on a zsh host nothing is inherited,
+    // because zsh cannot export functions. Installing on demand is the only
+    // way that shell ever gets them.
+    await installHelper(clean, session.remote);
     await setMeta(clean, 'wrap', '1').catch(() => undefined);
-    // Stop trying to frame this shell.
+    // Give up on framing ONLY if the install could not provide it.
     //
-    // Over ssh `pane_current_command` is `ssh` from connect to disconnect, so a
-    // nested shell is INVISIBLE to the check that catches this locally — the
-    // hub kept believing its hooks were live. Every command then repeated the
-    // whole cycle: tag line, "command not found", reinstall the 400-character
-    // wrapper, run. Once framing has demonstrably failed, believe it.
-    await setMeta(clean, 'frame', '').catch(() => undefined);
+    // `installHelper` records the shell it hooked, so a successful install has
+    // already set `frame` — clearing it unconditionally threw that away and sent
+    // every later command through the wrapper regardless. The hooks were being
+    // installed and then immediately disowned, which is why a nested shell had
+    // no prompt depth marker even though the install had run.
+    //
+    // When the shell genuinely cannot be hooked (dash, busybox, anything with
+    // no prompt hook) `frame` is still empty and clearing is right: over ssh
+    // `pane_current_command` is `ssh` from connect to disconnect, so a nested
+    // shell is invisible to the check that catches this locally, and something
+    // has to stop the tag lines.
+    const hooked = await get(clean)
+      .then((x) => !!x.frameShell)
+      .catch(() => false);
+    if (!hooked) {
+      await setMeta(clean, 'frame', '').catch(() => undefined);
+    }
     nonce = randomNonce();
     offset = await fileSize(log);
     await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
