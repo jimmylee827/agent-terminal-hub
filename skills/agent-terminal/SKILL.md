@@ -36,7 +36,7 @@ ath ls                              # what exists, and what state it is in
 ath new build --cwd ~/proj          # create; add --pin to protect it
 ath new box --remote myserver           # ssh session; connection is shared and persists
 ath run build -- npm test           # blocking; prints output, exits with its code
-ath run build --json -- npm test    # structured: output, exit_code, needs_input
+ath run build --json -- npm test    # structured: output, exitCode, needsInput
 ath read build --tail 100           # recent output without running anything
 ath read build --since 4096 --json  # ONLY what is new, plus the next offset
 ath send build -- C-c               # tmux key names: C-c, Up, y, Enter
@@ -55,10 +55,10 @@ Do not block on a dev server or a twenty-minute build. Start it and poll:
 ```bash
 ath start web -- npm run dev        # returns a handle immediately
 ath poll web --handle <h> --since <n> --json
-# -> { done, exit_code, output, next_offset }
+# -> { done, exitCode, output, nextOffset }
 ```
 
-Pass the previous `next_offset` back as `--since` each time so you get only
+Pass the previous `nextOffset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin.
 
@@ -97,11 +97,16 @@ Your job when it fires:
    an hour ago. If your harness has a background-watch facility, start one:
 
    ```bash
-   until ath requests 2>/dev/null | grep -q 'ANSWERED\|NOT answered'; do sleep 20; done
-   ath requests
+   ath await <session>          # blocks until the outcome exists, then prints it
    ```
 
-   One notification when they are done, no polling in your own turn.
+   `ath await` exits when the command finishes, is interrupted, or the session
+   dies — reporting which. Run it as a background job and your harness notifies
+   you; nothing to poll inside your own turn.
+
+   Do NOT watch `ath requests` for a terminal status. A request is CLEARED when
+   it resolves, so a loop grepping for "ANSWERED" waits forever on a question
+   that was answered — the failure this whole step exists to prevent.
 
 1. **Relay it.** Say plainly which session is waiting and for what:
    *"`vpn` is waiting for your sudo password — `ath attach vpn`, type it, then
@@ -125,10 +130,10 @@ Fields worth checking on the `--json` form:
 
 | Field | Meaning |
 |---|---|
-| `exit_code` | The real exit status. `null` if it did not finish. |
-| `needs_input` | Waiting on a human. Hand off; do not retry. |
-| `timed_out` | Still running. Output is partial; poll with `ath read`. |
-| `shell_exited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
+| `exitCode` | The real exit status. `null` if it did not finish. |
+| `needsInput` | Waiting on a human. Hand off; do not retry. |
+| `timedOut` | Still running. Output is partial; poll with `ath read`. |
+| `shellExited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
 
 ## What the shared terminal looks like
 
@@ -176,4 +181,4 @@ A plain `exit` there returns you one level, it does not end the session.
   it as a local command.
 - `exit` inside a session ends the shell your command ran in. In a remote or
   nested shell that drops you one level out rather than killing the session,
-  and you get `shell_exited`. Prefer `(exit 1)` when you just want a code.
+  and you get `shellExited`. Prefer `(exit 1)` when you just want a code.
