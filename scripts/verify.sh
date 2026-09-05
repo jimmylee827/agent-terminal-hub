@@ -37,6 +37,7 @@ while [ $# -gt 0 ]; do
     --session)    SESSION="${2:-}"; SLABEL="${3:-$2}"; shift 2; [ $# -gt 0 ] && shift ;;
     --suite-only) INTERNAL_SUITE=1; shift ;;
     --nesting)    INTERNAL_NESTING=1; shift ;;
+    --contract)   INTERNAL_CONTRACT=1; shift ;;
     --no-nesting) SKIP_NESTING=1; shift ;;
     --battery)    INTERNAL_BATTERY=1; S="${2:-}"; LABEL="${3:-$2}"; shift 3 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -182,6 +183,53 @@ echo "  ── $LABEL: passed $pass, failed $fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"
 exit $?
+fi
+
+if [ "${INTERNAL_CONTRACT:-0}" = "1" ]; then
+# ---- the surfaces an agent reads, not just the ones it executes -------------
+#
+# Every defect a cold agent found in this tool sat here: JSON field names, the
+# status output, the docs. 391 assertions passed throughout and would have
+# passed with all of them present, because not one of them read a surface
+# instead of running a command.
+#
+# The dangerous shape is a doc that names a field the tool does not emit: `jq -r
+# .exit_code` returns null, and null is documented to mean "did not finish", so
+# a success is read as an unfinished command. Silently.
+pass=0; fail=0; failed=()
+chk() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$1")
+  printf '  FAIL %s\n       expected: %s\n       actual:   %s\n' "$1" "$2" "$3"; fi; }
+SK="$(cd "$(dirname "$0")/.." && pwd)/skills/agent-terminal/SKILL.md"
+C="_tc$$"
+echo "═══ CONTRACT ═══"
+$ATH_BIN new "$C" --cwd /tmp >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8; do $ATH_BIN ls 2>/dev/null | grep -q "^$C .*idle" && break; sleep 1; done
+
+J="$($ATH_BIN run "$C" --json -- 'true' 2>/dev/null)"
+for f in exitCode timedOut needsInput logOffset; do
+  chk "run --json emits $f" "yes" "$(printf '%s' "$J" | grep -q "\"$f\"" && echo yes || echo no)"
+done
+# the exact trap: a field the docs name but the tool never emits
+chk "docs name no field the tool lacks" "0" \
+    "$(grep -oE '\`(exit_code|needs_input|timed_out|next_offset|shell_exited)\`' "$SK" 2>/dev/null | wc -l | tr -d ' ')"
+
+L="$($ATH_BIN ls --json 2>/dev/null)"
+chk "ls --json omits paneTail"   "no"  "$(printf '%s' "$L" | grep -q '"paneTail"' && echo yes || echo no)"
+chk "ls --json --full keeps it"  "yes" "$($ATH_BIN ls --json --full 2>/dev/null | grep -q '"paneTail"' && echo yes || echo no)"
+chk "agent-created owner"        "agent" "$(printf '%s' "$L" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const s=JSON.parse(d).find(x=>x.name===process.argv[1]);process.stdout.write(s.owner)}catch(e){process.stdout.write("?")}})' "$C")"
+
+# every command the skill tells an agent to run must exist
+for cmd in ls new run read send attach poll start requests await doctor kill; do
+  chk "skill command '$cmd' exists" "yes" \
+      "$($ATH_BIN --help 2>&1 | grep -qE "^  ath $cmd" && echo yes || echo no)"
+done
+chk "skill mentions ath await"   "yes" "$(grep -q 'ath await' "$SK" && echo yes || echo no)"
+chk "skill drops the dead idiom" "no"  "$(grep -qF "until ath requests" "$SK" && echo yes || echo no)"
+
+$ATH_BIN kill "$C" --force >/dev/null 2>&1 || true
+printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
+exit "$fail"
 fi
 
 if [ "${INTERNAL_NESTING:-0}" = "1" ]; then
@@ -974,6 +1022,10 @@ rc=0
 if [ "$SKIP_NESTING" = "0" ]; then
   bash "$0" --nesting || rc=1
 fi
+
+# Always. The surfaces an agent READS are the ones that shipped seven defects
+# past a suite that only ran commands.
+bash "$0" --contract || rc=1
 
 run() {  # label -> re-invoke ourselves for one target, keep going on failure
   bash "$0" --battery "$1" "$2" || rc=1
