@@ -229,7 +229,19 @@ done
 # at all — which is exactly what happened to an agent evaluating this tool.
 if command -v claude >/dev/null 2>&1; then
   chk "MCP registered at user scope" "yes" \
-      "$(node -e 'try{const c=require(process.env.HOME+"/.claude.json");process.stdout.write(c.mcpServers&&c.mcpServers.ath?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
+      "$(node -e 'try{const c=require(process.env.HOME+"/.claude.json");process.stdout.write(c.mcpServers&&c.mcpServers.agent_terminal?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
+  # The pre-rename server must be GONE, not merely superseded. Leaving both
+  # registered offers the same nine tools twice under different names, and an
+  # agent picking the stale one gets a server the installer no longer updates.
+  chk "the pre-rename 'ath' server is deregistered" "yes" \
+      "$(node -e 'try{const c=require(process.env.HOME+"/.claude.json");process.stdout.write(c.mcpServers&&c.mcpServers.ath?"no":"yes")}catch(e){process.stdout.write("yes")}' 2>/dev/null)"
+  # The tools must be pre-allowed, or every call raises an approval prompt and
+  # an agent spends the run being interrupted instead of working.
+  chk "hub tools are pre-allowed in user settings" "yes" \
+      "$(node -e 'try{const s=require(process.env.HOME+"/.claude/settings.json");const a=(s.permissions&&s.permissions.allow)||[];process.stdout.write(a.includes("mcp__agent_terminal__run")?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
+  # ...except the destructive one, which must still ask.
+  chk "kill still prompts" "yes" \
+      "$(node -e 'try{const s=require(process.env.HOME+"/.claude/settings.json");const k=(s.permissions&&s.permissions.ask)||[];process.stdout.write(k.includes("mcp__agent_terminal__kill")?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
 fi
 chk "skill mentions ath await"   "yes" "$(grep -q 'ath await' "$SK" && echo yes || echo no)"
 chk "skill drops the dead idiom" "no"  "$(grep -qF "until ath requests" "$SK" && echo yes || echo no)"

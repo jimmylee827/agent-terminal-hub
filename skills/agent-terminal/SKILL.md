@@ -105,6 +105,13 @@ Your job when it fires:
    dies — reporting which. Run it as a background job and your harness notifies
    you; nothing to poll inside your own turn.
 
+   Read the exit code, not just the text. `0` or the command's own code means
+   answered; `130`/`143` mean interrupted, NOT answered; `2` means nothing was
+   pending to wait for; `3` means it is no longer waiting and the outcome
+   cannot be proved from here — check with `ath read` before assuming either
+   way. `3` is not a failure of the command you ran; treating it as one is how
+   you end up asking a person to answer something twice.
+
    Do NOT watch `ath requests` for a terminal status. A request is CLEARED when
    it resolves, so a loop grepping for "ANSWERED" waits forever on a question
    that was answered — the failure this whole step exists to prevent.
@@ -192,6 +199,12 @@ A plain `exit` there returns you one level, it does not end the session.
 - Sessions are locked per command. If you get `session_busy`, something else —
   another agent, or the human — is genuinely using it. Report that rather than
   retrying in a loop.
+- `needs_human` is NOT `session_busy`, and `--wait` is the wrong response to
+  it. The session is stopped at a prompt only a person can answer, so nothing
+  moves until they answer it — waiting just burns your timeout while the human
+  has not been told. Relay it (step 1 above) and stop. Nothing you send can
+  answer it: whatever you type lands in the password field as a failed login
+  and consumes the prompt they were walking over to answer.
 - `ath send` takes tmux **key names**, not prose. `ath send x -- 'hello world'`
   is rejected; use `--text` to type literal text.
 - A reconnect restores the working directory and the variables **this session
