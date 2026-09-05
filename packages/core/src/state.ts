@@ -46,6 +46,21 @@ const CREDENTIAL_PROMPT_PATTERNS: RegExp[] = [
   /password[^\n]{0,160}:\s*$/i,
   /passphrase[^\n]{0,160}:\s*$/i,
   /\[sudo\][^\n]{0,160}:\s*$/i,
+  // A secret is a secret whatever the prompt calls it.
+  //
+  // This list used to hold only the three above, while the WIDER prompt list
+  // already recognised "Enter API key:", "Enter your access token:" and
+  // "Verification code:". The gap had teeth: such a prompt parked the session
+  // correctly, but was not classed as a credential — so the guard that stops a
+  // command being typed into a password field did not cover it, and neither did
+  // the refusal in `send --text`. Anything typed there becomes a failed
+  // authentication attempt made of the command text, against a token endpoint
+  // that may well rate-limit or alert on it. An agent asked whether an API-key
+  // prompt was protected; the honest answer was no, so now it is.
+  /enter [^\n]{0,80}(?:code|pin|token|key|secret)[^\n]{0,80}:\s*$/i,
+  /\b(?:api[- ]?key|access[- ]?token|auth[- ]?token|client[- ]?secret)[^\n]{0,40}:\s*$/i,
+  /verification code[^\n]{0,80}:\s*$/i,
+  /\b(?:one[- ]time|otp)[^\n]{0,24}:\s*$/i,
 ];
 
 /** True when the pane's last line is asking for a secret. */
@@ -80,8 +95,17 @@ const PROMPT_PATTERNS: RegExp[] = [
   /verification code[^\n]{0,80}:\s*$/i,
   /\b(?:one[- ]time|otp)[^\n]{0,24}:\s*$/i,
   /\busername:\s*$/i,
+  // git over HTTPS asks "Username for 'https://github.com': " — the bare
+  // `username:` pattern above never matched it, so the session did not park
+  // and the agent saw a command that simply hung.
+  /username for [^\n]{0,120}:\s*$/i,
   /\blogin:\s*$/i,
   /enter [^\n]{0,80}(?:code|pin|token|key)[^\n]{0,80}:\s*$/i,
+  // The bare label form, e.g. "API key: ". Recognised as a credential already;
+  // without it here the session would not PARK, so nobody would be asked and
+  // the job would hang unnoticed — which is the case an agent specifically
+  // asked about.
+  /\b(?:api[- ]?key|access[- ]?token|auth[- ]?token|client[- ]?secret)[^\n]{0,40}:\s*$/i,
   /press (?:enter|return|any key)[^\n]{0,32}$/i,
   /\byes\/no(?:\/\[fingerprint\])?\)?\?\s*$/i,
 ];

@@ -48,8 +48,13 @@ function jsonWithOutput(value: Record<string, unknown>, output: string): ToolRes
   // the top" — metadata is the smaller, more predictable half, so it reads
   // better underneath.
   const blocks: { type: 'text'; text: string }[] = [];
-  if (output) blocks.push({ type: 'text', text: output });
-  blocks.push({ type: 'text', text: JSON.stringify(value, null, 2) });
+  // Blocks are concatenated by some clients, so raw output ran straight into
+  // the JSON: "…6% /boot/efi{\"session\": \"hk\"…". Harmless for tabular
+  // output, genuinely ambiguous for a command that emits JSON itself. A
+  // trailing newline and a labelled trailer keep the boundary visible however
+  // the client chooses to render them.
+  if (output) blocks.push({ type: 'text', text: output.endsWith('\n') ? output : `${output}\n` });
+  blocks.push({ type: 'text', text: `--- ath ---\n${JSON.stringify(value, null, 2)}` });
   return { content: blocks };
 }
 
@@ -201,10 +206,23 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const payload: Record<string, unknown> = {
         session: result.session,
         done: result.done,
-        output: result.output,
         next_offset: result.nextOffset,
         state: result.state,
       };
+      // How long it actually ran. A one-second job and a sixty-seven-second
+      // job were previously indistinguishable in this response, so an agent
+      // that started something it believed was long-running could report the
+      // work done on a command that had finished instantly. Name it when the
+      // gap between intent and reality is wide enough to matter.
+      if (result.elapsedSeconds !== undefined) {
+        payload.elapsed_seconds = result.elapsedSeconds;
+        if (result.done && result.elapsedSeconds <= 2) {
+          payload.note =
+            'This finished in about ' + result.elapsedSeconds + 's. If you started it ' +
+            'expecting long-running work, it did NOT do what you meant — check the output ' +
+            'before treating the job as done.';
+        }
+      }
       if (result.done) payload.exit_code = result.exitCode;
       if (result.needsInput) {
         payload.needs_input = true;
@@ -214,7 +232,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           'waiting and what for, then stop. Call request_human only to additionally raise a ' +
           'notification in their editor.';
       }
-      return json(payload);
+      // Output as its own block, same as `run` — it was folded into the JSON
+      // here, so a long job's output came back escaped while the identical
+      // output from `run` came back raw.
+      return jsonWithOutput(payload, result.output);
     }
 
     case 'send': {

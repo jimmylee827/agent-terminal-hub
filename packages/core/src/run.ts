@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
 import { withSessionLock } from './lock';
@@ -159,6 +160,33 @@ async function findCommandEnd(logFile: string, nonce: string): Promise<CommandEn
 
 async function findExitCode(logFile: string, nonce: string): Promise<number | undefined> {
   return (await findCommandEnd(logFile, nonce))?.code;
+}
+
+/**
+ * Note when a command began, beside its .rc file and keyed by the same handle.
+ *
+ * A separate tiny file rather than session metadata: metadata is a flat set of
+ * tmux options parsed positionally, and adding a field there has already cost
+ * this project one silent corruption. This is per-HANDLE, which is also the
+ * right granularity — the question "how long has THIS job been running" is
+ * about the job, not the session.
+ */
+async function markStarted(nonce: string): Promise<void> {
+  await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
+  await fs
+    .writeFile(path.join(RC_DIR, `${nonce}.t`), String(Date.now()), { mode: 0o600 })
+    .catch(() => undefined);
+}
+
+/** Seconds since `markStarted` for this handle, if it was recorded. */
+async function elapsedFor(nonce: string): Promise<number | undefined> {
+  try {
+    const began = Number(await fs.readFile(path.join(RC_DIR, `${nonce}.t`), 'utf8'));
+    if (!Number.isFinite(began)) return undefined;
+    return Math.max(0, Math.round((Date.now() - began) / 1000));
+  } catch {
+    return undefined;
+  }
 }
 
 async function fileSize(file: string): Promise<number> {
@@ -1217,6 +1245,7 @@ export async function start(name: string, command: string): Promise<StartResult>
 
     const nonce = randomNonce();
     const offset = await fileSize(logPath(clean));
+    await markStarted(nonce);
     await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
     await recordLast(clean, command, null);
 
@@ -1385,6 +1414,7 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     }
   }
 
+  const elapsedSeconds = await elapsedFor(handle);
   return {
     session: clean,
     handle,
@@ -1394,6 +1424,7 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     nextOffset: size,
     state: session.state,
     needsInput: session.state === 'needs-input',
+    ...(elapsedSeconds === undefined ? {} : { elapsedSeconds }),
   };
 }
 

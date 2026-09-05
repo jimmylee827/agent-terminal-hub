@@ -1251,6 +1251,45 @@ case "$names" in *await_human*) v=ok ;; *) v="missing" ;; esac
 check "MCP offers an await tool" "ok" "$v"
 
 echo
+echo "-- a fast job cannot masquerade as a long one"
+# A 1-second job and a 67-second job returned identical shapes, so an agent
+# that started something it believed was long-running had no way to see it had
+# finished instantly. One nearly reported the task done on a 1s command, and
+# caught it only because it had wrapped the command in its own timer.
+$ATH new el >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^el ' && break; sleep 1; done
+h=$($ATH start el -- 'true' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
+sleep 2
+j=$($ATH poll el --handle "$h" --json 2>/dev/null)
+e=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const v=JSON.parse(d).elapsedSeconds;console.log(v===undefined?"missing":(v<=3?"fast":"slow"))}catch(e){console.log("x")}})')
+check "poll reports how long the command actually ran" "fast" "$e"
+$ATH kill el --force >/dev/null 2>&1
+
+echo
+echo "-- every kind of secret prompt refuses typing, not just passwords"
+# The credential list held only password/passphrase/sudo, while the wider prompt
+# list already recognised "Enter API key:". So a token prompt parked the session
+# but was NOT classed as a credential — the guard against typing into it did not
+# apply. An agent asked whether an API-key prompt was protected; it was not.
+cred=$(node -e '
+const s=require("./packages/core/dist/state.js");
+const must=["[sudo] password for dev: ","Enter passphrase for key \x27/k/id_rsa\x27: ",
+            "Enter API key: ","Enter your access token: ","API key: ","Verification code: ",
+            "Password for \x27https://x@github.com\x27: "];
+console.log(must.every(t=>s.looksLikeCredentialPrompt(t))?"all":"gap");' 2>/dev/null)
+check "password, passphrase, API key, token and OTP all count as credentials" "all" "${cred:-x}"
+safe=$(node -e '
+const s=require("./packages/core/dist/state.js");
+const notPrompts=["Downloading: ","Reading package lists... ","total 48"];
+console.log(notPrompts.some(t=>s.looksLikePrompt(t)||s.looksLikeCredentialPrompt(t))?"false-positive":"clean");' 2>/dev/null)
+check "ordinary progress output is not mistaken for a prompt" "clean" "${safe:-x}"
+git=$(node -e '
+const s=require("./packages/core/dist/state.js");
+const t="Username for \x27https://github.com\x27: ";
+console.log(s.looksLikePrompt(t) && !s.looksLikeCredentialPrompt(t) ? "parks-not-secret" : "wrong");' 2>/dev/null)
+check "a git username prompt parks but is not treated as a secret" "parks-not-secret" "${git:-x}"
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?

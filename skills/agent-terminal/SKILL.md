@@ -118,10 +118,40 @@ returns a `warning`, but it can only see the shape of your command, not what the
 redirect swallowed. `2>/dev/null` on a `du` is a routine idiom; this is the one
 place it silently turns the tool off.
 
-**The sudo timestamp is per session, not shared.** Separate sessions are
-separate TTYs, and `tty_tickets` is on by default — so a password typed in one
-session does NOT cover another. Put all the privileged work in one session
-rather than making the human type it twice.
+**The sudo timestamp is per session, and it persists inside that session.**
+Two halves, and the second one changes how you should work:
+
+- Separate sessions are separate TTYs (`tty_tickets` is on by default), so a
+  password typed in one session does NOT cover another. Keep privileged work in
+  one session rather than making the human type it twice.
+- Within that session the timestamp is cached for about 15 minutes, so
+  **subsequent `sudo` commands run without prompting again**. Check with
+  `sudo -n true` before assuming either way.
+
+Do NOT read "make them type it once" as "batch everything into one big script".
+That was a real cost: an agent bundled nine lines into a single privileged
+heredoc to save a second prompt, baked a wrong flag into it, and reported a
+disk figure that was off by 20 GB. During exploration you do not know what you
+need until you have seen the previous answer. Ask once, then keep asking small
+questions while the timestamp holds.
+
+**What counts as a credential prompt.** Detection is pattern-based on the last
+line of the pane, not magic, so it is worth knowing the shape of it:
+
+| Prompt | Session parks | Refuses typing |
+| --- | --- | --- |
+| `[sudo] password for …:` | yes | yes |
+| `Enter passphrase for key …:` | yes | yes |
+| `Password for 'https://…':` | yes | yes |
+| `Enter API key:` / `Enter your access token:` | yes | yes |
+| `API key:` / `Access token:` (bare label) | yes | yes |
+| `Verification code:` / OTP | yes | yes |
+| `Username for 'https://…':` (git) | yes | no — it is not a secret |
+| `Downloading:` and other progress | no | no |
+
+Anything it does not recognise will simply hang rather than being answered
+wrongly, so an unusual prompt costs you a timeout, not a leaked secret. If you
+hit one, say so — the pattern list is meant to grow.
 
 The second shape is the one that catches agents out. `sudo -n` does not hang;
 it returns an ordinary error, and it is very easy to accept that, write "I

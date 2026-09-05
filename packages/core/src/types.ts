@@ -161,6 +161,17 @@ export interface PollResult {
   nextOffset: number;
   state: SessionState;
   needsInput: boolean;
+  /**
+   * How long this command has been running, in seconds.
+   *
+   * A one-second job and a sixty-seven-second job returned IDENTICAL shapes,
+   * so an agent that started something it believed was long-running had no way
+   * to notice it had finished instantly — and would report the work done. The
+   * only reason one caught it was that it had wrapped the command in its own
+   * timer. The duration is knowable here; not saying it made a silent wrong
+   * answer the default.
+   */
+  elapsedSeconds?: number;
 }
 
 export interface CreateOptions {
