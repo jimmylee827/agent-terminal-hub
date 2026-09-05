@@ -157,6 +157,28 @@ Two cases fall back to `__ath <id> '<command>'`, which is correct but uglier:
 A `↳` in the prompt means you are one level down in a nested shell (`↳↳` = two).
 A plain `exit` there returns you one level, it does not end the session.
 
+## Things that are not obvious from the output
+
+- **`+1` in `ath ls`** is the number of attached clients — a human is watching.
+- **`owner`** is `agent` when the CLI is driven from inside a hub pane or
+  without a TTY, `human` otherwise. It says who the terminal belongs to, not
+  who typed the last command.
+- **`cwd` vs `remoteCwd` in `--json`.** For a remote session `cwd` is the LOCAL
+  pane path, which is the launcher, not where your commands run. `remoteCwd` is
+  the truth. The human-readable `ath ls` already shows `host:path`.
+- **`ath ls --json` omits `paneTail`** — the whole visible pane, several KB.
+  Pass `--full` if you actually want it.
+- **`remoteEnv` accumulates**, last write winning per variable, and holds both
+  the assignments this session made and ones a human typed. It is replayed
+  after a reconnect.
+- **`ath run` output is real capture**, not a screen scrape: it is read from the
+  pipe-pane log between markers, so long output is neither wrapped nor
+  truncated. `paneTail` is a screen capture and IS wrapped — the two are
+  different mechanisms, which is why they can disagree.
+- **`ath requests` keeps resolved requests for an hour**, labelled `ANSWERED`,
+  `NOT answered — interrupted`, or `SESSION GONE`. An empty list means nothing
+  was ever filed.
+
 ## Gotchas
 
 - Commands run in the session's own shell so `cd` and `export` persist. That

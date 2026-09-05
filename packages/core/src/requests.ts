@@ -26,6 +26,14 @@ export interface HumanRequest {
    * request must not claim to have been answered.
    */
   parked?: boolean;
+  /**
+   * When this stopped needing a human. Resolved requests are KEPT for a
+   * while rather than deleted: an agent sent to `ath requests` by a message
+   * saying a request was filed, and told \"no open requests\" seconds later,
+   * cannot tell whether it was answered, cancelled, or never filed at all.
+   * Silence is the one answer that means nothing.
+   */
+  resolvedAt?: number;
 }
 
 /**
@@ -61,7 +69,9 @@ export async function requestHuman(
   return request;
 }
 
-export async function listRequests(): Promise<HumanRequest[]> {
+export async function listRequests(
+  opts: { includeResolved?: boolean } = {},
+): Promise<HumanRequest[]> {
   let entries: string[];
   try {
     entries = await fs.readdir(REQUEST_DIR);
@@ -81,8 +91,33 @@ export async function listRequests(): Promise<HumanRequest[]> {
   return out.sort((a, b) => a.createdAt - b.createdAt);
 }
 
+const RESOLVED_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Mark a request resolved, keeping it briefly so the outcome is readable.
+ *
+ * Deleting it made the record indistinguishable from one that never existed.
+ * It is removed for real once it is older than the TTL.
+ */
 export async function clearRequest(id: string): Promise<void> {
-  await fs.unlink(path.join(REQUEST_DIR, `${id}.json`)).catch(() => undefined);
+  const file = path.join(REQUEST_DIR, `${id}.json`);
+  try {
+    const request = JSON.parse(await fs.readFile(file, 'utf8')) as HumanRequest;
+    if (request.resolvedAt && Date.now() - request.resolvedAt > RESOLVED_TTL_MS) {
+      await fs.unlink(file).catch(() => undefined);
+      return;
+    }
+    await fs.writeFile(file, JSON.stringify({ ...request, resolvedAt: Date.now() }), {
+      mode: 0o600,
+    });
+  } catch {
+    await fs.unlink(file).catch(() => undefined);
+  }
+}
+
+/** Every request, resolved ones included. `listRequests` returns only open. */
+export async function listAllRequests(): Promise<HumanRequest[]> {
+  return listRequests({ includeResolved: true });
 }
 
 /** Drop requests for sessions that no longer exist, plus anything stale. */

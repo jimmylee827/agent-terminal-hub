@@ -16,6 +16,7 @@ import {
   kill,
   list,
   clearRequest,
+  listAllRequests,
   formatDuration,
   listRequests,
   lockHolder,
@@ -131,12 +132,26 @@ async function main(): Promise<number> {
         remote: flagString(flags, 'remote'),
         label: flagString(flags, 'label'),
         pin: flagBool(flags, 'pin'),
-        owner: flagString(flags, 'owner') ?? 'human',
+        // `owner` said "human" for every session, including ones an agent
+        // created — the field exists to say who a terminal belongs to, and
+        // answering the same thing regardless made it useless. ATH_INSIDE is
+        // set in the panes this tool creates, so an agent driving the CLI from
+        // inside one is distinguishable from a person typing at a prompt.
+        owner:
+          flagString(flags, 'owner') ??
+          (process.env.ATH_INSIDE || !process.stdin.isTTY ? 'agent' : 'human'),
       });
       if (flagBool(flags, 'json')) {
         console.log(JSON.stringify(session, null, 2));
       } else {
-        console.log(`${c.green('created')} ${c.bold(session.name)}  ${c.dim(session.cwd)}`);
+          // Show the REMOTE host for a remote session. Printing the local cwd
+          // for `ath new box --remote myserver` reads as though --remote had
+          // been ignored, which is the first thing anyone checks when a remote
+          // session misbehaves.
+          const where = session.remote
+            ? `${session.remote}:${session.remoteCwd ?? '~'}`
+            : session.cwd;
+          console.log(`${c.green('created')} ${c.bold(session.name)}  ${c.dim(where)}`);
         console.log(c.dim(`attach with:  ath attach ${session.name}`));
       }
       return 0;
@@ -146,7 +161,22 @@ async function main(): Promise<number> {
     case 'list': {
       const sessions = await list();
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify(sessions, null, 2));
+        // `paneTail` is the whole visible pane, wrapped to the pane width. It
+        // is carried on the session so the watcher can classify state without a
+        // second capture — it was never meant for a caller asking "is this
+        // busy?". Returned here it re-emitted the last command's entire output,
+        // words split mid-token, several KB for a two-line state check. An
+        // agent pays for that in context every time it looks.
+        //
+        // `--full` keeps it for the rare caller that wants the raw pane.
+        const full = flagBool(flags, 'full');
+        console.log(
+          JSON.stringify(
+            full ? sessions : sessions.map(({ paneTail: _drop, ...rest }) => rest),
+            null,
+            2,
+          ),
+        );
         return 0;
       }
       if (sessions.length === 0) {
@@ -546,14 +576,14 @@ async function main(): Promise<number> {
     case 'requests': {
       // Somewhere to actually READ what the hub asked you for. A request that
       // is filed but has no surface is not an ask, it is a dropped message.
-      const open = await listRequests();
+      const open = await listAllRequests();
       if (flagBool(flags, 'clear')) {
         for (const r of open) await clearRequest(r.id);
         console.log(`cleared ${open.length} request(s)`);
         return 0;
       }
       if (open.length === 0) {
-        console.log('no open requests');
+        console.log('no requests — none has been filed for any session');
         return 0;
       }
       for (const r of open) {

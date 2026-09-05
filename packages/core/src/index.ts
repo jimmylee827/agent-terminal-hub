@@ -96,6 +96,7 @@ export { agentPrompt, effectiveCwd, locationLabel, summarize } from './prompt';
 export {
   REQUEST_DIR,
   clearRequest,
+  listAllRequests,
   listRequests,
   pruneRequests,
   requestHuman,
