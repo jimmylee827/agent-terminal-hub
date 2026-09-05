@@ -1149,6 +1149,32 @@ export async function start(name: string, command: string): Promise<StartResult>
 }
 
 /**
+ * The handle of the most recent command framed in this session.
+ *
+ * `ath start` files no human request, so when a backgrounded command stops at a
+ * credential prompt there is nothing carrying a handle, and a caller asking
+ * "was it answered?" has no way to poll for the outcome. That gap is what let
+ * `ath await` report a confident "nothing was answered" about a sudo that had
+ * in fact succeeded.
+ *
+ * The log already knows: every framed command writes `<ATHS:nonce>` before it
+ * runs, so the newest one names the command in flight and `poll` can take it
+ * from there. Only SENTINEL-wrapped markers count — output that merely looks
+ * like a marker (`echo "<ATHS:cafebabe>"`) is not plumbing, and the edge suite
+ * asserts exactly that case.
+ */
+export async function latestHandle(name: string): Promise<string | undefined> {
+  const clean = validateName(name);
+  const log = logPath(clean);
+  const size = await fileSize(log);
+  const tail = await readLogFrom(log, Math.max(0, size - MARKER_SCAN_BYTES));
+  const re = new RegExp(`${SENTINEL}<ATHS:([A-Za-z0-9]+)>`, 'g');
+  let found: string | undefined;
+  for (let m = re.exec(tail); m !== null; m = re.exec(tail)) found = m[1];
+  return found;
+}
+
+/**
  * Check on a command started with `start`, returning only what is new.
  *
  * `since` should be the previous call's `nextOffset` (or `start`'s `offset`),

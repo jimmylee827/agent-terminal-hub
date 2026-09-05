@@ -18,6 +18,7 @@ import {
   clearRequest,
   listAllRequests,
   formatDuration,
+  latestHandle,
   listRequests,
   lockHolder,
   poll,
@@ -475,6 +476,41 @@ async function main(): Promise<number> {
         const open = (await listRequests()).filter((r) => r.session === name && r.handle);
         handle = open[open.length - 1]?.handle;
       }
+      // Still nothing? Ask the LOG which command is in flight — but ONLY once
+      // it is established that something is actually pending.
+      //
+      // `ath start` files no request, so a backgrounded command stopped at a
+      // password prompt leaves no handle anywhere, and without one this command
+      // cannot prove an outcome. The log can supply it: every framed command
+      // writes a start marker.
+      //
+      // The order matters, and the first version got it wrong. Recovering the
+      // handle unconditionally made `ath await` on an IDLE session poll
+      // whatever ran last and report "answered — exit 0" — an answer to a
+      // question nobody asked. That is a false POSITIVE, which is worse than
+      // the false negative being fixed here: it sends an agent off to collect a
+      // result that does not exist. So establish that something is pending
+      // first, and only then adopt the in-flight command.
+      if (!handle) {
+        const s = await get(name).catch(() => undefined);
+        if (!s) {
+          console.error(c.red(`[ath] "${name}" is gone — any answer was lost.`));
+          return 1;
+        }
+        const pending = s.state === 'needs-input' || s.state === 'busy';
+        const anyRequest = (await listRequests()).some((r) => r.session === name);
+        if (!pending && !anyRequest) {
+          console.error(
+            c.yellow(
+              `[ath] nothing in "${name}" is waiting on a human, and no request is open — ` +
+                `there is nothing to await. If you started the command with "ath start", ` +
+                `pass its handle: ath await ${name} --handle <handle>.`,
+            ),
+          );
+          return 2;
+        }
+        handle = await latestHandle(name).catch(() => undefined);
+      }
       // A missing request must not end the wait.
       //
       // The request can be cleared by something else — an editor notification,
@@ -483,37 +519,73 @@ async function main(): Promise<number> {
       // answer arrives. With no handle we fall back to watching the SESSION,
       // which is the thing actually holding the person.
       if (!handle) {
+        // NOTHING HERE CAN POLL, so nothing here may claim an outcome.
+        //
+        // This branch used to end in `handle ? await poll(...) : undefined`,
+        // inside a block entered only when `handle` is falsy and never
+        // reassigning it. The ternary could only ever yield undefined, so the
+        // "answered" arm was unreachable and EVERY answer on this path was
+        // reported as "the connection dropped ... Nothing was answered". A cold
+        // agent hit it, was told its successful sudo had failed, and only got
+        // the right answer because it distrusted this command and checked with
+        // `sudo -n id` itself.
+        //
+        // The path is reached constantly, because `ath start` files no request
+        // at all — so a credential prompt met by a backgrounded command has no
+        // handle to find here.
+        //
+        // A false negative is not the safe direction. It tells an agent the
+        // human never answered, whose correct response is to ask them again —
+        // the exact loop that made someone type a password three times.
+        const before = await get(name).catch(() => undefined);
+        const baseline = { cmd: before?.lastCommand, rc: before?.lastExitCode };
+        const anyRequest = (await listRequests()).some((r) => r.session === name);
+        if (!anyRequest && before && before.state !== 'needs-input' && before.state !== 'busy') {
+          console.error(
+            c.yellow(
+              `[ath] nothing in "${name}" is waiting on a human, and no request is open. ` +
+                `If you started the command with "ath start", pass its handle: ` +
+                `ath await ${name} --handle <handle>.`,
+            ),
+          );
+          return 2;
+        }
         for (;;) {
-          const st = await get(name)
-            .then((x) => x.state)
-            .catch(() => undefined);
-          if (st === undefined) {
+          const s = await get(name).catch(() => undefined);
+          if (s === undefined) {
             console.error(c.red(`[ath] "${name}" is gone — any answer was lost.`));
             return 1;
           }
-          if (st !== 'needs-input' && st !== 'busy') {
-            // "Stopped waiting" is NOT "answered".
-            //
-            // A session leaves `needs-input` when the prompt is answered — and
-            // equally when the connection drops, the command is interrupted, or
-            // the shell dies. Reporting that as success is the same wrong
-            // answer this whole callback exists to prevent, and it happened:
-            // ssh closed at a live password prompt and this returned exit 0.
-            // Only the command's own completion proves an answer.
-            const fin = handle ? await poll(name, handle).catch(() => undefined) : undefined;
-            if (fin?.done) {
-              if (fin.output) console.log(fin.output);
-              console.error(c.green(`[ath] "${name}" answered — exit ${fin.exitCode ?? 0}.`));
-              return fin.exitCode ?? 0;
+          if (s.state !== 'needs-input' && s.state !== 'busy') {
+            // Leaving the wall is not proof of an answer: it also happens on a
+            // dropped link, a Ctrl-C, or a dead shell. The one piece of
+            // evidence available without a handle is the session's own last
+            // completion — if a command finished while we watched, something
+            // was answered, and its exit code is the honest thing to report.
+            const completed =
+              s.lastExitCode !== undefined &&
+              (s.lastCommand !== baseline.cmd || s.lastExitCode !== baseline.rc);
+            if (completed) {
+              const code = s.lastExitCode as number;
+              console.error(
+                code === 130 || code === 143
+                  ? c.red(`[ath] "${name}" was interrupted (exit ${code}) — NOT answered.`)
+                  : c.green(`[ath] "${name}" answered — exit ${code}.`),
+              );
+              return code;
             }
+            // No handle and no completion: say that, rather than inventing a
+            // cause. "I cannot tell" sends an agent to look; "nothing was
+            // answered" sends it to ask a human who already answered.
             console.error(
-              c.red(
-                `[ath] "${name}" stopped waiting WITHOUT completing — the connection ` +
-                  `dropped, the prompt was interrupted, or the shell exited. Nothing was ` +
-                  `answered; re-run the command.`,
+              c.yellow(
+                `[ath] "${name}" is no longer waiting, but nothing completed while ath ` +
+                  `watched, and this request carries no handle — so whether it was ` +
+                  `answered CANNOT be determined from here. Check with "ath read ${name}" ` +
+                  `before assuming either way.`,
               ),
             );
-            return 1;
+            return 3;
           }
           if (Date.now() >= deadline) {
             console.error(c.yellow(`[ath] gave up waiting on "${name}" after the timeout.`));

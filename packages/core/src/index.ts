@@ -59,6 +59,7 @@ export {
   endMarker,
   envAssignments,
   extractBetweenMarkers,
+  latestHandle,
   poll,
   readLogFrom,
   readSince,

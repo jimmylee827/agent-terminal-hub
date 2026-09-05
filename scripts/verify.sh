@@ -997,6 +997,62 @@ check "stored command stays on one row" "1" "$rows"
 $ATH kill mlmeta --force >/dev/null 2>&1
 
 echo
+echo "-- await never claims an outcome it cannot prove"
+# `ath await` is the callback the credential design leans on, so a wrong answer
+# here is worse than no answer. It used to end its no-handle path in
+# `handle ? poll(...) : undefined` INSIDE a block entered only when handle was
+# falsy — the "answered" arm was unreachable, and every success was reported as
+# "the connection dropped ... Nothing was answered". A cold agent was told its
+# working sudo had failed; the correct response to that message is to ask the
+# human again, which is how someone ends up typing a password three times.
+$ATH new awt >/dev/null 2>&1; sleep 1
+$ATH run awt -- 'echo ready' >/dev/null 2>&1
+
+# Nothing asked for, nothing dropped, shell alive: it must not claim otherwise.
+out=$($ATH await awt 2>&1); arc=$?
+case "$out" in
+  *"Nothing was answered"*|*"connection dropped"*) verdict="claimed a failure it cannot know" ;;
+  *) verdict="ok" ;;
+esac
+check "an idle session with no request is not reported as a lost answer" "ok" "$verdict"
+check "and that is not reported as success either" "2" "$arc"
+
+# A command that really finishes must be reported with its real exit code, even
+# though `ath start` files no request and so leaves no handle to poll.
+$ATH start awt -- 'sleep 3; (exit 42)' >/dev/null 2>&1
+$ATH await awt >/dev/null 2>&1; arc=$?
+check "a completed command is reported answered, with its exit code" "42" "$arc"
+
+# Ctrl-C also ends the wait and also produces an end marker. "It finished"
+# therefore cannot mean "they answered", or an agent collects a result that
+# does not exist — the mirror image of the false negative.
+#
+# The interrupt must arrive WHILE await is watching. Interrupting first and
+# awaiting afterwards is a different question ("is anything pending?", answered
+# above), and testing it that way would have demanded that await adopt an
+# already-finished command — the false positive this ordering exists to avoid.
+awtmp=$(mktemp)
+$ATH start awt -- 'sleep 30' >/dev/null 2>&1; sleep 1
+( $ATH await awt >"$awtmp" 2>&1; echo "rc=$?" >>"$awtmp" ) &
+awpid=$!
+sleep 2
+$ATH send awt -- C-c >/dev/null 2>&1
+wait "$awpid" 2>/dev/null
+arc=$(grep -o 'rc=[0-9]*' "$awtmp" | tail -1 | cut -d= -f2)
+check "an interrupted command is NOT answered" "130" "${arc:-missing}"
+case "$(cat "$awtmp")" in *"NOT answered"*) v=ok ;; *) v="$(cat "$awtmp")" ;; esac
+check "and says so in words, not only in the exit code" "ok" "$v"
+rm -f "$awtmp"
+
+# The handle is recovered from the log, so output that merely LOOKS like a
+# start marker must not be mistaken for one. Only SENTINEL-wrapped markers are
+# plumbing; this is the same guarantee the console-hygiene checks rely on.
+$ATH run awt -- 'echo "<ATHS:cafebabe>"' >/dev/null 2>&1
+got=$(node -e 'require("./packages/core/dist/index.js").latestHandle("awt").then(h=>console.log(h==="cafebabe"?"spoofed":"ok"))' 2>/dev/null)
+check "echoed marker text is not mistaken for a real handle" "ok" "$got"
+$ATH kill awt --force >/dev/null 2>&1
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?
