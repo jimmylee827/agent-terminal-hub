@@ -1346,7 +1346,11 @@ $ATH new xc >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^xc ' && break; sleep 1; done
 cav() { $ATH run xc --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"flagged":"silent")}catch(e){console.log("x")}})'; }
 check "a trailing echo hiding a failure is flagged" "flagged" "$(cav 'false; echo done')"
-check "a pipeline whose last stage sets the code is flagged" "flagged" "$(cav 'echo hi | grep -c nope')"
+# Only the misleading direction. A non-zero code from a compound line makes a
+# caller investigate anyway; exit 0 is the one that hides an earlier failure and
+# gets believed. Emitting on both put the note on nearly every command run.
+check "a pipeline that exits 0 while a stage failed is flagged" "flagged" "$(cav 'false | cat')"
+check "a self-evident non-zero is not flagged" "silent" "$(cav 'echo hi | grep -c nope')"
 check "a simple command is not flagged" "silent" "$(cav 'echo plain')"
 check "a separator inside quotes is not a compound command" "silent" "$(cav 'echo "a;b"')"
 check "an && chain is not flagged — there the status is the answer" "silent" "$(cav 'true && echo ok')"
@@ -1431,6 +1435,59 @@ check "a refused command does not claim a request was filed" "honest" "${hr:-x}"
 n=$(node -e 'require("./packages/core/dist/index.js").listAllRequests().then(r=>console.log(r.filter(x=>x.session==="hf").length))' 2>/dev/null)
 check "and none was" "0" "${n:-x}"
 $ATH kill hf --force >/dev/null 2>&1
+
+echo
+echo "-- a request never claims someone answered when nobody did"
+# An agent interrupted its own `sudo id` with Ctrl-C and the queue reported
+# "answered — exit 1". sudo traps SIGINT and exits 1, so an interrupt never
+# looks like 130/143 — the exit code simply cannot tell an answer from an
+# interrupt. Acting on that string means believing you have root.
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+$ATH kill ia --force >/dev/null 2>&1
+$ATH new ia >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^ia ' && break; sleep 1; done
+$ATH start ia -- 'printf "Password: "; read -rs p; exit 1' >/dev/null 2>&1
+sleep 3
+$ATH ls >/dev/null 2>&1
+# "answer" it in a way that ends non-zero — indistinguishable from an interrupt
+TMX send-keys -t ath-ia 'x' Enter 2>/dev/null; sleep 3
+out=$($ATH requests 2>&1)
+case "$out" in
+  *"ANSWERED"*) v="claimed answered" ;;
+  *"not proof anyone answered"*) v=ok ;;
+  *) v="$(printf '%s' "$out" | head -1)" ;;
+esac
+check "a non-zero outcome is not reported as answered" "ok" "$v"
+$ATH kill ia --force >/dev/null 2>&1
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+
+echo
+echo "-- the stderr warning fires only where stderr is really the only signal"
+# It warned about every privileged command that discarded stderr. But sudo
+# writes its prompt to /dev/tty, so `sudo id 2>/dev/null` still parks and still
+# files a request — verified. Crying wolf on the common case teaches the reader
+# to skip it on the case that matters.
+$ATH kill sw --force >/dev/null 2>&1
+$ATH new sw >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^sw ' && break; sleep 1; done
+wn() { $ATH run sw --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).warning?"warned":"quiet")}catch(e){console.log("x")}})'; }
+check "non-interactive + discarded stderr is warned about" "warned" "$(wn 'sudo -n true 2>/dev/null')"
+check "an interactive one is not — it parks on the tty" "quiet" "$(wn 'sudo --version >/dev/null 2>/dev/null')"
+$ATH kill sw --force >/dev/null 2>&1
+
+echo
+echo "-- new accepts the parameter name every other tool uses"
+# `new` takes `name`; every other tool takes `session`. An agent that used any
+# of them reached for `session`, was refused, and spent a retry on an
+# inconsistency that was the tool's.
+a=$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"new","arguments":{"session":"aliaschk","cwd":"/tmp"}}}' \
+  | node packages/mcp/dist/index.js 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result;console.log(r.isError?"refused":JSON.parse(r.content[0].text).name)}catch(e){console.log("x")}})')
+check "session= is accepted as an alias for name=" "aliaschk" "${a:-x}"
+$ATH kill aliaschk --force >/dev/null 2>&1
 
 echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"

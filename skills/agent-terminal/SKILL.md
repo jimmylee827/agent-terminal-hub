@@ -27,6 +27,12 @@ else — you say so, and they type it into the same terminal you are using.
    the session log and that `ath purge <name>` clears it.
 3. **`needsInput` is a handoff, not an error.** Report it and stop. Do not
    retry, do not try `sudo -S`, do not work around it.
+   When you come back, note that **an exit code cannot tell you a human
+   answered.** Only exit 0 says the command did what it was asked; any other
+   code is ambiguous between a wrong password, an interrupt (sudo traps SIGINT
+   and exits 1, so it never looks like 130), and the command simply failing.
+   The hub reports the code and refuses to interpret it — do the same, and
+   confirm elevation with `sudo -n true` before relying on it.
 4. **Do not kill sessions you did not create**, unless asked.
 
 ## Commands
@@ -118,14 +124,16 @@ stops once the command it describes has finished. `ath requests` lists what is
 still open, and keeps recently-resolved ones visible with their exit code so
 you can collect an answer you were told about a moment earlier.
 
-**Do not discard stderr on a command that might need a credential.** The prompt
-and `sudo: a password is required` both arrive on stderr, so
-`sudo … 2>/dev/null` deletes the evidence before the hub can see it: no request
-is filed, nobody is asked, and you get an ordinary-looking success for a command
-that never ran. `2>&1` is fine — that keeps the text. When the hub spots this it
-returns a `warning`, but it can only see the shape of your command, not what the
-redirect swallowed. `2>/dev/null` on a `du` is a routine idiom; this is the one
-place it silently turns the tool off.
+**Do not discard stderr on a NON-INTERACTIVE privileged command.** With `-n`
+(or `--batch`, `BatchMode=yes`) there is no prompt to park on, and the only
+signal is `a password is required` on stderr — so `sudo -n … 2>/dev/null`
+deletes the evidence before the hub can see it: no request, nobody asked, and an
+ordinary-looking success for a command that never ran. `2>&1` keeps the text.
+
+An *interactive* `sudo … 2>/dev/null` is fine: sudo writes its prompt to
+`/dev/tty`, not stderr, so it still parks and still files a request. The hub
+warns only about the first case — an earlier version warned about both, which
+is how a warning gets ignored on the occasion it matters.
 
 **The sudo timestamp is per session, and it persists inside that session.**
 Two halves, and the second one changes how you should work:

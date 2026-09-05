@@ -29,6 +29,10 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Short name, e.g. "build". Auto-generated if omitted.' },
+        session: {
+          type: 'string',
+          description: 'Alias for `name`, since every other tool calls it `session`.',
+        },
         cwd: { type: 'string', description: 'Working directory to start in.' },
         remote: { type: 'string', description: 'Host to ssh into immediately, e.g. "myserver".' },
         pin: { type: 'boolean', description: 'Protect from automatic cleanup.' },

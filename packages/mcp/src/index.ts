@@ -116,8 +116,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     }
 
     case 'new': {
+      // Accept `session` as an alias for `name`. Every other tool here takes
+      // `session`, so an agent that has used any of them reaches for it, gets
+      // refused, and spends a retry on an inconsistency that is the tool's, not
+      // theirs. The strict unknown-argument check makes that a hard error, so
+      // the alias has to be real rather than merely tolerated.
       const session = await create({
-        name: args.name as string | undefined,
+        name: (args.name ?? args.session) as string | undefined,
         cwd: args.cwd as string | undefined,
         remote: args.remote as string | undefined,
         label: args.label as string | undefined,
@@ -384,10 +389,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // threw away the exit code — the one thing a caller checking "did
           // they answer?" actually needs. Report the OUTCOME either way and let
           // `resolved` be a suffix, not a replacement.
+          // Never claim "answered" from an exit code alone. An agent Ctrl-C'd
+          // its own `sudo id` and this said `answered — exit 1`, because sudo
+          // traps SIGINT and exits 1 rather than 130. Believing that means
+          // believing a credential was supplied.
           status: res?.done
             ? interrupted
               ? `NOT answered — interrupted (exit ${code})${r.resolvedAt ? ', resolved' : ''}`
-              : `answered — exit ${code}${r.resolvedAt ? ', resolved' : ''}`
+              : code === 0
+                ? `done — exit 0${r.resolvedAt ? ', resolved' : ''}`
+                : `finished — exit ${code}, NOT proof anyone answered${r.resolvedAt ? ', resolved' : ''}`
             : r.resolvedAt
               ? 'resolved without a recorded outcome'
               : 'waiting for a human',
@@ -444,10 +455,14 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         if (res?.done) {
           const code = res.exitCode ?? 0;
           await reapResolvedRequests(session).catch(() => undefined);
-          const answered = code !== 130 && code !== 143;
+          // Same trap as the requests listing: sudo traps SIGINT and exits 1,
+          // so an interrupted credential prompt never shows 130/143. Only
+          // exit 0 is safe to state positively.
+          const interrupted = code === 130 || code === 143;
+          const answered = code === 0;
           return jsonWithOutput(
             {
-              outcome: answered ? 'answered' : 'interrupted',
+              outcome: answered ? 'done' : interrupted ? 'interrupted' : 'finished_nonzero',
               exit_code: code,
               session,
               handle,
@@ -463,7 +478,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
                       '(~15 min, per-tty). Further sudo commands here will not prompt again — ' +
                       'confirm with `sudo -n true`. Another session will still prompt.',
                   }
-                : {}),
+                : {
+                    note:
+                      `The command ended with exit ${code}. That is NOT proof a human answered: a ` +
+                      'wrong password, an interrupt, and the command failing on its own all look ' +
+                      'the same from here. Read the output before assuming you have elevation.',
+                  }),
             },
             res.output,
           );

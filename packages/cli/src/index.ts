@@ -710,23 +710,35 @@ async function main(): Promise<number> {
         const finished = res?.done === true;
         const code = res?.exitCode ?? null;
         const interrupted = code === 130 || code === 143;
-        const answered = finished && !interrupted;
+        // "ANSWERED" was asserted for any non-signal exit code, and that is not
+        // knowable. An agent interrupted its own `sudo id` with Ctrl-C and this
+        // reported `answered — exit 1`: sudo traps SIGINT and exits 1, so it
+        // never looks like 130/143. Acting on that string means believing a
+        // human supplied a credential and proceeding as though root now works.
+        //
+        // Exit 0 is the one case worth stating positively — the command did
+        // what it was asked. Every other code is ambiguous between a wrong
+        // password, an interrupt sudo turned into 1, and the command simply
+        // failing, so report the code and refuse to interpret it.
+        const succeeded = finished && code === 0;
         const abandoned =
           r.parked === true && !finished && state !== undefined && state !== 'needs-input';
         const tag = state === undefined
           ? c.red('SESSION GONE — the answer was lost')
-          : answered
-            ? c.green(`ANSWERED — exit ${code}`)
+          : succeeded
+            ? c.green(`DONE — exit 0`)
             : finished && interrupted
               ? c.red(`NOT answered — interrupted (exit ${code})`)
-              : abandoned
-                ? c.red('NOT answered — the prompt was cancelled or timed out')
-              : r.parked
-                ? c.yellow('waiting for a human')
-                : c.yellow('blocked — needs you, session not held');
+              : finished
+                ? c.yellow(`finished — exit ${code} (not proof anyone answered)`)
+                : abandoned
+                  ? c.red('NOT answered — the prompt was cancelled or timed out')
+                  : r.parked
+                    ? c.yellow('waiting for a human')
+                    : c.yellow('blocked — needs you, session not held');
         console.log(`${c.yellow(r.id)}  ${c.bold(r.session)}  ${age} ago  ${tag}`);
         console.log(`      ${r.reason}`);
-        if (answered && r.handle) {
+        if (finished && r.handle) {
           console.log(`      collect it: ath poll ${r.session} --handle ${r.handle}`);
         }
       }

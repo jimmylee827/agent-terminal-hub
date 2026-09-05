@@ -1038,7 +1038,13 @@ async function runLocked(
     // Only when no wall fired: if one did, the request exists and the warning
     // would be noise. The dangerous case is the SILENT one.
     ...(!needsHuman && credentialBlindSpot(command) ? { warning: credentialBlindSpot(command) } : {}),
-    ...(compoundExitCaveat(command) ? { exitCaveat: compoundExitCaveat(command) } : {}),
+    // Only when the code is 0. A non-zero code from a compound line makes a
+    // caller investigate anyway; a zero one is the direction that hides an
+    // earlier failure and gets believed. Emitting on both meant the note rode
+    // along on nearly every command an agent ran.
+    ...(exitCode === 0 && compoundExitCaveat(command)
+      ? { exitCaveat: compoundExitCaveat(command) }
+      : {}),
     timedOut: false,
     needsInput: state === 'needs-input',
     state,
@@ -1660,6 +1666,9 @@ const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|
  * the detector is stderr going to /dev/null or a file, or the whole lot going
  * there with `&>`.
  */
+/** Flags that suppress the prompt, leaving stderr as the only signal. */
+const NON_INTERACTIVE_RE = /(^|\s)(-n|--non-interactive|--batch|-o\s*BatchMode=yes|BatchMode=yes)(\s|$)/;
+
 const STDERR_DISCARDED_RE = /(^|[\s;|&(])(2\s*>\s*(?!&\s*1)\S+|&>\s*\S+|>&\s*\/dev\/null)/;
 
 /**
@@ -1680,11 +1689,23 @@ const STDERR_DISCARDED_RE = /(^|[\s;|&(])(2\s*>\s*(?!&\s*1)\S+|&>\s*\S+|>&\s*\/d
  */
 function credentialBlindSpot(command: string): string | undefined {
   if (!PRIVILEGE_CMD_RE.test(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
+  // Only the NON-INTERACTIVE shape is actually blinded.
+  //
+  // This warned about every privileged command that discarded stderr, and an
+  // agent checked: in a PTY, sudo writes its prompt to /dev/tty, not stderr, so
+  // `sudo id 2>/dev/null` still parks and still files a request. Verified here
+  // — the session goes to needs-input and the pane shows `Password:`. The
+  // warning was right about `sudo -n`, where there IS no prompt and the whole
+  // signal is the "a password is required" line on stderr, and wrong about
+  // everything else. A warning that cries wolf on the common case teaches the
+  // reader to skip it on the case that matters.
+  if (!NON_INTERACTIVE_RE.test(command)) return undefined;
   return (
-    'This command can hit a credential prompt but discards stderr, which is where that ' +
-    'prompt appears — so the hub CANNOT see it and will not ask the human for you. A ' +
-    'silent success here may mean the command never ran. Drop the stderr redirect (or use ' +
-    '2>&1) if you want the credential handoff to work.'
+    'This runs non-interactively AND discards stderr. There is no prompt to park on, and the ' +
+    '"a password is required" line that would otherwise raise the handoff goes to stderr — ' +
+    'which you just threw away. So the hub cannot see it, nobody is asked, and a silent ' +
+    'success here may mean the command never ran. Use 2>&1, or drop the -n so it parks at a ' +
+    'real prompt.'
   );
 }
 
