@@ -24,7 +24,7 @@ import {
   validateName,
 } from './session';
 import { ensureControlDir, sshLaunchLine } from './ssh';
-import { listRequests, requestHuman } from './requests';
+import { clearRequest, listRequests, requestHuman } from './requests';
 import { classify, couldBePrompting, isNesting, isShell, looksLikePrompt } from './state';
 import type { PollResult, RunOptions, RunResult, Session, StartResult } from './types';
 import { randomNonce, shellQuote, sleep, stripAnsi, toLines, trimBlankEdges } from './util';
@@ -616,7 +616,7 @@ async function runLocked(
   // `start()` or typed directly by the human, neither of which holds it.
   if (session.state === 'busy') {
     if (!options.waitForIdle) {
-      throw new SessionBusy(clean, `"${session.currentCommand || 'something'}"`);
+      throw new SessionBusy(clean, busyDetail(session));
     }
     const idleDeadline = Date.now() + timeoutMs;
     while (Date.now() < idleDeadline) {
@@ -625,7 +625,7 @@ async function runLocked(
       if (session.state === 'idle') break;
     }
     if (session.state !== 'idle') {
-      throw new SessionBusy(clean, `"${session.currentCommand || 'something'}"`);
+      throw new SessionBusy(clean, busyDetail(session));
     }
   }
 
@@ -1133,6 +1133,30 @@ function mergeAssignments(stored: string, added: string[]): string {
   return [...byName.values()].slice(-MAX_RESTORED_ASSIGNMENTS).join('\n');
 }
 
+/**
+ * Name the command that is holding a busy session.
+ *
+ * `currentCommand` is the pane's foreground PROCESS. On a remote session that
+ * is `ssh` — the transport, never the work — so a 70-second checksum job was
+ * reported as `Session "box" is already running "ssh"`, which names nothing
+ * the caller can act on and reads like a bug in the session rather than a busy
+ * one.
+ *
+ * The command the hub launched is recorded on the session, and an absent exit
+ * code is what marks it still in flight. Only then does it describe what is
+ * running now: after it finishes the field lingers, and reporting a finished
+ * command as the blocker would be its own kind of lie — so fall back to the
+ * process name, which is at least true.
+ */
+function busyDetail(session: Session): string {
+  const inFlight = session.lastExitCode === undefined && session.lastCommand?.trim();
+  if (inFlight) {
+    const cmd = session.lastCommand as string;
+    return `"${cmd.length > 70 ? `${cmd.slice(0, 67)}…` : cmd}"`;
+  }
+  return `"${session.currentCommand || 'something'}"`;
+}
+
 async function recordLast(name: string, command: string, code: number | null): Promise<void> {
   await setMeta(name, 'last_cmd', command.slice(0, 200)).catch(() => undefined);
   await setMeta(name, 'last_rc', code === null ? '' : String(code)).catch(() => undefined);
@@ -1170,7 +1194,7 @@ export async function start(name: string, command: string): Promise<StartResult>
       );
     }
     if (session.state === 'busy') {
-      throw new SessionBusy(clean, `"${session.currentCommand || 'something'}"`);
+      throw new SessionBusy(clean, busyDetail(session));
     }
 
     // Never type a command into a live password prompt.
@@ -1194,6 +1218,38 @@ export async function start(name: string, command: string): Promise<StartResult>
 
     return { session: clean, command, handle: nonce, offset };
   });
+}
+
+/**
+ * Clear requests whose command has since finished.
+ *
+ * Nothing resolved a request unless it was PARKED, so every non-parked one
+ * lived forever. After a completed run an agent saw a queue where three of
+ * four entries still read "blocked — needs you", including one it had filed
+ * itself for a command that had succeeded, and `ath ls` kept flagging the
+ * session `asked-for-you` while it sat idle and finished. A human glancing at
+ * that owes three answers they have already given — which is the same false
+ * "you still owe me something" this whole signal exists to stop.
+ *
+ * The command's own exit marker is the honest resolution signal: it is in the
+ * log, it is per-handle, and it means the thing the request described is over
+ * regardless of how it ended. Requests with no handle are left alone — there
+ * is nothing to check them against, and guessing would clear a request the
+ * human has not seen yet.
+ */
+export async function reapResolvedRequests(name?: string): Promise<number> {
+  const open = await listRequests().catch(() => []);
+  let cleared = 0;
+  for (const r of open) {
+    if (r.resolvedAt !== undefined || !r.handle) continue;
+    if (name !== undefined && r.session !== name) continue;
+    const code = await findExitCode(logPath(r.session), r.handle).catch(() => undefined);
+    if (code !== undefined) {
+      await clearRequest(r.id).catch(() => undefined);
+      cleared += 1;
+    }
+  }
+  return cleared;
 }
 
 /**

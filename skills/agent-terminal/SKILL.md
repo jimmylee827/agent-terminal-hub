@@ -62,6 +62,16 @@ Pass the previous `nextOffset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin.
 
+**`start` is non-blocking for YOU, not concurrent for the session.** The
+session is busy until that command finishes, and anything else you send there
+fails with `session_busy`. To do other work meanwhile, **create a second
+session** — `--wait` queues behind the job rather than running alongside it,
+which is the opposite of what you want.
+
+Do not test this with a command that finishes quickly. A job that ends in a
+second leaves the session idle again before you look, which reads as "the
+session stayed usable" and is how you end up building on the wrong model.
+
 With MCP available, prefer the typed tools — same semantics. They are namespaced
 under the `agent_terminal` server, so your tool list shows them as
 `mcp__agent_terminal__list`, `__run`, `__read`, `__send`, `__request_human`.
@@ -80,8 +90,16 @@ files a request for the human by itself and comes back with:
       A request has been filed — see "ath requests".
 ```
 
-The `--json` form carries `needs_human` with the same text. `ath ls` marks the
-session `asked-for-you`, and `ath requests` lists what is outstanding.
+That banner is the **CLI** form. The `--json` form carries `needs_human` with
+the same text, and the **MCP** tools return `human_requested: true` plus a
+`what_to_do` saying the request is already filed. Whichever surface you are on,
+the result itself tells you — you should never have to check `ath requests` to
+discover that a request exists. If the result says nothing, none was filed.
+
+`ath ls` marks the session `asked-for-you` while a request is outstanding, and
+stops once the command it describes has finished. `ath requests` lists what is
+still open, and keeps recently-resolved ones visible with their exit code so
+you can collect an answer you were told about a moment earlier.
 
 The second shape is the one that catches agents out. `sudo -n` does not hang;
 it returns an ordinary error, and it is very easy to accept that, write "I

@@ -3,7 +3,9 @@ import {
   assertRemoteConnected,
   AthError,
   create,
+  get,
   kill,
+  latestHandle,
   list,
   poll,
   readSince,
@@ -25,6 +27,24 @@ function text(body: string, isError = false): ToolResult {
 
 function json(value: unknown): ToolResult {
   return text(JSON.stringify(value, null, 2));
+}
+
+/**
+ * Metadata as JSON, command output as its OWN block.
+ *
+ * `content` is a list for exactly this reason. Folding output into the JSON
+ * ran it through JSON.stringify, so a 93-line `ss` dump arrived as one string
+ * full of literal \n — readable only after unescaping it, and noticeably worse
+ * than the same command through the CLI. An agent evaluating this reasonably
+ * concluded it should use the CLI whenever output was large, which defeats the
+ * point of the typed tools.
+ */
+function jsonWithOutput(value: Record<string, unknown>, output: string): ToolResult {
+  const blocks: { type: 'text'; text: string }[] = [
+    { type: 'text', text: JSON.stringify(value, null, 2) },
+  ];
+  if (output) blocks.push({ type: 'text', text: output });
+  return { content: blocks };
 }
 
 async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -65,7 +85,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       });
       return json({
         name: session.name,
-        cwd: session.cwd,
+        // `cwd` used to be the LOCAL directory even for a remote session, so
+        // creating a session on another machine answered with this Mac's path.
+        // The first field a caller reads must not be the wrong one; the local
+        // path is still available, named for what it is.
+        cwd: effectiveCwd(session),
+        ...(session.remote ? { remote: session.remote, local_cwd: session.cwd } : {}),
         state: session.state,
         note: 'This session persists between your calls. Reuse it rather than creating another.',
         human_can_join_with: `ath attach ${session.name}`,
@@ -83,9 +108,23 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const payload: Record<string, unknown> = {
         session: result.session,
         exit_code: result.exitCode,
-        output: result.output,
         state: result.state,
       };
+
+      // A request was filed on the caller's behalf — SAY SO.
+      //
+      // The CLI prints a loud banner for this; the MCP form dropped the field
+      // entirely. So a non-interactive refusal (`sudo -n`) came back as an
+      // ordinary failure while a human request had silently been filed. An
+      // agent then reasonably concluded no request existed, and only found out
+      // by checking a second surface. The run result and the request queue
+      // must not disagree.
+      if (result.needsHuman) {
+        payload.human_requested = true;
+        payload.what_to_do =
+          `A request for a human has been filed: ${result.needsHuman} Tell the user what is ` +
+          `needed and stop. Do not retry it, and do not try to supply the credential yourself.`;
+      }
 
       if (result.needsInput) {
         payload.needs_input = true;
@@ -106,7 +145,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           'The command ended the session shell (it contained exit). The session survived and is ' +
           'respawned automatically on the next call, but its previous shell state is gone.';
       }
-      return json(payload);
+      return jsonWithOutput(payload, result.output);
     }
 
     case 'read': {
@@ -130,9 +169,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         session: started.session,
         handle: started.handle,
         next_offset: started.offset,
+        // "Running in the background" reads as concurrency, and it is not.
+        // It is non-blocking for the CALLER but exclusive to the SESSION: the
+        // next command here fails with session_busy until this finishes. An
+        // agent that tests the difference with a job which happens to finish
+        // in one second concludes the session stayed usable, and builds on a
+        // wrong model. Say the guarantee, and name the remedy — a second
+        // session, not --wait, which would queue behind this instead of
+        // running alongside it.
         note:
-          'Running in the background. Check it with `poll` using this handle and ' +
-          'next_offset. Space your polls to match the work — do not spin.',
+          'Running in the background: non-blocking for YOU, but this session is now busy ' +
+          'until it finishes — other commands here will fail with session_busy. To work in ' +
+          `parallel, create a second session rather than waiting. Check it with \`poll\` ` +
+          'using this handle and next_offset. Space your polls to match the work — do not spin.',
       });
     }
 
@@ -170,7 +219,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     case 'request_human': {
       const session = String(args.session ?? '');
       const reason = String(args.reason ?? 'input needed');
-      const request = await requestHuman(session, reason);
+      // BIND the request to the command it is about.
+      //
+      // Filed with no handle, a request had nothing to check itself against,
+      // so it could never be resolved and sat in the queue reading "blocked —
+      // needs you" long after the command it described had succeeded. The
+      // session's in-flight command is what the human is being asked about, so
+      // carry its handle: that is what lets the outcome be collected, and what
+      // lets the request clear itself once the command ends.
+      const handle = await latestHandle(session).catch(() => undefined);
+      const parked = await get(session)
+        .then((s) => s.state === 'needs-input')
+        .catch(() => false);
+      const request = await requestHuman(session, reason, 'agent', handle, parked);
       return json({
         requested: true,
         id: request.id,

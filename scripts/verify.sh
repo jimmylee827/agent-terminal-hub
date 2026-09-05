@@ -1133,6 +1133,65 @@ node -e 'const m=require("./packages/core/dist/index.js");m.listRequests().then(
 $ATH kill bgp --force >/dev/null 2>&1
 
 echo
+echo "-- the request queue tells the truth about what is still owed"
+# An agent finished a run and found three of four entries still reading
+# "blocked — needs you", including one it had filed for a command that had
+# succeeded, with the session still flagged asked-for-you while idle. A human
+# reading that owes answers they have already given — the same false debt this
+# signal exists to remove. Two causes: nothing resolved a non-parked request,
+# and listRequests accepted `includeResolved` and then ignored it.
+$ATH new rq >/dev/null 2>&1; sleep 1
+$ATH run rq -- 'echo seed' >/dev/null 2>&1
+node -e 'const m=require("./packages/core/dist/index.js");
+  m.latestHandle("rq").then(h=>m.requestHuman("rq","test ask","agent",h,false))' 2>/dev/null
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="rq").length))' 2>/dev/null)
+check "a filed request is open before its command ends" "1" "${n:-x}"
+$ATH run rq -- 'echo finished' >/dev/null 2>&1
+node -e 'require("./packages/core/dist/index.js").reapResolvedRequests()' 2>/dev/null
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="rq").length))' 2>/dev/null)
+check "and is no longer open once the command finishes" "0" "${n:-x}"
+# Resolved records are KEPT, so an agent told a request was filed is never
+# answered with silence a moment later.
+n=$(node -e 'require("./packages/core/dist/index.js").listAllRequests().then(r=>console.log(r.filter(x=>x.session==="rq").length))' 2>/dev/null)
+check "but is still readable as history" "1" "${n:-x}"
+case "$($ATH ls 2>&1 | grep '^rq ')" in
+  *asked-for-you*) v="still flagged" ;; *) v=ok ;;
+esac
+check "the session stops being flagged asked-for-you" "ok" "$v"
+
+echo
+echo "-- a busy session names the command, not the transport"
+# `currentCommand` is the pane's foreground PROCESS, which on a remote session
+# is `ssh`. An agent was told its 70-second checksum job was "already running
+# ssh" — true of the pane, useless to the caller.
+$ATH start rq -- 'sleep 6' >/dev/null 2>&1; sleep 1
+out=$($ATH run rq -- 'echo x' 2>&1)
+case "$out" in *'"sleep 6"'*) v=ok ;; *) v="$out" ;; esac
+check "session_busy quotes the running command" "ok" "$v"
+# --wait was the only remedy offered, and it queues rather than parallelises.
+case "$out" in *"second session"*) v=ok ;; *) v="no second-session advice" ;; esac
+check "and points at a second session, not just --wait" "ok" "$v"
+sleep 6
+node -e 'const m=require("./packages/core/dist/index.js");m.listRequests().then(async r=>{for(const x of r)if(x.session==="rq")await m.clearRequest(x.id)})' 2>/dev/null
+$ATH kill rq --force >/dev/null 2>&1
+
+echo
+echo "-- the MCP surface agrees with the CLI"
+mcp() { printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  "$1" | node packages/mcp/dist/index.js 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(d.trim().split("\n").filter(Boolean).pop()||""))'; }
+$ATH new mc >/dev/null 2>&1; sleep 1
+# Output folded into the JSON came back as one string of literal \n, so an
+# agent reasonably concluded it should use the CLI whenever output was large.
+r=$(mcp '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"session":"mc","command":"printf \"a\\nb\\nc\\n\""}}}')
+blocks=$(printf '%s' "$r" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).result.content.length)}catch(e){console.log("x")}})')
+check "run returns output as its own content block" "2" "$blocks"
+esc=$(printf '%s' "$r" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const t=JSON.parse(d).result.content[1].text;console.log(/\\n/.test(t)?"escaped":"raw")}catch(e){console.log("x")}})')
+check "and that block is raw text, not JSON-escaped" "raw" "$esc"
+$ATH kill mc --force >/dev/null 2>&1
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?

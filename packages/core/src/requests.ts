@@ -83,7 +83,16 @@ export async function listRequests(
     if (!entry.endsWith('.json')) continue;
     try {
       const body = await fs.readFile(path.join(REQUEST_DIR, entry), 'utf8');
-      out.push(JSON.parse(body) as HumanRequest);
+      const request = JSON.parse(body) as HumanRequest;
+      // OPEN means open. This option was accepted and then ignored, so every
+      // caller asking for outstanding requests also got resolved ones: `ath ls`
+      // kept flagging a finished session `asked-for-you`, and a human reading
+      // the queue was told they still owed answers they had already given.
+      // Resolved records are still KEPT — `listAllRequests` is how you read
+      // them, so an agent told "a request was filed" is never answered with
+      // silence a moment later.
+      if (request.resolvedAt !== undefined && !opts.includeResolved) continue;
+      out.push(request);
     } catch {
       /* partially written or corrupt; ignore */
     }
@@ -118,6 +127,11 @@ export async function clearRequest(id: string): Promise<void> {
 /** Every request, resolved ones included. `listRequests` returns only open. */
 export async function listAllRequests(): Promise<HumanRequest[]> {
   return listRequests({ includeResolved: true });
+}
+
+/** Whether a request is still outstanding. */
+export function isOpen(request: HumanRequest): boolean {
+  return request.resolvedAt === undefined;
 }
 
 /** Drop requests for sessions that no longer exist, plus anything stale. */

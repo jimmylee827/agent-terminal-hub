@@ -32,7 +32,8 @@ export class SessionBusy extends AthError {
     super(
       'session_busy',
       `Session "${name}" is already running ${detail}. ` +
-        `Watch it with "ath read ${name}", or queue behind it with --wait.`,
+        `Watch it with "ath read ${name}". To do OTHER work meanwhile, create a second ` +
+        `session — --wait queues behind this one rather than running alongside it.`,
     );
     this.name = 'SessionBusy';
   }

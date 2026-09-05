@@ -20,6 +20,7 @@ import {
   formatDuration,
   latestHandle,
   listRequests,
+  reapResolvedRequests,
   lockHolder,
   poll,
   purgeLog,
@@ -184,6 +185,10 @@ async function main(): Promise<number> {
         console.log(c.dim('no sessions. create one with:  ath new'));
         return 0;
       }
+      // Reap first: a resolved request left the session flagged `asked-for-you`
+      // while it sat idle and finished, so the listing told a human they still
+      // owed an answer they had already given.
+      await reapResolvedRequests().catch(() => undefined);
       const requested = new Set((await listRequests()).map((r) => r.session));
       const width = Math.max(...sessions.map((s) => s.name.length), 4);
       for (const s of sessions) {
@@ -646,6 +651,7 @@ async function main(): Promise<number> {
     }
 
     case 'requests': {
+      await reapResolvedRequests().catch(() => undefined);
       // Somewhere to actually READ what the hub asked you for. A request that
       // is filed but has no surface is not an ask, it is a dropped message.
       const open = await listAllRequests();
@@ -682,7 +688,7 @@ async function main(): Promise<number> {
         // Rather than guess, show the exit code and name the signal codes for
         // what they are, and let the reader decide.
         const res =
-          r.parked === true && r.handle !== undefined
+          r.handle !== undefined
             ? await poll(r.session, r.handle).catch(() => undefined)
             : undefined;
         const finished = res?.done === true;
