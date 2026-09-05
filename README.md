@@ -33,23 +33,24 @@ programmatically, and that you can step into mid-command.
 ## Install
 
 ```bash
-git clone <this repo> && cd agent-terminal-hub
-npm install
-brew install tmux          # required
-bash scripts/install-cli.sh
-ath doctor
+git clone https://github.com/jimmylee827/agent-terminal-hub
+cd agent-terminal-hub
+bash scripts/install.sh
 ```
 
-That builds everything, symlinks `ath` into `~/.local/bin`, installs the Claude
-Code skill, and registers the MCP server. Everything is symlinked into the repo,
-so updating is `git pull && npm run build`.
+That is the whole install. It checks prerequisites first and stops with a clear
+message if `tmux` or a recent Node are missing, builds everything, puts `ath` on
+your PATH, installs the Claude Code skill, registers the MCP server, installs the
+VS Code extension, and then **proves it works** by creating a session, running a
+command in it and checking the exit code comes back.
 
-For the VSCode panel:
+Everything is symlinked into the repo, so updating is `git pull && npm run
+build` — nothing needs reinstalling. The script is safe to re-run.
 
-```bash
-cd packages/vscode && npm install && npm run package
-code --install-extension agent-terminal-hub-0.1.0.vsix
-```
+If the VS Code extension step reports that `code` is not on your PATH, either
+enable it once (Cmd+Shift+P -> *Shell Command: Install 'code' command in PATH*)
+and re-run, or install the `.vsix` it names via Cmd+Shift+P -> *Extensions:
+Install from VSIX...*.
 
 ## Use
 
@@ -230,13 +231,29 @@ record is a human's decision, not an agent's.
 ## Verify
 
 ```bash
-bash scripts/e2e.sh
+bash scripts/testing.sh
 ```
 
-16 assertions against real tmux: exit-code fidelity, stdout+stderr capture,
-state persistence, 5000-line output integrity, survival of `exit` with prompt
-return, `needs-input` on a real `sudo` prompt, and clean `session_gone`
-reporting after a kill.
+The regression suite — 111 assertions against real tmux: exit-code fidelity for
+every shape of command, stdout+stderr capture, state persistence, output
+integrity, survival of `exit`, locking, claims, and the framing protocol.
+
+```bash
+bash scripts/testing.sh <session> "LABEL"
+```
+
+The edge battery — 70 assertions run against a session you already have, so the
+same checks can be pointed at every context that matters:
+
+```bash
+ath new work --cwd ~           && bash scripts/testing.sh work "LOCAL"
+ath new box --remote myserver  && bash scripts/testing.sh box  "REMOTE"
+ath send box --text -- bash    && bash scripts/testing.sh box  "NESTED"
+```
+
+It covers exit codes across compound commands, quoting, output that impersonates
+the framing protocol, long-command splicing, and console hygiene — asserting the
+hub's own plumbing never appears in the terminal a human is watching.
 
 ## Requirements
 
