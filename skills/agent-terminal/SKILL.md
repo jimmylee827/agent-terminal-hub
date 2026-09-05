@@ -184,6 +184,14 @@ Your job when it fires:
    dies — reporting which. Run it as a background job and your harness notifies
    you; nothing to poll inside your own turn.
 
+   The MCP `await_human` tool is the same idea but **bounded**, because an MCP
+   call is synchronous: it waits a short while and, if nobody has answered yet,
+   returns `outcome: "still_waiting"`. That is NOT a failure and the request
+   stays open — say what you need and stop, rather than calling it again in a
+   loop. To check later whether an answer landed, `poll` the command's handle:
+   its exit code is the answer. `requests` listing nothing means none was ever
+   filed, not that one was answered.
+
    Read the exit code, not just the text. `0` or the command's own code means
    answered; `130`/`143` mean interrupted, NOT answered; `2` means nothing was
    pending to wait for; `3` means it is no longer waiting and the outcome
@@ -288,10 +296,12 @@ A plain `exit` there returns you one level, it does not end the session.
   panel attaches one per session it displays, so a session nobody has touched
   commonly shows 1. Use it to know someone *could* be watching, never as proof
   a human is present.
-- `elapsed`/timing on a finished job is an UPPER BOUND, not the runtime: the hub
-  cannot see the instant a command ended, only when something first noticed. It
-  is exact only while the command is still running. If you need a real duration,
-  time the command itself.
+- Timing is exact only while a command is RUNNING. Once it has finished the hub
+  can only bracket it — it never sees the instant a command ends, just when
+  something looked — so it reports a bound if you polled while the job ran, and
+  reports nothing at all if you did not. A withheld number is deliberate: an
+  earlier version guessed, and a 47-second job came back as 256. If you need a
+  real duration, time the command itself.
 - **If the ssh connection drops**, the session does not die and does not hang.
   The next command reconnects automatically and comes back with
   `reconnecting: true` — the working directory and anything this session

@@ -179,6 +179,8 @@ export interface PollResult {
    * an upper bound (the command had already finished when we first looked).
    */
   elapsedExact?: boolean;
+  /** Set when the command finished unobserved, so no honest duration exists. */
+  elapsedUnknown?: true;
   /** A problem with how this poll was called that the hub can see but not fix. */
   warning?: string;
 }

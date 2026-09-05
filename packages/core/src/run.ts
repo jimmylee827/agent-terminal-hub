@@ -182,45 +182,51 @@ async function markStarted(nonce: string, offset: number): Promise<void> {
 /**
  * What can HONESTLY be said about how long a command took.
  *
- * The first attempt reported `Date.now() - began` next to `done: true` and
- * `exit_code: 0`, and called it `elapsed_seconds`. For a 2-second command
- * polled 48 seconds later that read 48 — and an agent, reasonably, took it for
- * the runtime and nearly certified a long-running-work requirement satisfied by
- * a 2-second command. Its verdict is the rule this now follows: "a wrong number
- * is worse than no number, because it is trusted."
+ * The hub cannot see the instant a command ends: the end marker carries an exit
+ * code, not a clock, and the only observer is whoever polls. The first version
+ * reported `now - started` even for a finished command — a 2-second job polled
+ * 48 seconds later read as 48. The second reported the time of the first
+ * sighting, which was honest but still wildly loose: 256 for a job that took
+ * 47, off by five times, and the agent's verdict was blunt and right — "the
+ * timing figure is worse than no figure ... I'd rather it returned null."
  *
- * The hub cannot see the instant a command ended. Nothing writes a completion
- * timestamp — the end marker carries an exit code, not a clock — and the only
- * observer is whoever polls. So there are exactly two honest statements:
- *
- *   still running -> how long it has been running. Exact.
- *   finished      -> an UPPER BOUND: it finished somewhere between starting and
- *                    the first poll that noticed. Named so it cannot be read as
- *                    the runtime.
- *
- * The upper bound still does the job it was added for: when it is small, the
- * command was definitely fast, which is the case that silently passes for
- * "long-running work done".
+ * So the bound is now only offered when it is actually tight. Every poll that
+ * sees the command RUNNING records the moment, which brackets the end between
+ * that and the first sighting of `done`. When that window is narrow the number
+ * means something; when it is wide — nobody looked for four minutes — there is
+ * no number to give, and saying so is the whole point.
  */
 async function timingFor(
   nonce: string,
   done: boolean,
-): Promise<{ seconds: number; exact: boolean; startOffset?: number } | undefined> {
+): Promise<
+  { seconds?: number; exact: boolean; unknown?: true; startOffset?: number } | undefined
+> {
   const file = path.join(RC_DIR, `${nonce}.t`);
   let began: number;
   let startOffset: number | undefined;
   let noticed: number | undefined;
+  let lastRunning: number | undefined;
   try {
-    const [b, o, n] = (await fs.readFile(file, 'utf8')).trim().split(/\s+/);
+    const [b, o, n, lr] = (await fs.readFile(file, 'utf8')).trim().split(/\s+/);
     began = Number(b);
     startOffset = o === undefined ? undefined : Number(o);
-    noticed = n === undefined ? undefined : Number(n);
+    noticed = n === undefined || n === '-' ? undefined : Number(n);
+    lastRunning = lr === undefined ? undefined : Number(lr);
     if (!Number.isFinite(began)) return undefined;
   } catch {
     return undefined;
   }
+  const write = async (nv?: number, lrv?: number) =>
+    fs
+      .writeFile(file, `${began} ${startOffset ?? 0} ${nv ?? '-'} ${lrv ?? ''}`.trim(), {
+        mode: 0o600,
+      })
+      .catch(() => undefined);
 
   if (!done) {
+    // Seeing it alive narrows the eventual bound, so remember it.
+    await write(noticed, Date.now());
     return {
       seconds: Math.max(0, Math.round((Date.now() - began) / 1000)),
       exact: true,
@@ -228,17 +234,20 @@ async function timingFor(
     };
   }
 
-  // Stamp the first sighting of completion, so the bound stops widening with
-  // every later poll. Without this the number kept growing after the command
-  // had finished, which is how it became misleading in the first place.
   if (noticed === undefined || !Number.isFinite(noticed)) {
     noticed = Date.now();
-    await fs.writeFile(file, `${began} ${startOffset ?? 0} ${noticed}`, { mode: 0o600 }).catch(
-      () => undefined,
-    );
+    await write(noticed, lastRunning);
+  }
+
+  const upper = Math.max(0, (noticed - began) / 1000);
+  const lower = Number.isFinite(lastRunning) ? Math.max(0, ((lastRunning as number) - began) / 1000) : 0;
+  // Wide enough to mislead? Then there is no honest number to report.
+  const slack = upper - lower;
+  if (slack > Math.max(5, upper * 0.25)) {
+    return { exact: false, unknown: true, ...(Number.isFinite(startOffset) ? { startOffset } : {}) };
   }
   return {
-    seconds: Math.max(0, Math.round((noticed - began) / 1000)),
+    seconds: Math.round(upper),
     exact: false,
     ...(Number.isFinite(startOffset) ? { startOffset } : {}),
   };
@@ -1524,7 +1533,8 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     nextOffset: size,
     state: session.state,
     needsInput: session.state === 'needs-input',
-    ...(timing === undefined ? {} : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
+    ...(timing?.seconds === undefined ? {} : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
+    ...(timing?.unknown ? { elapsedUnknown: true } : {}),
     ...(staleSince
       ? {
           warning:
@@ -1634,11 +1644,10 @@ function compoundExitCaveat(command: string): string | undefined {
   const hasSemicolon = /;/.test(bare);
   const hasPipe = /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
   if (!hasSemicolon && !hasPipe) return undefined;
-  return (
-    `exit_code is the status of the LAST ${hasPipe && !hasSemicolon ? 'stage of the pipeline' : 'command on the line'}, ` +
-    `not of the whole line — an earlier failure can be hidden by a later success, and vice versa. ` +
-    `Read the output, or run the part you care about on its own.`
-  );
+  // Kept short on purpose: this rides along on nearly every command an agent
+  // runs, and a forty-word paragraph repeated that often is a standing tax on a
+  // tool whose whole job is shuttling text.
+  return `exit code is from the last ${hasPipe && !hasSemicolon ? 'pipeline stage' : 'command on the line'}, not the whole line.`;
 }
 
 /** Commands that can stop at a credential wall. */

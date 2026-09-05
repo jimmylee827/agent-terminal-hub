@@ -1291,29 +1291,36 @@ check "a git username prompt parks but is not treated as a secret" "parks-not-se
 
 echo
 echo "-- timing is honest about what it can and cannot know"
-# `elapsed_seconds` used to be `now - start` even for a finished command, so a
-# 2-second job polled 48 seconds later reported 48 next to done/exit_code. An
-# agent read it as the runtime and nearly certified long-running work done by a
-# 2-second command. The hub cannot see when a command ended, so it must not
-# pretend: exact while running, an upper bound afterwards, and stable.
+# Three attempts at this field got it wrong in three different ways: `now -
+# start` for a finished job (2s job read as 48), then the first-sighting time
+# (47s job read as 256, off 5x). The hub cannot see when a command ends — only
+# when something looked — so a number is offered ONLY when polling brackets the
+# end tightly, and withheld entirely when it does not. "I'd rather it returned
+# null" was the verdict, and it was right.
 $ATH kill tm --force >/dev/null 2>&1
 $ATH new tm >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tm ' && break; sleep 1; done
 h=$($ATH start tm -- 'sleep 4; echo x' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
 sleep 1
-ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"done":(j.elapsedExact?"exact":"bounded"))}catch(e){console.log("x")}})')
+ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"already-done":(j.elapsedExact?"exact":"other"))}catch(e){console.log("x")}})')
 check "while running, the time is exact" "exact" "${ex:-x}"
-sleep 8
-j=$($ATH poll tm --handle "$h" --json 2>/dev/null)
-flag=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const v=JSON.parse(d);console.log(v.done&&v.elapsedExact===false?"bounded":"claimed-exact")}catch(e){console.log("x")}})')
-check "once finished it is flagged as a bound, not the runtime" "bounded" "${flag:-x}"
-a=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsedSeconds)}catch(e){console.log("x")}})')
-sleep 5
-b=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsedSeconds)}catch(e){console.log("x")}})')
-check "and the bound stops growing after the command ends" "$a" "$b"
+# Poll steadily, the way await does. That brackets the end closely, so a bound
+# is meaningful and IS reported.
+for _ in 1 2 3 4 5 6; do $ATH poll tm --handle "$h" >/dev/null 2>&1; sleep 1; done
+b=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done && j.elapsedExact===false && typeof j.elapsedSeconds==="number" ? "bounded" : (j.elapsedUnknown?"unknown":"other"))}catch(e){console.log("x")}})')
+check "watched to the end, a bound is reported" "bounded" "${b:-x}"
 $ATH kill tm --force >/dev/null 2>&1
 
-echo
+# And the case that produced the 5x-wrong number: nobody looks while it runs.
+$ATH kill tm2 --force >/dev/null 2>&1
+$ATH new tm2 >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tm2 ' && break; sleep 1; done
+h2=$($ATH start tm2 -- 'sleep 2; echo y' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
+sleep 14
+u=$($ATH poll tm2 --handle "$h2" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.elapsedUnknown?"withheld":(j.elapsedSeconds!==undefined?"guessed:"+j.elapsedSeconds:"other"))}catch(e){console.log("x")}})')
+check "unwatched, no number is invented" "withheld" "${u:-x}"
+$ATH kill tm2 --force >/dev/null 2>&1
+
 echo "-- a non-interactive refusal informs the agent without summoning a human"
 # `sudo -n` exits immediately; nothing is parked. Filing a request there sends
 # someone to an idle shell with nothing to answer, and an agent probing its own
@@ -1382,6 +1389,48 @@ r=$(mcpcall '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lis
 check "a parameter the tool does not have is refused" "refused" "${r:-x}"
 r=$(mcpcall '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list","arguments":{}}}')
 check "and a valid call still works" "accepted" "${r:-x}"
+
+echo
+echo "-- the wait primitive returns, and tells the truth about who was asked"
+# The skill instructs agents to arm this watch. It blocked for up to five
+# minutes, which from an agent's side is indistinguishable from a hang — the
+# user had to interrupt with "the wait tool use is bugged and let you stucked".
+# A synchronous call must come back.
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+$ATH kill wt --force >/dev/null 2>&1
+$ATH new wt >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^wt ' && break; sleep 1; done
+$ATH start wt -- 'printf "Password: "; read -rs p' >/dev/null 2>&1
+sleep 3
+t0=$(date +%s)
+o=$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"await_human","arguments":{"session":"wt","timeout_seconds":6}}}' \
+  | node packages/mcp/dist/index.js 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result;console.log(JSON.parse(r.content[r.content.length-1].text).outcome)}catch(e){console.log("x")}})')
+el=$(( $(date +%s) - t0 ))
+check "an unanswered wait returns rather than hanging" "still_waiting" "${o:-x}"
+check "and returns promptly, not minutes later" "yes" "$([ "$el" -lt 25 ] && echo yes || echo "took ${el}s")"
+$ATH send wt -- C-c >/dev/null 2>&1; sleep 1
+$ATH kill wt --force >/dev/null 2>&1
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+
+# A refused (non-parked) command must not claim a request was filed: the flag an
+# agent branches on contradicted the prose right beside it.
+$ATH kill hf --force >/dev/null 2>&1
+$ATH new hf >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^hf ' && break; sleep 1; done
+hr=$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"session":"hf","command":"sudo -n true 2>&1"}}}' \
+  | node packages/mcp/dist/index.js 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result;const m=JSON.parse(r.content[r.content.length-1].text.replace("--- ath ---\n",""));console.log(m.human_requested===false?"honest":"claims-filed")}catch(e){console.log("x")}})')
+check "a refused command does not claim a request was filed" "honest" "${hr:-x}"
+n=$(node -e 'require("./packages/core/dist/index.js").listAllRequests().then(r=>console.log(r.filter(x=>x.session==="hf").length))' 2>/dev/null)
+check "and none was" "0" "${n:-x}"
+$ATH kill hf --force >/dev/null 2>&1
 
 echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"

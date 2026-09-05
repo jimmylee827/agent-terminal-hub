@@ -163,10 +163,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (result.exitCaveat) payload.exit_code_caveat = result.exitCaveat;
 
       if (result.needsHuman) {
-        payload.human_requested = true;
-        payload.what_to_do =
-          `A request for a human has been filed: ${result.needsHuman} Tell the user what is ` +
-          `needed and stop. Do not retry it, and do not try to supply the credential yourself.`;
+        // `needsHuman` covers two different situations, and this said the same
+        // thing about both: "A request for a human has been filed", followed by
+        // guidance explaining that nothing is waiting and nobody can answer yet.
+        // A flag that contradicts its own explanation is a trap — an agent that
+        // branched on it would have sent someone to answer a prompt that did
+        // not exist. Only the PARKED case files anything.
+        const filed = result.needsInput === true;
+        payload.human_requested = filed;
+        payload.what_to_do = filed
+          ? `A request for a human has been filed: ${result.needsHuman} Tell the user what is ` +
+            `needed and stop. Do not retry it, and do not try to supply the credential yourself.`
+          : `${result.needsHuman} No request was filed, because there is nothing for anyone to ` +
+            `answer yet — do not send the user to look at an idle terminal.`;
       }
 
       if (result.needsInput) {
@@ -241,22 +250,24 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         next_offset: result.nextOffset,
         state: result.state,
       };
-      // Name the number for exactly what it is.
+      // Report a duration only when one honestly exists.
       //
-      // Reported as `elapsed_seconds` beside `done` and `exit_code`, it read as
-      // the command's runtime — and for a finished job it is not, it is a bound
-      // set by when anyone last looked. An agent took a 2-second command for a
-      // 48-second one on the strength of that placement.
-      if (result.elapsedSeconds !== undefined) {
+      // A loose bound was worse than nothing: 256 seconds for a 47-second job
+      // invites a wrong conclusion, and the agent that hit it said plainly it
+      // would rather have had null. If nobody watched while the command ran,
+      // say that instead of producing a number.
+      if (result.elapsedUnknown) {
+        payload.duration = 'unknown';
+        payload.timing_note =
+          'Nobody looked while this was running, so the hub cannot bound how long it took — ' +
+          'only that it finished before now. Poll while a job runs if you need its duration, ' +
+          'or time the command itself.';
+      } else if (result.elapsedSeconds !== undefined) {
         if (result.elapsedExact) {
           payload.running_for_seconds = result.elapsedSeconds;
         } else {
           payload.finished_within_seconds = result.elapsedSeconds;
-          payload.timing_note =
-            'This is an UPPER BOUND, not the runtime: the command had already finished when ' +
-            'this was first checked, so all that is known is that it took no longer than ' +
-            `${result.elapsedSeconds}s. Poll sooner if you need the real duration, or time ` +
-            'the command itself.';
+          payload.timing_note = 'Upper bound, not the exact runtime.';
           if (result.elapsedSeconds <= 2) {
             payload.what_to_do =
               `This finished within ${result.elapsedSeconds}s. If you started it expecting ` +
@@ -347,10 +358,15 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const only = args.session === undefined ? undefined : String(args.session);
       const all = (await listAllRequests()).filter((r) => only === undefined || r.session === only);
       if (all.length === 0) {
+        // "Nothing is waiting on a human" is three different states wearing one
+        // sentence — never asked, already answered, or abandoned — and an agent
+        // read it moments after a human had typed a password. Say which.
+        const where = only === undefined ? '' : ` in "${only}"`;
         return text(
-          only === undefined
-            ? 'Nothing is waiting on a human.'
-            : `Nothing is waiting on a human in "${only}".`,
+          `No requests exist${where}, open or recently resolved. That means none was ever ` +
+            `filed — NOT that one was answered. If you are checking whether a human answered a ` +
+            `command, use the \`poll\` tool with that command's handle: its exit code is the ` +
+            `answer. A resolved request would still be listed here for an hour.`,
         );
       }
       const rows = [];
@@ -364,12 +380,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           asked_for: r.reason,
           // "Finished" is not "answered": Ctrl-C at a prompt also produces an
           // exit code. Report the outcome and let the reader judge.
-          status: r.resolvedAt
-            ? 'resolved'
-            : res?.done
-              ? interrupted
-                ? `NOT answered — interrupted (exit ${code})`
-                : `answered — exit ${code}`
+          // Resolved used to short-circuit to the bare word "resolved", which
+          // threw away the exit code — the one thing a caller checking "did
+          // they answer?" actually needs. Report the OUTCOME either way and let
+          // `resolved` be a suffix, not a replacement.
+          status: res?.done
+            ? interrupted
+              ? `NOT answered — interrupted (exit ${code})${r.resolvedAt ? ', resolved' : ''}`
+              : `answered — exit ${code}${r.resolvedAt ? ', resolved' : ''}`
+            : r.resolvedAt
+              ? 'resolved without a recorded outcome'
               : 'waiting for a human',
           ...(r.handle && res?.done ? { collect_with: { session: r.session, handle: r.handle } } : {}),
         });
@@ -379,7 +399,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
 
     case 'await_human': {
       const session = String(args.session ?? '');
-      const deadline = Date.now() + Number(args.timeout_seconds ?? 300) * 1000;
+      // BOUNDED, and short by default.
+      //
+      // This blocked for up to five minutes. An MCP call is synchronous from
+      // the agent's side, so a five-minute block is indistinguishable from a
+      // hang — and it was read as one: the user had to interrupt with "the wait
+      // tool use is bugged and let you stucked". The CLI's `ath await` is meant
+      // to be BACKGROUNDED by a harness; there is no backgrounding here, so the
+      // same duration that is correct there is wrong here.
+      //
+      // A short wait that returns `still_waiting` keeps the agent responsive and
+      // lets it say something useful to the person it is waiting on.
+      const waitMs = Math.min(Math.max(Number(args.timeout_seconds ?? 45), 5), 120) * 1000;
+      const deadline = Date.now() + waitMs;
       let handle = args.handle === undefined ? undefined : String(args.handle);
       if (!handle) {
         const open = (await listRequests()).filter((r) => r.session === session && r.handle);
@@ -393,12 +425,22 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             `pass its handle.`,
         });
       }
+      // Never let one slow call swallow the deadline. `poll` shells out to
+      // tmux; if that stalls, an unguarded await sits inside it forever and the
+      // deadline below is never even evaluated. Racing each attempt against the
+      // remaining time means the tool always returns something.
+      const withDeadline = async <T>(p: Promise<T>): Promise<T | undefined> =>
+        Promise.race([
+          p.catch(() => undefined),
+          new Promise<undefined>((r) => setTimeout(() => r(undefined), Math.max(1000, deadline - Date.now()))),
+        ]);
+
       for (;;) {
-        const alive = await get(session).then(() => true).catch(() => false);
-        if (!alive) {
+        const alive = (await withDeadline(get(session).then(() => true))) ?? false;
+        if (!alive && Date.now() < deadline) {
           return json({ outcome: 'session_gone', note: 'The session died; any answer was lost.' });
         }
-        const res = await poll(session, handle, Number(args.since ?? 0)).catch(() => undefined);
+        const res = await withDeadline(poll(session, handle, Number(args.since ?? 0)));
         if (res?.done) {
           const code = res.exitCode ?? 0;
           await reapResolvedRequests(session).catch(() => undefined);
@@ -428,8 +470,14 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         }
         if (Date.now() >= deadline) {
           return json({
-            outcome: 'timeout',
-            note: 'Still waiting on a human. Do not loop on this — tell the user again.',
+            outcome: 'still_waiting',
+            session,
+            handle,
+            note:
+              'Nobody has answered yet — this is NOT a failure and the request is still open. ' +
+              'Tell the user what you need and stop. If you are resuming after they said they ' +
+              'answered, call this again, or check with the `poll` tool using this handle. Do ' +
+              'not call it repeatedly in a loop.',
           });
         }
         await new Promise((r) => setTimeout(r, 1000));

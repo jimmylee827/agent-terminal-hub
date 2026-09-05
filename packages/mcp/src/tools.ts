@@ -196,11 +196,12 @@ export const TOOL_DEFINITIONS = [
     name: 'await_human',
     annotations: { title: 'Wait for the human to answer', readOnlyHint: true, destructiveHint: false },
     description:
-      'BLOCK until a human answers the prompt in this session, then return the outcome and exit ' +
-      'code. Use it instead of polling in a loop: it returns the moment the command finishes, is ' +
-      'interrupted, or the session dies, and it says which. Read the outcome field, not just the ' +
-      'text — "interrupted" and "unknown" are not answers. Tell the user what you need BEFORE ' +
-      'calling this, because it will not return until they act.',
+      'Wait for a human to answer the prompt in this session, then return the outcome and exit ' +
+      'code. Use it instead of polling in a loop. It returns the moment the command finishes, is ' +
+      'interrupted, or the session dies — and if nobody has answered within the (short) timeout ' +
+      'it returns `outcome: "still_waiting"`, which is NOT a failure: the request stays open. ' +
+      'Read the outcome field, not just the text; "interrupted" and "still_waiting" are not ' +
+      'answers. Tell the user what you need BEFORE calling this.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -214,7 +215,9 @@ export const TOOL_DEFINITIONS = [
         },
         timeout_seconds: {
           type: 'number',
-          description: 'Give up waiting after this long. Default 300.',
+          description:
+            'How long to block before returning `still_waiting`. Default 45, max 120 — this ' +
+            'call is synchronous, so a long wait looks like a hang to everyone watching.',
         },
       },
       required: ['session'],
