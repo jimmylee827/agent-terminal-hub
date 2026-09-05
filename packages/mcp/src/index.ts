@@ -77,7 +77,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           current_command: s.currentCommand,
           pinned: s.pinned,
           remote: s.remote,
-          attached_humans: s.attached,
+          // NOT necessarily humans. This is tmux's client count, and the VS
+          // Code panel attaches a real client per session it displays — so a
+          // session nobody has touched shows 1 whenever the editor is showing
+          // it. Labelled `attached_humans`, that read as "a person is here",
+          // and an agent reasonably could not account for the number.
+          attached_clients: s.attached,
           last_command: s.lastCommand,
           last_exit_code: s.lastExitCode,
           summary: summarize(s),
@@ -209,20 +214,31 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         next_offset: result.nextOffset,
         state: result.state,
       };
-      // How long it actually ran. A one-second job and a sixty-seven-second
-      // job were previously indistinguishable in this response, so an agent
-      // that started something it believed was long-running could report the
-      // work done on a command that had finished instantly. Name it when the
-      // gap between intent and reality is wide enough to matter.
+      // Name the number for exactly what it is.
+      //
+      // Reported as `elapsed_seconds` beside `done` and `exit_code`, it read as
+      // the command's runtime — and for a finished job it is not, it is a bound
+      // set by when anyone last looked. An agent took a 2-second command for a
+      // 48-second one on the strength of that placement.
       if (result.elapsedSeconds !== undefined) {
-        payload.elapsed_seconds = result.elapsedSeconds;
-        if (result.done && result.elapsedSeconds <= 2) {
-          payload.note =
-            'This finished in about ' + result.elapsedSeconds + 's. If you started it ' +
-            'expecting long-running work, it did NOT do what you meant — check the output ' +
-            'before treating the job as done.';
+        if (result.elapsedExact) {
+          payload.running_for_seconds = result.elapsedSeconds;
+        } else {
+          payload.finished_within_seconds = result.elapsedSeconds;
+          payload.timing_note =
+            'This is an UPPER BOUND, not the runtime: the command had already finished when ' +
+            'this was first checked, so all that is known is that it took no longer than ' +
+            `${result.elapsedSeconds}s. Poll sooner if you need the real duration, or time ` +
+            'the command itself.';
+          if (result.elapsedSeconds <= 2) {
+            payload.what_to_do =
+              `This finished within ${result.elapsedSeconds}s. If you started it expecting ` +
+              'long-running work, it did NOT do what you meant — check the output before ' +
+              'treating the job as done.';
+          }
         }
       }
+      if (result.warning) payload.warning = result.warning;
       if (result.done) payload.exit_code = result.exitCode;
       if (result.needsInput) {
         payload.needs_input = true;

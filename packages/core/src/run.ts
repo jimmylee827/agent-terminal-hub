@@ -10,6 +10,7 @@ import {
   ensureLayout,
   frameHooksFor,
   logPath,
+  rcPath,
   rotateIfNeeded,
 } from './paths';
 import {
@@ -171,22 +172,76 @@ async function findExitCode(logFile: string, nonce: string): Promise<number | un
  * right granularity — the question "how long has THIS job been running" is
  * about the job, not the session.
  */
-async function markStarted(nonce: string): Promise<void> {
+async function markStarted(nonce: string, offset: number): Promise<void> {
   await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
   await fs
-    .writeFile(path.join(RC_DIR, `${nonce}.t`), String(Date.now()), { mode: 0o600 })
+    .writeFile(path.join(RC_DIR, `${nonce}.t`), `${Date.now()} ${offset}`, { mode: 0o600 })
     .catch(() => undefined);
 }
 
-/** Seconds since `markStarted` for this handle, if it was recorded. */
-async function elapsedFor(nonce: string): Promise<number | undefined> {
+/**
+ * What can HONESTLY be said about how long a command took.
+ *
+ * The first attempt reported `Date.now() - began` next to `done: true` and
+ * `exit_code: 0`, and called it `elapsed_seconds`. For a 2-second command
+ * polled 48 seconds later that read 48 — and an agent, reasonably, took it for
+ * the runtime and nearly certified a long-running-work requirement satisfied by
+ * a 2-second command. Its verdict is the rule this now follows: "a wrong number
+ * is worse than no number, because it is trusted."
+ *
+ * The hub cannot see the instant a command ended. Nothing writes a completion
+ * timestamp — the end marker carries an exit code, not a clock — and the only
+ * observer is whoever polls. So there are exactly two honest statements:
+ *
+ *   still running -> how long it has been running. Exact.
+ *   finished      -> an UPPER BOUND: it finished somewhere between starting and
+ *                    the first poll that noticed. Named so it cannot be read as
+ *                    the runtime.
+ *
+ * The upper bound still does the job it was added for: when it is small, the
+ * command was definitely fast, which is the case that silently passes for
+ * "long-running work done".
+ */
+async function timingFor(
+  nonce: string,
+  done: boolean,
+): Promise<{ seconds: number; exact: boolean; startOffset?: number } | undefined> {
+  const file = path.join(RC_DIR, `${nonce}.t`);
+  let began: number;
+  let startOffset: number | undefined;
+  let noticed: number | undefined;
   try {
-    const began = Number(await fs.readFile(path.join(RC_DIR, `${nonce}.t`), 'utf8'));
+    const [b, o, n] = (await fs.readFile(file, 'utf8')).trim().split(/\s+/);
+    began = Number(b);
+    startOffset = o === undefined ? undefined : Number(o);
+    noticed = n === undefined ? undefined : Number(n);
     if (!Number.isFinite(began)) return undefined;
-    return Math.max(0, Math.round((Date.now() - began) / 1000));
   } catch {
     return undefined;
   }
+
+  if (!done) {
+    return {
+      seconds: Math.max(0, Math.round((Date.now() - began) / 1000)),
+      exact: true,
+      ...(Number.isFinite(startOffset) ? { startOffset } : {}),
+    };
+  }
+
+  // Stamp the first sighting of completion, so the bound stops widening with
+  // every later poll. Without this the number kept growing after the command
+  // had finished, which is how it became misleading in the first place.
+  if (noticed === undefined || !Number.isFinite(noticed)) {
+    noticed = Date.now();
+    await fs.writeFile(file, `${began} ${startOffset ?? 0} ${noticed}`, { mode: 0o600 }).catch(
+      () => undefined,
+    );
+  }
+  return {
+    seconds: Math.max(0, Math.round((noticed - began) / 1000)),
+    exact: false,
+    ...(Number.isFinite(startOffset) ? { startOffset } : {}),
+  };
 }
 
 async function fileSize(file: string): Promise<number> {
@@ -1245,8 +1300,36 @@ export async function start(name: string, command: string): Promise<StartResult>
 
     const nonce = randomNonce();
     const offset = await fileSize(logPath(clean));
-    await markStarted(nonce);
-    await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
+    await markStarted(nonce, offset);
+
+    // Show the HUMAN the command, not the plumbing.
+    //
+    // `start` always used the `__ath <nonce> '<cmd>'` wrapper, even for a
+    // one-line command in a fully hooked shell where `run` would have sent the
+    // bare line. So the shared pane displayed
+    //
+    //     dev@server:~$ __ath 6cead31129ac 'sudo ss -tulpn'
+    //     [sudo] password for dev:
+    //
+    // The whole premise of the handoff is that a person looks at the terminal
+    // and decides whether to type their password into it. Showing them an
+    // opaque wrapper at exactly that moment inverts it — the agent had to
+    // describe the command in prose because the terminal would not.
+    //
+    // Same gate as `run`: bare only when the shell is KNOWN to be hooked, and
+    // only after the tag acknowledges, because an unhooked shell would run the
+    // bare command with no markers and look lost. The wrapper remains the safe
+    // fallback, unchanged.
+    const bare = commandLine(nonce, command);
+    let framed = false;
+    if (bare !== undefined && (await hooksActive(clean, session))) {
+      await sendLine(clean, agentTagLine(nonce));
+      framed = await awaitTagAck(clean, nonce, 1500);
+      if (framed) await sendLine(clean, bare);
+    }
+    if (!framed) {
+      await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
+    }
     await recordLast(clean, command, null);
 
     return { session: clean, command, handle: nonce, offset };
@@ -1363,11 +1446,22 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
   let exitCode: number | null = null;
   let done = false;
 
-  const code = await findExitCode(log, handle);
+  // Use the FULL end marker, not just the code: it also carries the directory
+  // the command finished in.
+  //
+  // Only `run` recorded that, so a `cd` issued through `start` never registered
+  // and `ath ls` went on reporting the session's old directory — it said
+  // `box:~` for a shell sitting in /tmp/infra-survey-…, which is exactly the
+  // place a caller looks to find out where a session is. Wrong quietly, which
+  // is the worst way to be wrong.
+  const end = await findCommandEnd(log, handle);
+  const code = end?.code;
   if (code !== undefined) {
     exitCode = code;
     done = true;
     await setMeta(clean, 'last_rc', String(code)).catch(() => undefined);
+    const sess = await get(clean).catch(() => undefined);
+    if (sess?.remote) await recordRemoteState(clean, end, undefined, sess).catch(() => undefined);
   } else {
     const { dead, status } = await paneStatus(clean).catch(() => ({
       dead: false,
@@ -1414,7 +1508,12 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     }
   }
 
-  const elapsedSeconds = await elapsedFor(handle);
+  const timing = await timingFor(handle, done);
+  // Offsets are per SESSION, so `since` from an earlier job is silently valid
+  // and silently wrong: it re-reads the previous command's output, which a
+  // caller may then attribute to this one. Nothing errored, so nothing warned.
+  const staleSince =
+    timing?.startOffset !== undefined && since > 0 && since < timing.startOffset;
   return {
     session: clean,
     handle,
@@ -1424,7 +1523,16 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     nextOffset: size,
     state: session.state,
     needsInput: session.state === 'needs-input',
-    ...(elapsedSeconds === undefined ? {} : { elapsedSeconds }),
+    ...(timing === undefined ? {} : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
+    ...(staleSince
+      ? {
+          warning:
+            `The offset you passed (${since}) is from before this command started ` +
+            `(${timing?.startOffset}), so the output above includes an EARLIER job's. ` +
+            `Offsets are per session, not per handle — pass back the next_offset you were ` +
+            `last given for THIS handle.`,
+        }
+      : {}),
   };
 }
 
@@ -1557,11 +1665,27 @@ async function raiseHumanWall(
   handle?: string,
 ): Promise<string | undefined> {
   if (!HUMAN_WALL_RE.test(output)) return undefined;
-  const reason =
-    `"${command.slice(0, 80)}" needs a credential only you can type. ` +
-    `Attach with "ath attach ${name}" and answer it, then re-run.`;
-  await requestHuman(name, reason, 'agent', handle).catch(() => undefined);
-  return reason;
+  // TELL THE AGENT, do not summon the human.
+  //
+  // This fires on a command that has already EXITED — a non-interactive refusal
+  // like `sudo -n`. Nothing is parked, so there is no prompt for anyone to
+  // answer: a person who accepts the notification and attaches finds an idle
+  // shell and nothing to type into. An agent probing its own environment with
+  // `sudo -n true` had a request raised against its user for a question the
+  // user could not usefully answer, and then had to raise a second one for the
+  // actual work.
+  //
+  // The useful move belongs to the agent: run the command WITHOUT `-n` so it
+  // parks at a real prompt. That path files a parked request, and then the
+  // human's keystrokes answer the command itself rather than a notification
+  // about one. So return the guidance and file nothing here.
+  return (
+    `"${command.slice(0, 80)}" needs a credential only you can type, and it has already ` +
+    `exited — nothing is waiting at a prompt, so there is nothing for anyone to answer yet. ` +
+    `Re-run it interactively (drop any -n / --non-interactive) so it PARKS at the prompt: ` +
+    `the hub then asks the user, and what they type answers this command directly. Tell them ` +
+    `what you need first.`
+  );
 }
 
 function commandLine(nonce: string, command: string): string | undefined {

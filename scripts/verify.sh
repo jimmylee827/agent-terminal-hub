@@ -1290,6 +1290,44 @@ console.log(s.looksLikePrompt(t) && !s.looksLikeCredentialPrompt(t) ? "parks-not
 check "a git username prompt parks but is not treated as a secret" "parks-not-secret" "${git:-x}"
 
 echo
+echo "-- timing is honest about what it can and cannot know"
+# `elapsed_seconds` used to be `now - start` even for a finished command, so a
+# 2-second job polled 48 seconds later reported 48 next to done/exit_code. An
+# agent read it as the runtime and nearly certified long-running work done by a
+# 2-second command. The hub cannot see when a command ended, so it must not
+# pretend: exact while running, an upper bound afterwards, and stable.
+$ATH kill tm --force >/dev/null 2>&1
+$ATH new tm >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tm ' && break; sleep 1; done
+h=$($ATH start tm -- 'sleep 4; echo x' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
+sleep 1
+ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"done":(j.elapsedExact?"exact":"bounded"))}catch(e){console.log("x")}})')
+check "while running, the time is exact" "exact" "${ex:-x}"
+sleep 8
+j=$($ATH poll tm --handle "$h" --json 2>/dev/null)
+flag=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const v=JSON.parse(d);console.log(v.done&&v.elapsedExact===false?"bounded":"claimed-exact")}catch(e){console.log("x")}})')
+check "once finished it is flagged as a bound, not the runtime" "bounded" "${flag:-x}"
+a=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsedSeconds)}catch(e){console.log("x")}})')
+sleep 5
+b=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsedSeconds)}catch(e){console.log("x")}})')
+check "and the bound stops growing after the command ends" "$a" "$b"
+$ATH kill tm --force >/dev/null 2>&1
+
+echo
+echo "-- a non-interactive refusal informs the agent without summoning a human"
+# `sudo -n` exits immediately; nothing is parked. Filing a request there sends
+# someone to an idle shell with nothing to answer, and an agent probing its own
+# environment had a request raised against its user for no reason.
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+$ATH new nr >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^nr ' && break; sleep 1; done
+g=$($ATH run nr --json -- 'sudo -n true 2>&1' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).needsHuman?"told":"silent")}catch(e){console.log("x")}})')
+check "the agent is told elevation is needed" "told" "${g:-x}"
+n=$(node -e 'require("./packages/core/dist/index.js").listAllRequests().then(r=>console.log(r.filter(x=>x.session==="nr").length))' 2>/dev/null)
+check "but no request is filed, because nothing is waiting" "0" "${n:-x}"
+$ATH kill nr --force >/dev/null 2>&1
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?

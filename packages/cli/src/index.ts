@@ -246,10 +246,15 @@ async function main(): Promise<number> {
       // different. Say what happened and how to get back.
       // Loud, and raised by the system rather than by the agent choosing to.
       if (result.needsHuman) {
+        // Only claim a request exists when one does. A non-interactive refusal
+        // files nothing — the command has already exited and there is nothing
+        // for a human to answer — so pointing at `ath requests` would send the
+        // reader to an empty queue.
+        const filed = result.needsInput === true;
         console.error(
           c.yellow(
-            `\n[ath] THIS NEEDS YOU. ${result.needsHuman}\n` +
-              `      A request has been filed — see "ath requests".`,
+            `\n[ath] ${filed ? 'THIS NEEDS YOU.' : 'NEEDS ELEVATION.'} ${result.needsHuman}` +
+              (filed ? `\n      A request has been filed — see "ath requests".` : ''),
           ),
         );
       }

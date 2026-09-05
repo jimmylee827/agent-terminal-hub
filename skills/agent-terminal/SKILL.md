@@ -89,9 +89,18 @@ tools use the snake_case spelling.)
 This is the case the hub exists for, and **the ask is automatic**. You do not
 have to notice it, and you must not skip it.
 
-Any command that hits a credential wall — the interactive `[sudo] password
-for`, or the non-interactive `sudo: a password is required` from `sudo -n` —
-files a request for the human by itself and comes back with:
+The two shapes are handled differently, and the difference matters:
+
+- **It PARKS at a prompt** (`[sudo] password for …`). The command is still
+  alive, waiting. A request is filed automatically and the human is notified —
+  what they type answers *this* command directly.
+- **It was REFUSED without prompting** (`sudo: a password is required` from
+  `sudo -n`). The command has already exited, so there is nothing for anyone to
+  answer. No request is filed, and none should be: a person who accepts a
+  notification and attaches would find an idle shell. You are told instead, and
+  the move is yours — re-run it interactively so it parks, then relay.
+
+An interactive credential wall comes back with:
 
 ```
 [ath] THIS NEEDS YOU. "<command>" needs a credential only you can type.
@@ -275,6 +284,14 @@ A plain `exit` there returns you one level, it does not end the session.
   has not been told. Relay it (step 1 above) and stop. Nothing you send can
   answer it: whatever you type lands in the password field as a failed login
   and consumes the prompt they were walking over to answer.
+- `attached` / `attached_clients` counts tmux CLIENTS, not people. The VS Code
+  panel attaches one per session it displays, so a session nobody has touched
+  commonly shows 1. Use it to know someone *could* be watching, never as proof
+  a human is present.
+- `elapsed`/timing on a finished job is an UPPER BOUND, not the runtime: the hub
+  cannot see the instant a command ended, only when something first noticed. It
+  is exact only while the command is still running. If you need a real duration,
+  time the command itself.
 - `ath send` takes tmux **key names**, not prose. `ath send x -- 'hello world'`
   is rejected; use `--text` to type literal text.
 - A reconnect restores the working directory and the variables **this session

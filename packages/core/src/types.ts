@@ -172,6 +172,13 @@ export interface PollResult {
    * answer the default.
    */
   elapsedSeconds?: number;
+  /**
+   * True when `elapsedSeconds` is the real running time; false when it is only
+   * an upper bound (the command had already finished when we first looked).
+   */
+  elapsedExact?: boolean;
+  /** A problem with how this poll was called that the hub can see but not fix. */
+  warning?: string;
 }
 
 export interface CreateOptions {
