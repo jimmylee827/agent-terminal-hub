@@ -210,10 +210,15 @@ async function main(): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    // `annotations` must be forwarded, not dropped. Without a title a client
+    // asks a person to approve "mcp__ath__terminal_start" — a symbol, not an
+    // action — and the readOnly/destructive hints are what let it decide which
+    // calls are worth asking about at all.
     tools: TOOL_DEFINITIONS.map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema,
+      ...('annotations' in tool ? { annotations: tool.annotations } : {}),
     })),
   }));
 

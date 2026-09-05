@@ -126,6 +126,75 @@ else
   say "        be able to use it. Try: node $REPO/packages/mcp/dist/index.js"
 fi
 
+# --------------------------------------------------------------- MCP permissions
+#
+# Registering the server is not the same as being able to use it. Without an
+# allow-list every single call raises a permission prompt, and the only choices
+# the dialog offers are "yes, once" or "yes, for this project" — so an agent
+# doing ten terminal operations interrupts the human ten times, and the person
+# who clicks "for this project" gets nothing the next directory along.
+#
+# Reading output and running a command are the ordinary path and are allowed.
+# terminal_kill destroys a session someone may be attached to, so it stays on
+# `ask`, which outranks `allow` and therefore keeps prompting even if a broader
+# rule is added later.
+say ""
+say "==> allowing the hub's tools without a prompt each time"
+PERM_OUT="$(node -e '
+const fs=require("fs"), os=require("os"), path=require("path");
+const file = path.join(os.homedir(), ".claude", "settings.json");
+const ALLOW = ["terminal_list","terminal_new","terminal_run","terminal_read",
+               "terminal_start","terminal_poll","terminal_send",
+               "terminal_request_human"].map(t => "mcp__ath__" + t);
+const ASK = ["mcp__ath__terminal_kill"];
+
+let settings = {}, existed = fs.existsSync(file);
+if (existed) {
+  try { settings = JSON.parse(fs.readFileSync(file, "utf8")) || {}; }
+  catch (e) { console.log("PARSE_FAIL"); process.exit(0); }
+}
+if (typeof settings !== "object" || Array.isArray(settings)) { console.log("PARSE_FAIL"); process.exit(0); }
+
+const p = (settings.permissions && typeof settings.permissions === "object" && !Array.isArray(settings.permissions))
+  ? settings.permissions : (settings.permissions = {});
+const arr = k => Array.isArray(p[k]) ? p[k] : [];
+
+// Never override a decision the user made themselves: a tool they put in deny
+// or ask is left exactly where they put it.
+const blocked = new Set([...arr("deny"), ...arr("ask")]);
+const wanted  = ALLOW.filter(r => !blocked.has(r));
+
+let added = 0;
+const merge = (key, rules) => {
+  const cur = arr(key);
+  const missing = rules.filter(r => !cur.includes(r));
+  if (missing.length) { p[key] = cur.concat(missing); added += missing.length; }
+};
+merge("allow", wanted);
+merge("ask", ASK.filter(r => !arr("deny").includes(r)));
+
+if (!added) { console.log("UNCHANGED"); process.exit(0); }
+
+// Back up before the first modification, then write atomically — a settings.json
+// truncated by a crash mid-write disables every setting in it silently.
+if (existed) fs.copyFileSync(file, file + ".before-ath");
+fs.mkdirSync(path.dirname(file), { recursive: true });
+const tmp = file + ".ath-tmp";
+fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
+fs.renameSync(tmp, file);
+console.log("CHANGED " + added);
+' 2>/dev/null || echo ERROR)"
+
+case "$PERM_OUT" in
+  UNCHANGED)  good "already allowed in ~/.claude/settings.json" ;;
+  CHANGED*)   good "allowed in ~/.claude/settings.json (terminal_kill still asks)"
+              say "        previous file kept as ~/.claude/settings.json.before-ath" ;;
+  PARSE_FAIL) bad "~/.claude/settings.json is not valid JSON, so it was left untouched."
+              say "        Fix it, re-run this script, or add these to permissions.allow:"
+              say "        mcp__ath__terminal_run, _read, _start, _poll, _send, _new, _list, _request_human" ;;
+  *)          bad "could not update ~/.claude/settings.json; the tools will prompt each call." ;;
+esac
+
 # ------------------------------------------------------------- VS Code extension
 #
 # `code --install-extension` is the documented way, but on macOS that command
