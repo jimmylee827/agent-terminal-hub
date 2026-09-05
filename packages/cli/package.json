@@ -1,0 +1,20 @@
+{
+  "name": "@ath/cli",
+  "version": "0.1.0",
+  "description": "ath - drive long-lived terminals shared by agents and humans",
+  "license": "MIT",
+  "bin": {
+    "ath": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js"
+  },
+  "dependencies": {
+    "@ath/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}

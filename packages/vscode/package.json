@@ -1,0 +1,141 @@
+{
+  "name": "agent-terminal-hub",
+  "displayName": "Agent Terminal Hub",
+  "description": "Long-lived terminals shared by AI agents and you. Attach to the terminal an agent is using and type the password yourself.",
+  "version": "0.1.0",
+  "publisher": "jimmylee827",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/jimmylee827/agent-terminal-hub.git" },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["terminal", "tmux", "agent", "claude", "sudo"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "athHub",
+          "title": "Agent Terminals",
+          "icon": "media/terminal-hub.svg"
+        }
+      ]
+    },
+    "views": {
+      "athHub": [
+        {
+          "id": "athSessions",
+          "name": "Sessions",
+          "icon": "media/terminal-hub.svg",
+          "contextualTitle": "Agent Terminals"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "athSessions",
+        "contents": "No terminal sessions yet.\n\nA session is a real terminal that outlives the agent and the editor, and that you can step into at any time.\n\n[Create a terminal](command:ath.newSession)\n\n[Connect to a host over SSH](command:ath.newRemoteSession)\n\n[Run diagnostics](command:ath.doctor)"
+      }
+    ],
+    "commands": [
+      { "command": "ath.newSession", "title": "New Terminal Session", "icon": "$(add)", "category": "Agent Terminals" },
+      { "command": "ath.newRemoteSession", "title": "New Remote Terminal (SSH)", "icon": "$(remote)", "category": "Agent Terminals" },
+      { "command": "ath.refresh", "title": "Refresh", "icon": "$(refresh)", "category": "Agent Terminals" },
+      { "command": "ath.attach", "title": "Attach", "icon": "$(terminal)", "category": "Agent Terminals" },
+      { "command": "ath.kill", "title": "Kill Session", "icon": "$(trash)", "category": "Agent Terminals" },
+      { "command": "ath.pin", "title": "Keep Alive (Pin)", "icon": "$(pin)", "category": "Agent Terminals" },
+      { "command": "ath.unpin", "title": "Stop Keeping Alive (Unpin)", "icon": "$(pinned)", "category": "Agent Terminals" },
+      { "command": "ath.togglePin", "title": "Toggle Keep-Alive Pin", "category": "Agent Terminals" },
+      { "command": "ath.copyPrompt", "title": "Copy Agent Prompt", "icon": "$(clippy)", "category": "Agent Terminals" },
+      { "command": "ath.showLog", "title": "Show Session Log", "category": "Agent Terminals" },
+      { "command": "ath.purge", "title": "Purge Recorded Output", "category": "Agent Terminals" },
+      { "command": "ath.rename", "title": "Rename Session", "category": "Agent Terminals" },
+      { "command": "ath.doctor", "title": "Run Diagnostics", "category": "Agent Terminals" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "ath.newSession", "when": "view == athSessions", "group": "navigation@1" },
+        { "command": "ath.newRemoteSession", "when": "view == athSessions", "group": "navigation@2" },
+        { "command": "ath.refresh", "when": "view == athSessions", "group": "navigation@3" }
+      ],
+      "view/item/context": [
+        { "command": "ath.attach", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "inline@1" },
+        { "command": "ath.pin", "when": "view == athSessions && viewItem =~ /^athSession/ && !(viewItem =~ /\\.pinned/)", "group": "inline@2" },
+        { "command": "ath.unpin", "when": "view == athSessions && viewItem =~ /^athSession/ && viewItem =~ /\\.pinned/", "group": "inline@2" },
+        { "command": "ath.kill", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "inline@3" },
+        { "command": "ath.copyPrompt", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "1_share@1" },
+        { "command": "ath.showLog", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "1_share@2" },
+        { "command": "ath.purge", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "1_share@3" },
+        { "command": "ath.rename", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "2_edit@1" },
+        { "command": "ath.kill", "when": "view == athSessions && viewItem =~ /^athSession/", "group": "2_edit@2" }
+      ],
+      "commandPalette": [
+        { "command": "ath.attach", "when": "false" },
+        { "command": "ath.kill", "when": "false" },
+        { "command": "ath.togglePin", "when": "false" },
+        { "command": "ath.pin", "when": "false" },
+        { "command": "ath.unpin", "when": "false" },
+        { "command": "ath.copyPrompt", "when": "false" },
+        { "command": "ath.showLog", "when": "false" },
+        { "command": "ath.purge", "when": "false" },
+        { "command": "ath.rename", "when": "false" }
+      ]
+    },
+    "configuration": {
+      "title": "Agent Terminal Hub",
+      "properties": {
+        "ath.tmuxPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the tmux binary. Leave empty to auto-detect."
+        },
+        "ath.pollIntervalMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 250,
+          "description": "How often to poll session state while something is running."
+        },
+        "ath.idlePollIntervalMs": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 500,
+          "description": "Slower poll interval used when every session is idle."
+        },
+        "ath.notifyOnNeedsInput": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a session starts waiting for a password or a prompt."
+        },
+        "ath.extraInteractiveCommands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra command names that are known to prompt for input, e.g. \"gh\", \"aws\", \"terraform\". A prompt is only reported when the text looks like a question AND the running command plausibly asks one, so a tool not listed here is detected later (at the timeout) rather than immediately.",
+          "examples": [["gh", "aws", "terraform", "heroku"]]
+        },
+        "ath.extraPromptPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra case-insensitive regexes that mean a terminal is waiting for input. Useful for tools with prompts the built-in patterns miss, or for prompts in another language."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npx --yes @vscode/vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@ath/core": "file:../core"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.4"
+  }
+}

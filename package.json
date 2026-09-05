@@ -1,0 +1,26 @@
+{
+  "name": "agent-terminal-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Long-lived terminals shared by AI agents and humans, on one PTY",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jimmylee827/agent-terminal-hub.git"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/cli",
+    "packages/mcp"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @ath/core && npm run build --workspace @ath/cli && npm run build --workspace @ath/mcp && npm run build --prefix packages/vscode",
+    "build:vscode": "cd packages/vscode && npm run build",
+    "clean": "rm -rf packages/*/dist packages/vscode/out",
+    "e2e": "bash scripts/e2e.sh",
+    "link": "bash scripts/install-cli.sh"
+  }
+}

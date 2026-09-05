@@ -1,0 +1,17 @@
+{
+  "name": "@ath/core",
+  "version": "0.1.0",
+  "description": "tmux-backed session model shared by the ath CLI, MCP server and VSCode extension",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "assets"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}

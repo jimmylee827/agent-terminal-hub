@@ -1,0 +1,21 @@
+{
+  "name": "@ath/mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing agent-terminal-hub sessions as typed tools",
+  "license": "MIT",
+  "bin": {
+    "ath-mcp": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js"
+  },
+  "dependencies": {
+    "@ath/core": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}
