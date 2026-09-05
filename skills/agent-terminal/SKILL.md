@@ -73,8 +73,16 @@ second leaves the session idle again before you look, which reads as "the
 session stayed usable" and is how you end up building on the wrong model.
 
 With MCP available, prefer the typed tools — same semantics. They are namespaced
-under the `agent_terminal` server, so your tool list shows them as
-`mcp__agent_terminal__list`, `__run`, `__read`, `__send`, `__request_human`.
+under the `agent_terminal` server: `mcp__agent_terminal__list`, `__new`, `__run`,
+`__start`, `__poll`, `__read`, `__send`, `__request_human`, `__requests`,
+`__await_human`, `__kill`. The whole credential handoff can be driven from MCP
+alone — `__requests` to see what is outstanding, `__await_human` instead of
+polling in a loop.
+
+The offset you pass back when polling is per SESSION, not per handle. It keeps
+climbing across jobs, so hand back whatever you were last given rather than
+assuming a new job starts at zero. (The CLI calls it `nextOffset`; the MCP
+tools use the snake_case spelling.)
 
 ## When a command needs a password
 
@@ -100,6 +108,20 @@ discover that a request exists. If the result says nothing, none was filed.
 stops once the command it describes has finished. `ath requests` lists what is
 still open, and keeps recently-resolved ones visible with their exit code so
 you can collect an answer you were told about a moment earlier.
+
+**Do not discard stderr on a command that might need a credential.** The prompt
+and `sudo: a password is required` both arrive on stderr, so
+`sudo … 2>/dev/null` deletes the evidence before the hub can see it: no request
+is filed, nobody is asked, and you get an ordinary-looking success for a command
+that never ran. `2>&1` is fine — that keeps the text. When the hub spots this it
+returns a `warning`, but it can only see the shape of your command, not what the
+redirect swallowed. `2>/dev/null` on a `du` is a routine idiom; this is the one
+place it silently turns the tool off.
+
+**The sudo timestamp is per session, not shared.** Separate sessions are
+separate TTYs, and `tty_tickets` is on by default — so a password typed in one
+session does NOT cover another. Put all the privileged work in one session
+rather than making the human type it twice.
 
 The second shape is the one that catches agents out. `sudo -n` does not hang;
 it returns an ordinary error, and it is very easy to accept that, write "I

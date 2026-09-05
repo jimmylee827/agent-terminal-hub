@@ -87,6 +87,8 @@ export interface Session {
 export interface RunResult {
   session: string;
   command: string;
+  /** A problem with the command itself that the hub can see but cannot fix. */
+  warning?: string;
   /** null when the command did not finish (timed out or is awaiting input). */
   exitCode: number | null;
   /** Combined stdout+stderr for this command only, ANSI-stripped. */

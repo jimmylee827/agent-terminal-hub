@@ -20,6 +20,7 @@ import {
   formatDuration,
   latestHandle,
   listRequests,
+  notePrompts,
   reapResolvedRequests,
   lockHolder,
   poll,
@@ -188,6 +189,7 @@ async function main(): Promise<number> {
       // Reap first: a resolved request left the session flagged `asked-for-you`
       // while it sat idle and finished, so the listing told a human they still
       // owed an answer they had already given.
+      await notePrompts().catch(() => undefined);
       await reapResolvedRequests().catch(() => undefined);
       const requested = new Set((await listRequests()).map((r) => r.session));
       const width = Math.max(...sessions.map((s) => s.name.length), 4);

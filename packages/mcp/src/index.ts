@@ -7,6 +7,10 @@ import {
   kill,
   latestHandle,
   list,
+  listAllRequests,
+  listRequests,
+  notePrompts,
+  reapResolvedRequests,
   poll,
   readSince,
   readTail,
@@ -40,10 +44,12 @@ function json(value: unknown): ToolResult {
  * point of the typed tools.
  */
 function jsonWithOutput(value: Record<string, unknown>, output: string): ToolResult {
-  const blocks: { type: 'text'; text: string }[] = [
-    { type: 'text', text: JSON.stringify(value, null, 2) },
-  ];
+  // Output FIRST. An agent reported that "the thing I care about is never at
+  // the top" — metadata is the smaller, more predictable half, so it reads
+  // better underneath.
+  const blocks: { type: 'text'; text: string }[] = [];
   if (output) blocks.push({ type: 'text', text: output });
+  blocks.push({ type: 'text', text: JSON.stringify(value, null, 2) });
   return { content: blocks };
 }
 
@@ -130,8 +136,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         payload.needs_input = true;
         payload.what_to_do =
           'This command is waiting for a human. Do not answer it and do not send any credential. ' +
-          `Call the request_human tool with session "${session}" and what is needed, tell the user, ` +
-          'then stop. After they respond, use `read` to see the result.';
+          'A request HAS ALREADY BEEN FILED for you — you do not need to create one. Tell the ' +
+          'user which session is waiting and what for, then stop. Call request_human only to ' +
+          'additionally raise a notification in their editor. After they respond, use `read` ' +
+          'to see the result.';
       }
       if (result.timedOut && !result.needsInput) {
         payload.timed_out = true;
@@ -177,11 +185,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // wrong model. Say the guarantee, and name the remedy — a second
         // session, not --wait, which would queue behind this instead of
         // running alongside it.
+        // Kept to one line. The long form was three lines of boilerplate on
+        // every single call — "a small, repeated context tax", mostly warning
+        // about a mistake the caller was not making. The guarantee still has
+        // to be here, because assuming concurrency is the expensive error.
         note:
-          'Running in the background: non-blocking for YOU, but this session is now busy ' +
-          'until it finishes — other commands here will fail with session_busy. To work in ' +
-          `parallel, create a second session rather than waiting. Check it with \`poll\` ` +
-          'using this handle and next_offset. Space your polls to match the work — do not spin.',
+          'Session is BUSY until this finishes (work in parallel = second session). ' +
+          'Poll with this handle and next_offset; offsets are per session, not per handle.',
       });
     }
 
@@ -199,8 +209,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (result.needsInput) {
         payload.needs_input = true;
         payload.what_to_do =
-          'Waiting for a human. Do not answer it and do not send any credential. Call ' +
-          'the `request_human` tool, tell the user, then stop.';
+          'Waiting for a human. Do not answer it and do not send any credential. A request ' +
+          'HAS ALREADY BEEN FILED — do not create another. Tell the user which session is ' +
+          'waiting and what for, then stop. Call request_human only to additionally raise a ' +
+          'notification in their editor.';
       }
       return json(payload);
     }
@@ -231,6 +243,29 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const parked = await get(session)
         .then((s) => s.state === 'needs-input')
         .catch(() => false);
+
+      // Do not file a SECOND request for the same prompt.
+      //
+      // A command that hits a wall already files one automatically; the tool
+      // exists to add an editor notification on top. An agent that reads
+      // "call request_human" as "no request exists, create one" produced a
+      // duplicate for a single prompt — the message has been fixed, but the
+      // operation should be idempotent regardless, because two entries for
+      // one prompt is a queue that lies about how much is owed.
+      const existing = (await listRequests().catch(() => [])).find(
+        (r) => r.session === session && r.handle === handle && handle !== undefined,
+      );
+      if (existing) {
+        return json({
+          requested: true,
+          id: existing.id,
+          already_open: true,
+          note:
+            'A request for this command was already open, so nothing new was filed. The human ' +
+            'has been notified. Tell them what is needed and stop.',
+        });
+      }
+
       const request = await requestHuman(session, reason, 'agent', handle, parked);
       return json({
         requested: true,
@@ -240,6 +275,87 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           'The human has been notified in their editor with a button that attaches them to this ' +
           'session. Tell them what you need in your reply as well, then wait for them.',
       });
+    }
+
+    case 'requests': {
+      await notePrompts().catch(() => undefined);
+      await reapResolvedRequests().catch(() => undefined);
+      const only = args.session === undefined ? undefined : String(args.session);
+      const all = (await listAllRequests()).filter((r) => only === undefined || r.session === only);
+      if (all.length === 0) {
+        return text(
+          only === undefined
+            ? 'Nothing is waiting on a human.'
+            : `Nothing is waiting on a human in "${only}".`,
+        );
+      }
+      const rows = [];
+      for (const r of all) {
+        const res = r.handle ? await poll(r.session, r.handle).catch(() => undefined) : undefined;
+        const code = res?.done ? (res.exitCode ?? null) : null;
+        const interrupted = code === 130 || code === 143;
+        rows.push({
+          id: r.id,
+          session: r.session,
+          asked_for: r.reason,
+          // "Finished" is not "answered": Ctrl-C at a prompt also produces an
+          // exit code. Report the outcome and let the reader judge.
+          status: r.resolvedAt
+            ? 'resolved'
+            : res?.done
+              ? interrupted
+                ? `NOT answered — interrupted (exit ${code})`
+                : `answered — exit ${code}`
+              : 'waiting for a human',
+          ...(r.handle && res?.done ? { collect_with: { session: r.session, handle: r.handle } } : {}),
+        });
+      }
+      return json(rows);
+    }
+
+    case 'await_human': {
+      const session = String(args.session ?? '');
+      const deadline = Date.now() + Number(args.timeout_seconds ?? 300) * 1000;
+      let handle = args.handle === undefined ? undefined : String(args.handle);
+      if (!handle) {
+        const open = (await listRequests()).filter((r) => r.session === session && r.handle);
+        handle = open[open.length - 1]?.handle ?? (await latestHandle(session).catch(() => undefined));
+      }
+      if (!handle) {
+        return json({
+          outcome: 'nothing_pending',
+          note:
+            `Nothing in "${session}" has a command to wait on. If you started one with \`start\`, ` +
+            `pass its handle.`,
+        });
+      }
+      for (;;) {
+        const alive = await get(session).then(() => true).catch(() => false);
+        if (!alive) {
+          return json({ outcome: 'session_gone', note: 'The session died; any answer was lost.' });
+        }
+        const res = await poll(session, handle).catch(() => undefined);
+        if (res?.done) {
+          const code = res.exitCode ?? 0;
+          await reapResolvedRequests(session).catch(() => undefined);
+          return jsonWithOutput(
+            {
+              outcome: code === 130 || code === 143 ? 'interrupted' : 'answered',
+              exit_code: code,
+              session,
+              handle,
+            },
+            res.output,
+          );
+        }
+        if (Date.now() >= deadline) {
+          return json({
+            outcome: 'timeout',
+            note: 'Still waiting on a human. Do not loop on this — tell the user again.',
+          });
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
 
     case 'kill': {

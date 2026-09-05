@@ -60,6 +60,7 @@ export {
   envAssignments,
   extractBetweenMarkers,
   latestHandle,
+  notePrompts,
   reapResolvedRequests,
   poll,
   readLogFrom,

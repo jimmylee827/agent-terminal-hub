@@ -117,7 +117,13 @@ export const TOOL_DEFINITIONS = [
       properties: {
         session: { type: 'string' },
         handle: { type: 'string', description: 'The handle returned by `start`.' },
-        since: { type: 'number', description: 'Offset from `start` or the last poll.' },
+        since: {
+          type: 'number',
+          description:
+            'Offset from `start` or the last poll. Offsets are per SESSION, not per handle: ' +
+            'they keep climbing across jobs, so always pass back what you were last given ' +
+            'rather than assuming a new job starts at zero.',
+        },
       },
       required: ['session', 'handle'],
       additionalProperties: false,
@@ -161,6 +167,50 @@ export const TOOL_DEFINITIONS = [
         },
       },
       required: ['session', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // The credential handoff is this tool's headline feature, and until now it
+    // could not be driven from MCP alone: seeing whether a request exists, and
+    // getting the answer without polling, were both CLI-only. An agent given
+    // only these tools had to shell out mid-flow — or, more likely, poll in a
+    // loop, which is the exact behaviour the design exists to prevent.
+    name: 'requests',
+    annotations: { title: 'See what needs a human', readOnlyHint: true, destructiveHint: false },
+    description:
+      'List what the hub is waiting on a human for, and what has since been answered. Each entry ' +
+      'says which session is blocked, what was asked, and — once resolved — the exit code, so you ' +
+      'can collect the outcome. Use it to check the state of a handoff. You do NOT need it to ' +
+      'discover that a request exists: whatever filed one told you so at the time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'Only requests for this session.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'await_human',
+    annotations: { title: 'Wait for the human to answer', readOnlyHint: true, destructiveHint: false },
+    description:
+      'BLOCK until a human answers the prompt in this session, then return the outcome and exit ' +
+      'code. Use it instead of polling in a loop: it returns the moment the command finishes, is ' +
+      'interrupted, or the session dies, and it says which. Read the outcome field, not just the ' +
+      'text — "interrupted" and "unknown" are not answers. Tell the user what you need BEFORE ' +
+      'calling this, because it will not return until they act.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string' },
+        handle: { type: 'string', description: 'From `start`. Omit to use the command in flight.' },
+        timeout_seconds: {
+          type: 'number',
+          description: 'Give up waiting after this long. Default 300.',
+        },
+      },
+      required: ['session'],
       additionalProperties: false,
     },
   },

@@ -15,6 +15,7 @@ import {
   assertNotCredentialPrompt,
   capturePane,
   get,
+  list,
   installHelper,
   paneStatus,
   respawn,
@@ -942,6 +943,9 @@ async function runLocked(
     exitCode,
     output,
     ...(needsHuman ? { needsHuman } : {}),
+    // Only when no wall fired: if one did, the request exists and the warning
+    // would be noise. The dangerous case is the SILENT one.
+    ...(!needsHuman && credentialBlindSpot(command) ? { warning: credentialBlindSpot(command) } : {}),
     timedOut: false,
     needsInput: state === 'needs-input',
     state,
@@ -1221,6 +1225,42 @@ export async function start(name: string, command: string): Promise<StartResult>
 }
 
 /**
+ * File a request for any session sitting at a prompt nobody has noticed.
+ *
+ * Detection used to happen only inside `poll`, which an agent spotted as a hole
+ * in the design rather than in the code: "if it only fires when I poll, a
+ * backgrounded start that hits a password and is never polled would sit
+ * silently forever — and the whole design assumes that can't happen." Exactly
+ * right. `start` returns before the command runs, so nothing observes the
+ * prompt until someone chooses to look.
+ *
+ * There is no daemon to fix this properly, but `list` is the call agents make
+ * constantly — and the human's editor is watching the request directory — so
+ * noticing here converts "never" into "as soon as anything looks at the hub".
+ * A session at a prompt with no open request gets one, once.
+ */
+export async function notePrompts(): Promise<number> {
+  const sessions = await list().catch(() => []);
+  const open = await listRequests().catch(() => []);
+  let filed = 0;
+  for (const s of sessions) {
+    if (s.state !== 'needs-input') continue;
+    if (open.some((r) => r.session === s.name)) continue;
+    const handle = await latestHandle(s.name).catch(() => undefined);
+    await requestHuman(
+      s.name,
+      `"${(s.lastCommand ?? 'a command').slice(0, 80)}" is waiting at a prompt in "${s.name}". ` +
+        `Attach with "ath attach ${s.name}" and answer it.`,
+      'agent',
+      handle,
+      true,
+    ).catch(() => undefined);
+    filed += 1;
+  }
+  return filed;
+}
+
+/**
  * Clear requests whose command has since finished.
  *
  * Nothing resolved a request unless it was PARKED, so every non-parked one
@@ -1433,6 +1473,44 @@ async function hooksActive(name: string, session: Session): Promise<boolean> {
  */
 const HUMAN_WALL_RE =
   /a (?:password|passphrase) is required|^\[sudo\] password for|sudo: no tty present|Permission denied \(publickey|Authentication failure|must be run as root|are you root\?/im;
+
+/** Commands that can stop at a credential wall. */
+const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|gpg)\b/;
+
+/**
+ * Redirections that send stderr where the hub cannot read it.
+ *
+ * `2>&1` is fine — stderr merges into stdout and is still captured. What blinds
+ * the detector is stderr going to /dev/null or a file, or the whole lot going
+ * there with `&>`.
+ */
+const STDERR_DISCARDED_RE = /(^|[\s;|&(])(2\s*>\s*(?!&\s*1)\S+|&>\s*\S+|>&\s*\/dev\/null)/;
+
+/**
+ * Warn when a command has switched off the very thing this hub is for.
+ *
+ * The wall detector reads a command's OUTPUT, so `sudo … 2>/dev/null` deletes
+ * the evidence before it exists: no request is filed, nobody is asked, and the
+ * result comes back looking like an ordinary success. An agent hit this within
+ * five minutes of picking the tool up and described it exactly — "the result
+ * reported success for a command that never ran, and nothing anywhere said
+ * this produced no output and exited instantly". It was not being clever;
+ * `2>/dev/null` on a `du` is a completely routine idiom.
+ *
+ * No amount of watching harder can fix that, because the text never arrives.
+ * The command string is the one place the problem is still visible, so say so
+ * there. A warning rather than a refusal: discarding stderr is legitimate, and
+ * the caller may know exactly what it is doing.
+ */
+function credentialBlindSpot(command: string): string | undefined {
+  if (!PRIVILEGE_CMD_RE.test(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
+  return (
+    'This command can hit a credential prompt but discards stderr, which is where that ' +
+    'prompt appears — so the hub CANNOT see it and will not ask the human for you. A ' +
+    'silent success here may mean the command never ran. Drop the stderr redirect (or use ' +
+    '2>&1) if you want the credential handoff to work.'
+  );
+}
 
 /**
  * Raise a request for a human, automatically, when a command hits such a wall.

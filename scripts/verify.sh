@@ -1192,6 +1192,65 @@ check "and that block is raw text, not JSON-escaped" "raw" "$esc"
 $ATH kill mc --force >/dev/null 2>&1
 
 echo
+echo "-- a command that blinds the credential detector says so"
+# The wall detector reads OUTPUT, so `sudo ... 2>/dev/null` deletes the evidence
+# before it exists: no request, nobody asked, and an ordinary-looking success
+# for a command that never ran. An agent hit this five minutes in. The command
+# string is the only place the problem is still visible.
+$ATH kill bl --force >/dev/null 2>&1
+$ATH new bl >/dev/null 2>&1
+# Wait for the session to actually exist rather than guessing a second. Under
+# suite load it is not ready in one, and every assertion below then reads an
+# empty stdout and fails for a reason that has nothing to do with what it tests.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  $ATH ls 2>/dev/null | grep -q '^bl ' && break
+  sleep 1
+done
+w=$($ATH run bl --json -- 'sudo -n true 2>/dev/null' 2>/dev/null \
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).warning?"warned":"silent")}catch(e){console.log("x")}})')
+check "sudo with stderr discarded is warned about" "warned" "$w"
+w=$($ATH run bl --json -- 'sudo -n true 2>&1' 2>/dev/null \
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.warning?"warned":(j.needsHuman?"detected":"neither"))}catch(e){console.log("x")}})')
+check "2>&1 keeps detection working, and is not warned about" "detected" "$w"
+w=$($ATH run bl --json -- 'ls /tmp 2>/dev/null' 2>/dev/null \
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).warning?"warned":"quiet")}catch(e){console.log("x")}})')
+check "an ordinary command is not warned about" "quiet" "$w"
+$ATH kill bl --force >/dev/null 2>&1
+
+echo
+echo "-- a prompt nobody polls is still noticed"
+# Detection lived only in poll(), so a backgrounded command that stopped at a
+# password and was never polled would sit silently forever — which the whole
+# design assumes cannot happen. `list` is what agents call constantly.
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+$ATH new np >/dev/null 2>&1; sleep 1
+$ATH start np -- 'printf "Password: "; read -rs p' >/dev/null 2>&1; sleep 3
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="np").length))' 2>/dev/null)
+check "nothing is filed before anything looks" "0" "${n:-x}"
+$ATH ls >/dev/null 2>&1
+n=$(node -e 'require("./packages/core/dist/index.js").listRequests().then(r=>console.log(r.filter(x=>x.session==="np").length))' 2>/dev/null)
+check "listing the hub notices the prompt and files one" "1" "${n:-x}"
+$ATH send np -- C-c >/dev/null 2>&1; sleep 1
+$ATH kill np --force >/dev/null 2>&1
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+
+echo
+echo "-- the credential flow is drivable from MCP alone"
+# requests and await were CLI-only, so an agent given only the MCP tools could
+# not run this tool's headline feature — and would fall back to polling in a
+# loop, the exact behaviour the design exists to prevent.
+names=$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  | node packages/mcp/dist/index.js 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result.tools.map(t=>t.name).join(","))}catch(e){console.log("x")}})')
+case "$names" in *requests*) v=ok ;; *) v="missing" ;; esac
+check "MCP offers a requests tool" "ok" "$v"
+case "$names" in *await_human*) v=ok ;; *) v="missing" ;; esac
+check "MCP offers an await tool" "ok" "$v"
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?
