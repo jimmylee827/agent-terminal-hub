@@ -85,12 +85,20 @@ good "$SKILL_DIR"
 say ""
 say "==> registering the MCP server"
 if command -v claude >/dev/null 2>&1; then
+  # --scope user, or the server exists only in the directory you installed from.
+  #
+  # `claude mcp add` defaults to LOCAL scope, which is stored per project path in
+  # ~/.claude.json. The install reports success, `claude mcp list` says
+  # "✔ Connected" when run from the repo — and an agent started from any other
+  # directory sees no MCP tools at all. That is not "installed on this machine",
+  # which is the only thing anyone means by installing it.
   claude mcp remove ath >/dev/null 2>&1 || true
-  if claude mcp add ath -- node "$REPO/packages/mcp/dist/index.js" >/dev/null 2>&1; then
-    good "registered with Claude Code as 'ath'"
+  claude mcp remove ath --scope user >/dev/null 2>&1 || true
+  if claude mcp add ath --scope user -- node "$REPO/packages/mcp/dist/index.js" >/dev/null 2>&1; then
+    good "registered with Claude Code as 'ath' (user scope — every directory)"
   else
     bad "could not register automatically. Run:"
-    say "        claude mcp add ath -- node $REPO/packages/mcp/dist/index.js"
+    say "        claude mcp add ath --scope user -- node $REPO/packages/mcp/dist/index.js"
   fi
 else
   bad "the 'claude' CLI was not found, so MCP was not registered."

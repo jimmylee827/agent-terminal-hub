@@ -223,6 +223,14 @@ for cmd in ls new run read send attach poll start requests await doctor kill; do
   chk "skill command '$cmd' exists" "yes" \
       "$($ATH_BIN --help 2>&1 | grep -qE "^  ath $cmd" && echo yes || echo no)"
 done
+# The MCP server must be registered for EVERY directory, not just the one it was
+# installed from. `claude mcp add` defaults to local (per-project) scope, so an
+# install can report success while an agent one directory away sees no MCP tools
+# at all — which is exactly what happened to an agent evaluating this tool.
+if command -v claude >/dev/null 2>&1; then
+  chk "MCP registered at user scope" "yes" \
+      "$(node -e 'try{const c=require(process.env.HOME+"/.claude.json");process.stdout.write(c.mcpServers&&c.mcpServers.ath?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
+fi
 chk "skill mentions ath await"   "yes" "$(grep -q 'ath await' "$SK" && echo yes || echo no)"
 chk "skill drops the dead idiom" "no"  "$(grep -qF "until ath requests" "$SK" && echo yes || echo no)"
 

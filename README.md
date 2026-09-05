@@ -47,6 +47,11 @@ It then **proves each half works** rather than assuming: it speaks the MCP
 protocol to the server and reports how many tools it offers, and it creates a
 session, runs a command in it, and checks the exit code comes back.
 
+The MCP server is registered at **user scope**, so it is available from every
+directory on the machine. `claude mcp add` defaults to per-project scope, which
+looks identical when you check it from the repo and gives an agent started
+anywhere else no MCP tools at all.
+
 The MCP server is a stdio server, so there is no daemon to start — your agent
 spawns one per session. Registering it is all that is needed; verifying it
 answers is what tells you the registration is worth anything.
