@@ -420,7 +420,7 @@ node -e '
 const a=require(process.argv[1]+"/packages/core/dist/index.js");
 // Wrap the way a terminal does: exact-width rows, no character inserted.
 const wrap=(s,w)=>s.match(new RegExp(`.{1,${w}}`,"g")).join("\n");
-const real="Enter passphrase for key \x27/Users/someone/Desktop/CodePlayground/20260201_vm/example_rsa\x27:";
+const real="Enter passphrase for key \x27/home/user/.ssh/keys/infrastructure/production/example_rsa\x27:";
 const out=[
   a.looksLikePrompt(wrap(real,80),80),   // wrapped over two rows
   a.looksLikePrompt(wrap(real,60),60),   // narrower pane, still wrapped
