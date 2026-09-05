@@ -4,3 +4,6 @@ out/
 *.vsix
 *.tsbuildinfo
 .DS_Store
+
+# Evaluation prompts — local only, not part of the package
+testing/
