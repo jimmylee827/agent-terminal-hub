@@ -757,6 +757,32 @@ chk "and cannot end the command early"         "yes" "$(printf '%s' "$FORGE" | g
 chk "the skill states this defence"            "yes" \
     "$(grep -q 'cannot impersonate a marker' "$SK" && echo yes || echo no)"
 
+# ---- container tooling is recognised whatever the vendor calls its binary ---
+#
+# `docker` on a Mac is often a symlink into OrbStack, Docker Desktop or Rancher,
+# so the pane reports `docker-tools` rather than `docker`. The exact-name Set
+# matched nothing, the hub never saw a nested shell, and a session stayed BUSY
+# forever after `docker exec` — `run` against it returned nothing at all.
+#
+# The second half matters as much: `classify` did its own Set lookup instead of
+# calling `isNesting`, so teaching `isNesting` about the prefixes fixed one
+# reader while the one that decides busy-vs-idle carried on being wrong.
+NEST="$(node -e '
+const s=require("'"$RP"'/packages/core/dist/state.js");
+const yes=["docker","docker-tools","docker-compose","podman-remote","kubectl","nerdctl","ssh"];
+const no=["zsh","bash","node","npm"];
+const okYes=yes.every(c=>s.isNesting(c));
+const okNo=no.every(c=>!s.isNesting(c));
+// classify must agree with isNesting, not with a private copy of the list
+const idle=s.classify({paneDead:false,currentCommand:"docker-tools",paneTail:"/ # ",paneWidth:80})==="idle";
+const busy=s.classify({paneDead:false,currentCommand:"node",paneTail:"working",paneWidth:80})==="busy";
+process.stdout.write(`${okYes?"yes":"NO"} ${okNo?"noFalse":"FALSEPOS"} ${idle?"idle":"STUCKBUSY"} ${busy?"busy":"BUSYBROKE"}`);
+' 2>/dev/null)"
+chk "vendor-wrapped container binaries are nesting" "yes"     "$(printf '%s' "$NEST" | awk '{print $1}')"
+chk "ordinary commands are not"                     "noFalse" "$(printf '%s' "$NEST" | awk '{print $2}')"
+chk "a container shell at its prompt reads idle"    "idle"    "$(printf '%s' "$NEST" | awk '{print $3}')"
+chk "a real working command still reads busy"       "busy"    "$(printf '%s' "$NEST" | awk '{print $4}')"
+
 # The skill must carry the same disclosure the CLI does.
 chk "skill documents what survives purge" "yes" \
     "$(grep -q 'What this leaves on disk' "$SK" && echo yes || echo no)"

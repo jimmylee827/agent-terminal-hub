@@ -234,8 +234,25 @@ export const NESTING_COMMANDS = new Set([
  * run on the wrong machine while every label still says "remote", so this is
  * checked before running anything rather than merely displayed.
  */
+/**
+ * Container tooling whose BINARY is often not called what you typed.
+ *
+ * `docker` on this machine is a symlink into OrbStack, so the pane reports
+ * `docker-tools`; Docker Desktop, Rancher and Colima each wrap it differently,
+ * and the name is a vendor's implementation detail that changes without notice.
+ * Matching the family by prefix survives that. Chasing exact binary names left
+ * a Mac user's session permanently `busy` after `docker exec`, because the
+ * pane's command matched nothing here and the hub never saw a nested shell.
+ *
+ * Over-matching is close to harmless: the only effect of a false positive is
+ * that a pane showing a shell prompt is read as idle rather than busy, and a
+ * daemon like `dockerd` in the foreground never shows one.
+ */
+const NESTING_PREFIXES = ['docker', 'podman', 'kubectl', 'nerdctl', 'lima', 'colima'];
+
 export function isNesting(currentCommand: string): boolean {
-  return NESTING_COMMANDS.has(currentCommand);
+  if (NESTING_COMMANDS.has(currentCommand)) return true;
+  return NESTING_PREFIXES.some((p) => currentCommand.startsWith(p));
 }
 
 /**
@@ -280,7 +297,13 @@ export function classify({
   if (looksLikePrompt(paneTail, paneWidth) && couldBePrompting(currentCommand)) return 'needs-input';
   if (isShell(currentCommand)) return 'idle';
   // A nested shell (ssh, docker exec, sudo -i) sitting at its own prompt.
-  if (NESTING_COMMANDS.has(currentCommand) && looksLikeShellPrompt(paneTail)) return 'idle';
+  //
+  // Goes through `isNesting`, NOT a raw Set lookup. This line did the lookup
+  // itself, so when `isNesting` learned to match container tooling by family
+  // prefix, the one reader that decides busy-vs-idle carried on using the bare
+  // Set — and a Mac session stayed `busy` forever after `docker exec`, because
+  // OrbStack's binary is `docker-tools`. One rule, one reader.
+  if (isNesting(currentCommand) && looksLikeShellPrompt(paneTail)) return 'idle';
   return 'busy';
 }
 
