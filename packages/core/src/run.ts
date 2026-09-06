@@ -1764,7 +1764,30 @@ const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|
 const NON_INTERACTIVE_RE = /(^|\s)(-n|--non-interactive|--batch|-o\s*BatchMode=yes|BatchMode=yes)(\s|$)/;
 
 /** Tools that walk a tree and skip what they cannot read. */
-const TRAVERSAL_CMD_RE = /(^|[\s;|&(])(du|find|grep|rsync|tar|cp|ls)\b/;
+/**
+ * Tools that walk a tree and skip what they cannot read.
+ *
+ * RECURSION is the hazard, not the command name. `du` and `find` always
+ * descend; `grep`, `ls`, `cp` and `rsync` only do so when asked, and their
+ * flags differ — `-a` means archive (recursive) for cp and rsync, but "all
+ * files" for ls, which is not recursive at all.
+ *
+ * The first version matched on the name alone, so `ls /var/lib/apt/periodic/`
+ * drew a warning about silently omitted subtrees when it descends into
+ * nothing. An agent met it three times in one session, twice spuriously, and
+ * named the consequence precisely: it is the same fatigue dynamic this project
+ * has already been bitten by twice. A warning that fires when it cannot apply
+ * teaches the reader to skip it on the occasion it does.
+ */
+const ALWAYS_RECURSIVE_RE = /(^|[\s;|&(])(du|find|tar)\b/;
+function walksRecursively(command: string): boolean {
+  if (ALWAYS_RECURSIVE_RE.test(command)) return true;
+  // Simple, readable fallback: the tool plus a recursive flag for that tool.
+  if (/(^|[\s;|&(])grep\b[^;|&]*\s-[A-Za-z]*[rR]/.test(command)) return true;
+  if (/(^|[\s;|&(])ls\b[^;|&]*\s-[A-Za-z]*R/.test(command)) return true;
+  if (/(^|[\s;|&(])(cp|rsync)\b[^;|&]*\s-[A-Za-z]*[rRa]/.test(command)) return true;
+  return false;
+}
 
 /** Paths where an unprivileged walk WILL hit unreadable areas. */
 const SYSTEM_PATH_RE = /(^|\s)\/(?:$|\s)|(^|\s)\/(var|etc|root|home|usr|opt|srv|proc|sys)\b/;
@@ -1819,7 +1842,7 @@ function credentialBlindSpot(command: string): string | undefined {
  * plausible, caught only by cross-checking df.
  */
 function traversalBlindSpot(command: string): string | undefined {
-  if (!TRAVERSAL_CMD_RE.test(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
+  if (!walksRecursively(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
   if (!SYSTEM_PATH_RE.test(command)) return undefined;
   return (
     'This walks a system path and sends stderr to /dev/null, so permission errors are being ' +

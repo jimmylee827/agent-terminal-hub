@@ -444,9 +444,23 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const waitMs = Math.min(Math.max(Number(args.timeout_seconds ?? 45), 5), 120) * 1000;
       const deadline = Date.now() + waitMs;
       let handle = args.handle === undefined ? undefined : String(args.handle);
+      // Where the handle comes from when the caller did not pass one.
+      //
+      // An agent noticed this returned a handle for a command it had launched
+      // with `run`, not `start`, and said it "appeared without explanation".
+      // Fair: a handle is documented as a `start` thing. Every framed command
+      // has one — `run` just does not surface it — so this recovers it from the
+      // open request, or failing that from the session log. Say which, because
+      // an unexplained identifier is one more thing to wonder about.
+      let handleSource = 'you passed it';
       if (!handle) {
         const open = (await listRequests()).filter((r) => r.session === session && r.handle);
-        handle = open[open.length - 1]?.handle ?? (await latestHandle(session).catch(() => undefined));
+        handle = open[open.length - 1]?.handle;
+        handleSource = 'the open request for this session';
+        if (!handle) {
+          handle = await latestHandle(session).catch(() => undefined);
+          handleSource = 'the last command framed in this session';
+        }
       }
       if (!handle) {
         return json({
@@ -486,6 +500,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               exit_code: code,
               session,
               handle,
+              handle_from: handleSource,
               next_offset: res.nextOffset,
               // Say that the credential is now cached, rather than leaving it to
               // be guessed. An agent guessed "the usual 15 minutes" and said it

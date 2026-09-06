@@ -1524,6 +1524,14 @@ tw() { $ATH run tw --timeout 20 --json -- "$1" 2>/dev/null | node -e 'let d="";p
 check "a system-path walk discarding stderr is warned about" "warned" "$(tw 'find /etc -maxdepth 0 2>/dev/null')"
 check "the same walk keeping stderr is not" "quiet" "$(tw 'find /etc -maxdepth 0 2>&1')"
 check "a walk of the current directory is not" "quiet" "$(tw 'find . -maxdepth 0 2>/dev/null')"
+# RECURSION is the hazard, not the command name. Matching on the name alone
+# warned about `ls /var/lib/apt/periodic/`, which descends into nothing. An
+# agent met that three times in one session, twice spuriously, and named it as
+# the same fatigue dynamic this project has already been bitten by twice.
+check "a plain ls of one directory is not warned about" "quiet" "$(tw 'ls /var/lib 2>/dev/null')"
+check "but ls -R is" "warned" "$(tw 'ls -R /etc/hostname 2>/dev/null')"
+check "grep without -r is not" "quiet" "$(tw 'grep x /etc/hostname 2>/dev/null')"
+check "but grep -r is" "warned" "$(tw 'grep -r x /etc/hostname 2>/dev/null')"
 # Redirecting stderr to a FILE is keeping it, not discarding it. An agent did
 # exactly that, read the file (0 lines, which is how it knew the walk was
 # clean), and was told it had "thrown away" the evidence. That false positive
