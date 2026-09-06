@@ -260,7 +260,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // to be here, because assuming concurrency is the expensive error.
         note:
           'Session is BUSY until this finishes (work in parallel = second session). ' +
-          'Poll with this handle and next_offset; offsets are per session, not per handle.',
+          `Poll with this handle and next_offset (${started.offset}) — that number continues ` +
+          `session "${started.session}"'s byte stream, so a NEW job does not start at 0. Pass ` +
+          'back whatever you were last given.',
       });
     }
 
@@ -289,8 +291,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         payload.timing_note = result.elapsedObserved
           ? 'A bracket, not a measurement: it was still running when last checked and finished ' +
             'before the next look. Poll more often for a tighter figure.'
-          : 'Upper bound only — nothing observed it while it ran, so all that is known is that ' +
-            'it finished before this check. Poll while a job runs if you need its duration.';
+          : `Upper bound only. The 0 is because nothing ever saw it running; the ` +
+            `${result.elapsedUpperSeconds}s is simply how long ago YOU started it — this check ` +
+            `is the first look, so all that is known is that it finished somewhere in between. ` +
+            `Poll while a job runs if you need its duration.`;
         if ((result.elapsedUpperSeconds ?? 0) <= 2) {
           payload.what_to_do =
             'This finished within a couple of seconds. If you started it expecting long-running ' +

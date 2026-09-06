@@ -1743,16 +1743,25 @@ function quoteForMessage(command: string, max = 80): string {
 const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|gpg)\b/;
 
 /**
- * Redirections that send stderr where the hub cannot read it.
+ * Redirections that DESTROY stderr — not merely move it.
  *
- * `2>&1` is fine — stderr merges into stdout and is still captured. What blinds
- * the detector is stderr going to /dev/null or a file, or the whole lot going
- * there with `&>`.
+ * The first version matched any `2>` target, so `2>>du-errors.txt` was called
+ * discarding. An agent had deliberately redirected to a file and then read it
+ * (0 lines, which is how it knew the walk was clean) and was told it had
+ * "thrown away" the evidence. That is a flat false positive on a careful
+ * caller.
+ *
+ * It cost more than one wrong message. That warning and one other piece of
+ * noise arrived BEFORE the single true positive, so by the time the real one
+ * came — a `sudo du ... 2>/dev/null` inside a loop silently producing five
+ * blank sizes — the reader had already learned to discount it. The skill warns
+ * about precisely this dynamic, and the implementation walked into it.
+ *
+ * Only /dev/null and a closed descriptor destroy the text. A file keeps it;
+ * `2>&1` keeps it. Neither is the caller's problem.
  */
 /** Flags that suppress the prompt, leaving stderr as the only signal. */
 const NON_INTERACTIVE_RE = /(^|\s)(-n|--non-interactive|--batch|-o\s*BatchMode=yes|BatchMode=yes)(\s|$)/;
-
-const STDERR_DISCARDED_RE = /(^|[\s;|&(])(2\s*>\s*(?!&\s*1)\S+|&>\s*\S+|>&\s*\/dev\/null)/;
 
 /** Tools that walk a tree and skip what they cannot read. */
 const TRAVERSAL_CMD_RE = /(^|[\s;|&(])(du|find|grep|rsync|tar|cp|ls)\b/;
@@ -1760,29 +1769,8 @@ const TRAVERSAL_CMD_RE = /(^|[\s;|&(])(du|find|grep|rsync|tar|cp|ls)\b/;
 /** Paths where an unprivileged walk WILL hit unreadable areas. */
 const SYSTEM_PATH_RE = /(^|\s)\/(?:$|\s)|(^|\s)\/(var|etc|root|home|usr|opt|srv|proc|sys)\b/;
 
-/**
- * Warn when discarded stderr is hiding permission errors from a tree walk.
- *
- * An agent ran `du -xh -d2 / 2>/dev/null`, got `20G` against df's `70G`, and
- * nearly filed it: the walk could not read /var/lib/docker, its own redirect
- * ate the errors, and the exit code was 0. A 50 GB understatement that looked
- * entirely plausible, caught only by cross-checking df.
- *
- * The credential blind-spot warning did not cover this and should not — the
- * command was unprivileged. But the shape is the same one this tool keeps
- * getting bitten by: stderr thrown away, a success reported, and a silently
- * incomplete answer. Different cause, same class, worth its own warning.
- */
-function traversalBlindSpot(command: string): string | undefined {
-  if (!TRAVERSAL_CMD_RE.test(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
-  if (!SYSTEM_PATH_RE.test(command)) return undefined;
-  return (
-    'This walks a system path with stderr discarded, so permission errors are being thrown ' +
-    'away — anything unreadable is silently omitted and the exit code will still be 0. A total ' +
-    'from this may be far short of the truth. Keep stderr (2>&1), or run it with the privilege ' +
-    'it needs, and cross-check totals against an independent source.'
-  );
-}
+const STDERR_DISCARDED_RE =
+  /(^|[\s;|&(])(2\s*>>?\s*\/dev\/null|2\s*>\s*&\s*-|&>>?\s*\/dev\/null|>&\s*\/dev\/null)(\s|$|[;|&)])/;
 
 /**
  * Warn when a command has switched off the very thing this hub is for.
@@ -1819,6 +1807,25 @@ function credentialBlindSpot(command: string): string | undefined {
     'which you just threw away. So the hub cannot see it, nobody is asked, and a silent ' +
     'success here may mean the command never ran. Use 2>&1, or drop the -n so it parks at a ' +
     'real prompt.'
+  );
+}
+
+/**
+ * Warn when discarded stderr is hiding permission errors from a tree walk.
+ *
+ * An agent ran `du -xh -d2 / 2>/dev/null`, got 20G against df's 70G, and nearly
+ * filed it: the walk could not read /var/lib/docker, its own redirect ate the
+ * errors, and the exit code was 0. A 50 GB understatement that looked entirely
+ * plausible, caught only by cross-checking df.
+ */
+function traversalBlindSpot(command: string): string | undefined {
+  if (!TRAVERSAL_CMD_RE.test(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
+  if (!SYSTEM_PATH_RE.test(command)) return undefined;
+  return (
+    'This walks a system path and sends stderr to /dev/null, so permission errors are being ' +
+    'destroyed — anything unreadable is silently omitted and the exit code will still be 0. A ' +
+    'total from this may be far short of the truth. Redirect stderr to a FILE and read it, or ' +
+    'use 2>&1, and cross-check totals against an independent source.'
   );
 }
 

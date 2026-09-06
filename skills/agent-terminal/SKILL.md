@@ -336,6 +336,18 @@ A plain `exit` there returns you one level, it does not end the session.
   done` looks successful and `… | grep -c` looks failed. The hub flags this
   whenever it sees `;` or `|`, but read the output rather than trusting the
   number.
+- **The TTY that makes `sudo` work also changes program output.** Commands run
+  under a real terminal, so tools that adapt to one behave differently than they
+  would in a pipe — and it happens even when you redirect to a file. A real
+  case: `vmstat 1 45 > out.txt` reprinted its column header four times mid-
+  capture; an `awk` average parsed those rows as zeros and moved idle CPU by
+  eight points. The numbers looked entirely plausible.
+
+  This is inherent to the design, not a bug, and nothing detects it. When you
+  intend to PARSE output, defend against it: prefer a machine format
+  (`--json`, `-o` fields, `--no-headers`), sanity-check that totals add up, or
+  filter the repeats (`grep -v '^ *r '`). Anything width- or height-aware —
+  `vmstat`, `iostat`, `ps`, `docker ps`, `column`, `top` — can do this.
 - `ath send` takes tmux **key names**, not prose. `ath send x -- 'hello world'`
   is rejected; use `--text` to type literal text.
 - A reconnect restores the working directory and the variables **this session

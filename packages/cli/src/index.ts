@@ -120,6 +120,14 @@ ${c.bold('Exit codes for run')}
   ${EXIT_NEEDS_INPUT}   waiting for a human           ${c.dim('attach and answer it')}
   ${EXIT_STILL_RUNNING}   still running at timeout      ${c.dim('output so far was printed')}
 
+${c.bold('Three things that are not obvious')}
+  ${c.dim('start')} occupies the session   ${c.dim('non-blocking for you, but the session is BUSY;')}
+                              ${c.dim('parallel work needs a SECOND session, not --wait')}
+  ${c.dim('sudo')} does not cross sessions ${c.dim('the timestamp is per-tty (~15 min). Keep all')}
+                              ${c.dim('privileged work in ONE session or they type twice')}
+  offsets are per SESSION     ${c.dim('not per handle — a new job does not start at 0.')}
+                              ${c.dim('Pass back whatever you were last given')}
+
 ${c.dim('A session outlives the agent and the editor. When a command needs a')}
 ${c.dim('password, attach and type it yourself — the agent never does.')}
 `;

@@ -1524,6 +1524,15 @@ tw() { $ATH run tw --timeout 20 --json -- "$1" 2>/dev/null | node -e 'let d="";p
 check "a system-path walk discarding stderr is warned about" "warned" "$(tw 'find /etc -maxdepth 0 2>/dev/null')"
 check "the same walk keeping stderr is not" "quiet" "$(tw 'find /etc -maxdepth 0 2>&1')"
 check "a walk of the current directory is not" "quiet" "$(tw 'find . -maxdepth 0 2>/dev/null')"
+# Redirecting stderr to a FILE is keeping it, not discarding it. An agent did
+# exactly that, read the file (0 lines, which is how it knew the walk was
+# clean), and was told it had "thrown away" the evidence. That false positive
+# and one other arrived BEFORE the single true positive, so by the time the
+# real warning came the reader had already learned to discount it — the exact
+# dynamic the skill warns about.
+check "stderr appended to a file is NOT discarding" "quiet" "$(tw 'find /etc -maxdepth 0 2>>/tmp/ath-errs.txt')"
+check "stderr written to a file is NOT discarding" "quiet" "$(tw 'find /etc -maxdepth 0 2>/tmp/ath-errs.txt')"
+rm -f /tmp/ath-errs.txt
 $ATH kill tw --force >/dev/null 2>&1
 
 echo
@@ -1537,7 +1546,9 @@ $ATH kill wr --force >/dev/null 2>&1
 $ATH new wr >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^wr ' && break; sleep 1; done
 cliout=$($ATH run wr --timeout 20 -- 'find /etc -maxdepth 0 2>/dev/null' 2>&1)
-case "$cliout" in *"permission errors are being thrown away"*) v=ok ;; *) v="not shown" ;; esac
+# Match a stable phrase, not the exact prose — this assertion broke once when
+# the wording was tightened, which tests the copywriter rather than the code.
+case "$cliout" in *"permission errors are being"*) v=ok ;; *) v="not shown" ;; esac
 check "the CLI shows the warning to a human" "ok" "$v"
 mcpw=$(printf '%s\n%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
