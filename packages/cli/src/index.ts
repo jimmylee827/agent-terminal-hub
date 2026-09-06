@@ -246,6 +246,11 @@ async function main(): Promise<number> {
       // so the only visible change is that our command lines start looking
       // different. Say what happened and how to get back.
       // Loud, and raised by the system rather than by the agent choosing to.
+      // Same reason as the MCP side: computed for rounds, shown by nobody.
+      if (result.warning) {
+        console.error(c.yellow(`\n[ath] ${result.warning}`));
+      }
+
       if (result.needsHuman) {
         // Only claim a request exists when one does. A non-interactive refusal
         // files nothing — the command has already exited and there is nothing

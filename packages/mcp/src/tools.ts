@@ -202,8 +202,10 @@ export const TOOL_DEFINITIONS = [
     name: 'await_human',
     annotations: { title: 'Wait for the human to answer', readOnlyHint: true, destructiveHint: false },
     description:
-      'Wait for a human to answer the prompt in this session, then return the outcome and exit ' +
-      'code. Use it instead of polling in a loop. It returns the moment the command finishes, is ' +
+      'BLOCK until a backgrounded command finishes, then return its outcome, exit code and ' +
+      'output. Despite the name this is not only for credentials — use it for ANY `start`ed job ' +
+      'instead of polling in a loop, including ordinary long ones. It polls internally once a ' +
+      'second, which also tightens the duration bracket you get back.  It returns the moment the command finishes, is ' +
       'interrupted, or the session dies — and if nobody has answered within the (short) timeout ' +
       'it returns `outcome: "still_waiting"`, which is NOT a failure: the request stays open. ' +
       'Read the outcome field, not just the text; "interrupted" and "still_waiting" are not ' +

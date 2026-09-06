@@ -173,6 +173,15 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // agent then reasonably concluded no request existed, and only found out
       // by checking a second surface. The run result and the request queue
       // must not disagree.
+      // A warning nobody is shown is not a warning.
+      //
+      // `warning` has been computed in core for several rounds and displayed by
+      // NEITHER surface — so the credential blind-spot guard and the tree-walk
+      // guard were both invisible, and an agent walked into the 50 GB `du`
+      // trap the second one exists to prevent. The tests passed because they
+      // read `--json`, which dumps every field: they checked that the data was
+      // produced, never that anyone could see it.
+      if (result.warning) payload.warning = result.warning;
       if (result.exitCaveat) payload.exit_code_covers = result.exitCaveat;
       if (result.exitCaveatNote) payload.exit_code_caveat = result.exitCaveatNote;
 

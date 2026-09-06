@@ -973,7 +973,7 @@ async function runLocked(
     let parkedAsk: string | undefined;
     if (state === 'needs-input') {
       parkedAsk =
-        `"${command.slice(0, 80)}" is waiting at a prompt in "${clean}". ` +
+        `${quoteForMessage(command)} is waiting at a prompt in "${clean}". ` +
         `Attach with "ath attach ${clean}" and answer it.`;
       await requestHuman(clean, parkedAsk, 'agent', nonce, true).catch(() => undefined);
     }
@@ -1023,14 +1023,35 @@ async function runLocked(
     }
   }
 
-  const paneTail = await capturePane(clean).catch(() => '');
-  const finished = await get(clean).catch(() => null);
-  const state = classify({
-    paneDead: false,
-    currentCommand: finished?.currentCommand ?? 'zsh',
-    paneTail,
-    paneWidth: finished?.paneWidth ?? 0,
-  });
+  // "Finished, exit 0" and "busy" must not co-occur.
+  //
+  // The state is classified from the pane, and the pane can still be mid-redraw
+  // in the instant after a command ends — so a completed command came back as
+  // `exit_code: 0, state: "busy"`. An agent read that, could not explain it, and
+  // reasonably expected the next dispatch to be refused with session_busy.
+  //
+  // We hold the lock, so nothing of ours can be running. Look once more after a
+  // short settle rather than asserting idle outright: the human CAN have typed
+  // something into the shared pane, and inventing "idle" over that would be its
+  // own lie.
+  const classifyNow = async (): Promise<{ state: RunResult['state']; pane: string }> => {
+    const pane = await capturePane(clean).catch(() => '');
+    const now = await get(clean).catch(() => null);
+    return {
+      state: classify({
+        paneDead: false,
+        currentCommand: now?.currentCommand ?? 'zsh',
+        paneTail: pane,
+        paneWidth: now?.paneWidth ?? 0,
+      }),
+      pane,
+    };
+  };
+  let { state, pane: paneTail } = await classifyNow();
+  if (state === 'busy') {
+    await sleep(PROMPT_CHECK_MS);
+    ({ state, pane: paneTail } = await classifyNow());
+  }
 
   const output = extractBetweenMarkers(raw, nonce, command);
   const needsHuman = await raiseHumanWall(clean, command, output, nonce);
@@ -1701,6 +1722,23 @@ async function firstCaveatFor(session: string): Promise<boolean> {
   }
 }
 
+/**
+ * Quote a command for a message without chopping it mid-token.
+ *
+ * A bare `slice(0, 80)` cut an agent's command inside its own quoted string, so
+ * the advisory ended `... || echo "-> no, as` — a fragment that reads like it
+ * describes some other command, and the agent had to re-read the output to be
+ * sure it did not. If it must be shortened, say so.
+ */
+function quoteForMessage(command: string, max = 80): string {
+  const flat = command.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return `"${flat}"`;
+  // Prefer a space boundary so the fragment ends on a whole word.
+  const cut = flat.slice(0, max);
+  const at = cut.lastIndexOf(' ');
+  return `"${(at > max * 0.6 ? cut.slice(0, at) : cut).trimEnd()}…" (truncated)`;
+}
+
 /** Commands that can stop at a credential wall. */
 const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|gpg)\b/;
 
@@ -1813,7 +1851,7 @@ async function raiseHumanWall(
   // human's keystrokes answer the command itself rather than a notification
   // about one. So return the guidance and file nothing here.
   return (
-    `"${command.slice(0, 80)}" needs a credential only you can type, and it has already ` +
+    `${quoteForMessage(command)} needs a credential only you can type, and it has already ` +
     `exited — nothing is waiting at a prompt, so there is nothing for anyone to answer yet. ` +
     `Re-run it interactively (drop any -n / --non-interactive) so it PARKS at the prompt: ` +
     `the hub then asks the user, and what they type answers this command directly. Tell them ` +

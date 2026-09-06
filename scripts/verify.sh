@@ -1527,6 +1527,60 @@ check "a walk of the current directory is not" "quiet" "$(tw 'find . -maxdepth 0
 $ATH kill tw --force >/dev/null 2>&1
 
 echo
+echo "-- warnings reach a READER, not just the result object"
+# `warning` was computed in core for several rounds and displayed by NEITHER
+# surface, so both blind-spot guards were invisible and an agent walked into the
+# 50 GB `du` trap the second one exists to prevent. The earlier tests passed
+# because they read `--json`, which dumps every field: they proved the data was
+# produced, never that anyone could see it. Assert the SURFACES.
+$ATH kill wr --force >/dev/null 2>&1
+$ATH new wr >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^wr ' && break; sleep 1; done
+cliout=$($ATH run wr --timeout 20 -- 'find /etc -maxdepth 0 2>/dev/null' 2>&1)
+case "$cliout" in *"permission errors are being thrown away"*) v=ok ;; *) v="not shown" ;; esac
+check "the CLI shows the warning to a human" "ok" "$v"
+mcpw=$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"run","arguments":{"session":"wr","command":"find /etc -maxdepth 0 2>/dev/null"}}}' \
+  | node packages/mcp/dist/index.js 2>/dev/null \
+  | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result;const m=JSON.parse(r.content[r.content.length-1].text.replace("--- ath ---\n",""));console.log(m.warning?"shown":"missing")}catch(e){console.log("x")}})')
+check "and the MCP surface carries it too" "shown" "${mcpw:-x}"
+$ATH kill wr --force >/dev/null 2>&1
+
+echo
+echo "-- a finished command is never also reported busy"
+# `exit_code: 0` arrived alongside `state: "busy"` because the pane can still be
+# mid-redraw when a command ends. An agent could not explain it and reasonably
+# expected the next dispatch to be refused with session_busy.
+$ATH kill bs --force >/dev/null 2>&1
+$ATH new bs >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^bs ' && break; sleep 1; done
+contradictions=0
+for i in 1 2 3 4 5 6 7 8; do
+  r=$($ATH run bs --json -- "ls -la /etc | head -20; echo n=$i" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.exitCode!==null&&j.state==="busy"?"bad":"ok")}catch(e){console.log("x")}})')
+  [ "$r" = "ok" ] || contradictions=$((contradictions+1))
+done
+check "done and busy never co-occur across repeated runs" "0" "$contradictions"
+$ATH kill bs --force >/dev/null 2>&1
+
+echo
+echo "-- a shortened command echo says that it was shortened"
+# A bare slice cut an agent's command inside its own quoted string, so the
+# advisory ended `... || echo "-> no, as` — a fragment that reads like it
+# describes some other command.
+long=$(node -e '
+const m=require("./packages/core/dist/index.js");
+console.log(typeof m.quoteForMessage==="function"?"exported":"internal");' 2>/dev/null)
+$ATH kill tq --force >/dev/null 2>&1
+$ATH new tq >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tq ' && break; sleep 1; done
+msg=$($ATH run tq --json -- 'echo "a fairly long preamble here to push past the limit"; sudo -n true 2>&1 || echo "-> no, as expected"' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).needsHuman||"")}catch(e){console.log("")}})')
+case "$msg" in *"(truncated)"*) v=ok ;; "") v="no advisory" ;; *) v="silently cut" ;; esac
+check "a truncated command echo is labelled truncated" "ok" "$v"
+$ATH kill tq --force >/dev/null 2>&1
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?
