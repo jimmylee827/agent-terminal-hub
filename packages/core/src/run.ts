@@ -182,25 +182,34 @@ async function markStarted(nonce: string, offset: number): Promise<void> {
 /**
  * What can HONESTLY be said about how long a command took.
  *
- * The hub cannot see the instant a command ends: the end marker carries an exit
- * code, not a clock, and the only observer is whoever polls. The first version
- * reported `now - started` even for a finished command — a 2-second job polled
- * 48 seconds later read as 48. The second reported the time of the first
- * sighting, which was honest but still wildly loose: 256 for a job that took
- * 47, off by five times, and the agent's verdict was blunt and right — "the
- * timing figure is worse than no figure ... I'd rather it returned null."
+ * Four attempts, and each failure taught the next one something:
  *
- * So the bound is now only offered when it is actually tight. Every poll that
- * sees the command RUNNING records the moment, which brackets the end between
- * that and the first sighting of `done`. When that window is narrow the number
- * means something; when it is wide — nobody looked for four minutes — there is
- * no number to give, and saying so is the whole point.
+ *   1. `now - started` even when finished — a 2s job polled 48s later read 48.
+ *   2. time of first sighting — a 47s job read 256, off by five times.
+ *   3. withhold unless the bracket is tight — but it then said "Nobody looked
+ *      while this was running" to an agent who HAD polled mid-run and been
+ *      answered. Saying something false about the caller's own session is worse
+ *      than saying nothing, and it threw away the bracket, which was real
+ *      information: "between 26 and 60 seconds" is an answer.
+ *
+ * So: report the bracket. The hub never sees the instant a command ends, only
+ * when something looked, and every poll that finds it still running raises the
+ * floor. That is honest, always says something, and never claims a precision it
+ * does not have.
  */
 async function timingFor(
   nonce: string,
   done: boolean,
 ): Promise<
-  { seconds?: number; exact: boolean; unknown?: true; startOffset?: number } | undefined
+  | {
+      exact: boolean;
+      seconds?: number;
+      lowerSeconds?: number;
+      upperSeconds?: number;
+      observed: boolean;
+      startOffset?: number;
+    }
+  | undefined
 > {
   const file = path.join(RC_DIR, `${nonce}.t`);
   let began: number;
@@ -212,11 +221,12 @@ async function timingFor(
     began = Number(b);
     startOffset = o === undefined ? undefined : Number(o);
     noticed = n === undefined || n === '-' ? undefined : Number(n);
-    lastRunning = lr === undefined ? undefined : Number(lr);
+    lastRunning = lr === undefined || lr === '' ? undefined : Number(lr);
     if (!Number.isFinite(began)) return undefined;
   } catch {
     return undefined;
   }
+  const off = Number.isFinite(startOffset) ? { startOffset } : {};
   const write = async (nv?: number, lrv?: number) =>
     fs
       .writeFile(file, `${began} ${startOffset ?? 0} ${nv ?? '-'} ${lrv ?? ''}`.trim(), {
@@ -225,12 +235,13 @@ async function timingFor(
       .catch(() => undefined);
 
   if (!done) {
-    // Seeing it alive narrows the eventual bound, so remember it.
+    // Seeing it alive raises the floor of the eventual bracket.
     await write(noticed, Date.now());
     return {
-      seconds: Math.max(0, Math.round((Date.now() - began) / 1000)),
       exact: true,
-      ...(Number.isFinite(startOffset) ? { startOffset } : {}),
+      seconds: Math.max(0, Math.round((Date.now() - began) / 1000)),
+      observed: true,
+      ...off,
     };
   }
 
@@ -239,18 +250,13 @@ async function timingFor(
     await write(noticed, lastRunning);
   }
 
-  const upper = Math.max(0, (noticed - began) / 1000);
-  const lower = Number.isFinite(lastRunning) ? Math.max(0, ((lastRunning as number) - began) / 1000) : 0;
-  // Wide enough to mislead? Then there is no honest number to report.
-  const slack = upper - lower;
-  if (slack > Math.max(5, upper * 0.25)) {
-    return { exact: false, unknown: true, ...(Number.isFinite(startOffset) ? { startOffset } : {}) };
-  }
-  return {
-    seconds: Math.round(upper),
-    exact: false,
-    ...(Number.isFinite(startOffset) ? { startOffset } : {}),
-  };
+  const upper = Math.max(0, Math.round((noticed - began) / 1000));
+  const lower = Number.isFinite(lastRunning)
+    ? Math.max(0, Math.round(((lastRunning as number) - began) / 1000))
+    : 0;
+  // Close enough to be one number? Then say one number.
+  if (upper - lower <= 2) return { exact: false, seconds: upper, observed: lower > 0, ...off };
+  return { exact: false, lowerSeconds: lower, upperSeconds: upper, observed: lower > 0, ...off };
 }
 
 async function fileSize(file: string): Promise<number> {
@@ -1038,11 +1044,14 @@ async function runLocked(
     // Only when no wall fired: if one did, the request exists and the warning
     // would be noise. The dangerous case is the SILENT one.
     ...(!needsHuman && credentialBlindSpot(command) ? { warning: credentialBlindSpot(command) } : {}),
-    // Only when the code is 0. A non-zero code from a compound line makes a
-    // caller investigate anyway; a zero one is the direction that hides an
-    // earlier failure and gets believed. Emitting on both meant the note rode
-    // along on nearly every command an agent ran.
-    ...(exitCode === 0 && compoundExitCaveat(command)
+    // Only when the code is 0, and only ONCE per session.
+    //
+    // Narrowing to exit 0 was not enough: an agent that pipes constantly still
+    // saw it on nearly every call and said so — "I stopped reading it. That's
+    // the warning-fatigue failure the docs describe for a different warning."
+    // A caveat that is always present carries no information. Said once, it
+    // teaches the rule; repeated forever, it trains the reader to skip it.
+    ...(exitCode === 0 && (await firstCaveatFor(clean)) && compoundExitCaveat(command)
       ? { exitCaveat: compoundExitCaveat(command) }
       : {}),
     timedOut: false,
@@ -1539,8 +1548,13 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     nextOffset: size,
     state: session.state,
     needsInput: session.state === 'needs-input',
-    ...(timing?.seconds === undefined ? {} : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
-    ...(timing?.unknown ? { elapsedUnknown: true } : {}),
+    ...(timing?.seconds === undefined
+      ? {}
+      : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
+    ...(timing?.lowerSeconds === undefined
+      ? {}
+      : { elapsedLowerSeconds: timing.lowerSeconds, elapsedUpperSeconds: timing.upperSeconds }),
+    ...(timing === undefined ? {} : { elapsedObserved: timing.observed }),
     ...(staleSince
       ? {
           warning:
@@ -1654,6 +1668,25 @@ function compoundExitCaveat(command: string): string | undefined {
   // runs, and a forty-word paragraph repeated that often is a standing tax on a
   // tool whose whole job is shuttling text.
   return `exit code is from the last ${hasPipe && !hasSemicolon ? 'pipeline stage' : 'command on the line'}, not the whole line.`;
+}
+
+/**
+ * True the FIRST time a session would show the compound-exit caveat.
+ *
+ * Warning fatigue is a real failure mode, and this project has now caused it
+ * twice: a note on every result is one the reader learns to skip, which costs
+ * exactly the occasion it was written for.
+ */
+async function firstCaveatFor(session: string): Promise<boolean> {
+  const flag = path.join(RC_DIR, `${session}.caveat`);
+  try {
+    await fs.access(flag);
+    return false;
+  } catch {
+    await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
+    await fs.writeFile(flag, '1', { mode: 0o600 }).catch(() => undefined);
+    return true;
+  }
 }
 
 /** Commands that can stop at a credential wall. */

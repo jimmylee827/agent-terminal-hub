@@ -87,8 +87,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
   switch (name) {
     case 'list': {
       const sessions = await list();
+      // An empty hub answered `[]` from the CLI and a sentence from here — the
+      // same question in two shapes, so a caller parsing one had to special-case
+      // the other. A list tool returns a list; the hint rides alongside it.
       if (sessions.length === 0) {
-        return text('No sessions yet. Create one with the `new` tool.');
+        return {
+          content: [
+            { type: 'text', text: '[]' },
+            { type: 'text', text: 'No sessions yet. Create one with the `new` tool.' },
+          ],
+        };
       }
       return json(
         sessions.map((s) => ({
@@ -255,30 +263,28 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         next_offset: result.nextOffset,
         state: result.state,
       };
-      // Report a duration only when one honestly exists.
+      // Say what is known, in the terms it is known in.
       //
-      // A loose bound was worse than nothing: 256 seconds for a 47-second job
-      // invites a wrong conclusion, and the agent that hit it said plainly it
-      // would rather have had null. If nobody watched while the command ran,
-      // say that instead of producing a number.
-      if (result.elapsedUnknown) {
-        payload.duration = 'unknown';
-        payload.timing_note =
-          'Nobody looked while this was running, so the hub cannot bound how long it took — ' +
-          'only that it finished before now. Poll while a job runs if you need its duration, ' +
-          'or time the command itself.';
+      // The previous version withheld a number whenever the bracket was wide,
+      // and told the caller "nobody looked while this was running" — to an
+      // agent that HAD polled mid-run and been answered. That statement was
+      // false about their own session, and it discarded the bracket, which is
+      // the actual answer: "between 26 and 60 seconds" is information.
+      if (result.elapsedExact && result.elapsedSeconds !== undefined) {
+        payload.running_for_seconds = result.elapsedSeconds;
       } else if (result.elapsedSeconds !== undefined) {
-        if (result.elapsedExact) {
-          payload.running_for_seconds = result.elapsedSeconds;
-        } else {
-          payload.finished_within_seconds = result.elapsedSeconds;
-          payload.timing_note = 'Upper bound, not the exact runtime.';
-          if (result.elapsedSeconds <= 2) {
-            payload.what_to_do =
-              `This finished within ${result.elapsedSeconds}s. If you started it expecting ` +
-              'long-running work, it did NOT do what you meant — check the output before ' +
-              'treating the job as done.';
-          }
+        payload.took_seconds = result.elapsedSeconds;
+      } else if (result.elapsedLowerSeconds !== undefined) {
+        payload.ran_between_seconds = [result.elapsedLowerSeconds, result.elapsedUpperSeconds];
+        payload.timing_note = result.elapsedObserved
+          ? 'A bracket, not a measurement: it was still running when last checked and finished ' +
+            'before the next look. Poll more often for a tighter figure.'
+          : 'Upper bound only — nothing observed it while it ran, so all that is known is that ' +
+            'it finished before this check. Poll while a job runs if you need its duration.';
+        if ((result.elapsedUpperSeconds ?? 0) <= 2) {
+          payload.what_to_do =
+            'This finished within a couple of seconds. If you started it expecting long-running ' +
+            'work, it did NOT do what you meant — check the output before treating it as done.';
         }
       }
       if (result.warning) payload.warning = result.warning;

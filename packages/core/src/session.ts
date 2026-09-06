@@ -1,4 +1,5 @@
 import { existsSync, promises as fs } from 'node:fs';
+import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { AthError, InvalidName, SessionExists, SessionGone } from './errors';
@@ -318,6 +319,15 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
 
   // Truncate the log so byte offsets always refer to this incarnation.
   await fs.writeFile(logPath(name), '', { mode: 0o600 });
+
+  // Clear one-shot notices for this NAME, for the same reason.
+  //
+  // The compound-exit caveat is shown once per session and flagged by name, so
+  // a flag left behind by a previous incarnation would silence it forever for
+  // every session that reuses the name — the marker outliving the thing it
+  // describes. Found by the suite: a second run of the same test never saw the
+  // caveat it was asserting.
+  await fs.rm(path.join(RC_DIR, `${name}.caveat`), { force: true }).catch(() => undefined);
 
   const fallbackShell = nonPosixShellFallback();
   await tmux([

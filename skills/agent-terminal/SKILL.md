@@ -144,6 +144,10 @@ Two halves, and the second one changes how you should work:
 - Within that session the timestamp is cached for about 15 minutes, so
   **subsequent `sudo` commands run without prompting again**. Check with
   `sudo -n true` before assuming either way.
+- To warm it deliberately, run **`sudo -v`** first. That parks on the prompt
+  and does nothing else, so you can ask once, up front, before you know exactly
+  which privileged commands you will need — rather than discovering it
+  mid-investigation and interrupting the person again.
 
 Do NOT read "make them type it once" as "batch everything into one big script".
 That was a real cost: an agent bundled nine lines into a single privileged

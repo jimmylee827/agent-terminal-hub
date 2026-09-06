@@ -1261,8 +1261,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^el ' && break;
 h=$($ATH start el -- 'true' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
 sleep 2
 j=$($ATH poll el --handle "$h" --json 2>/dev/null)
-e=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const v=JSON.parse(d).elapsedSeconds;console.log(v===undefined?"missing":(v<=3?"fast":"slow"))}catch(e){console.log("x")}})')
-check "poll reports how long the command actually ran" "fast" "$e"
+e=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);const hi=j.elapsedUpperSeconds!==undefined?j.elapsedUpperSeconds:j.elapsedSeconds;console.log(hi===undefined?"missing":(hi<=4?"fast":"slow"))}catch(e){console.log("x")}})')
+check "a job that finished instantly is reported as fast" "fast" "$e"
 $ATH kill el --force >/dev/null 2>&1
 
 echo
@@ -1290,36 +1290,24 @@ console.log(s.looksLikePrompt(t) && !s.looksLikeCredentialPrompt(t) ? "parks-not
 check "a git username prompt parks but is not treated as a secret" "parks-not-secret" "${git:-x}"
 
 echo
-echo "-- timing is honest about what it can and cannot know"
-# Three attempts at this field got it wrong in three different ways: `now -
-# start` for a finished job (2s job read as 48), then the first-sighting time
-# (47s job read as 256, off 5x). The hub cannot see when a command ends — only
-# when something looked — so a number is offered ONLY when polling brackets the
-# end tightly, and withheld entirely when it does not. "I'd rather it returned
-# null" was the verdict, and it was right.
+echo "-- timing reports what is known, and never claims nobody looked"
+# Four attempts at this field. The third withheld a number when the bracket was
+# wide AND told an agent "nobody looked while this was running" — to an agent
+# that HAD polled mid-run and been answered. False about the caller's own
+# session, and it discarded the bracket, which is the actual answer.
 $ATH kill tm --force >/dev/null 2>&1
 $ATH new tm >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tm ' && break; sleep 1; done
-h=$($ATH start tm -- 'sleep 4; echo x' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
-sleep 1
-ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"already-done":(j.elapsedExact?"exact":"other"))}catch(e){console.log("x")}})')
-check "while running, the time is exact" "exact" "${ex:-x}"
-# Poll steadily, the way await does. That brackets the end closely, so a bound
-# is meaningful and IS reported.
-for _ in 1 2 3 4 5 6; do $ATH poll tm --handle "$h" >/dev/null 2>&1; sleep 1; done
-b=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done && j.elapsedExact===false && typeof j.elapsedSeconds==="number" ? "bounded" : (j.elapsedUnknown?"unknown":"other"))}catch(e){console.log("x")}})')
-check "watched to the end, a bound is reported" "bounded" "${b:-x}"
+h=$($ATH start tm -- 'sleep 8; echo x' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
+sleep 3
+ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"already-done":(j.elapsedExact===true?"exact":"other"))}catch(e){console.log("x")}})')
+check "while running, the figure is exact" "exact" "${ex:-x}"
+sleep 9
+br=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);const bracket=j.elapsedLowerSeconds!==undefined||j.elapsedSeconds!==undefined;console.log(j.done&&bracket&&j.elapsedObserved===true?"reported":"withheld")}catch(e){console.log("x")}})')
+check "after a mid-run poll, a bracket is reported not withheld" "reported" "${br:-x}"
+ob=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsedObserved===true?"observed":"claims-unobserved")}catch(e){console.log("x")}})')
+check "and it does not claim nobody looked" "observed" "${ob:-x}"
 $ATH kill tm --force >/dev/null 2>&1
-
-# And the case that produced the 5x-wrong number: nobody looks while it runs.
-$ATH kill tm2 --force >/dev/null 2>&1
-$ATH new tm2 >/dev/null 2>&1
-for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tm2 ' && break; sleep 1; done
-h2=$($ATH start tm2 -- 'sleep 2; echo y' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
-sleep 14
-u=$($ATH poll tm2 --handle "$h2" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.elapsedUnknown?"withheld":(j.elapsedSeconds!==undefined?"guessed:"+j.elapsedSeconds:"other"))}catch(e){console.log("x")}})')
-check "unwatched, no number is invented" "withheld" "${u:-x}"
-$ATH kill tm2 --force >/dev/null 2>&1
 
 echo "-- a non-interactive refusal informs the agent without summoning a human"
 # `sudo -n` exits immediately; nothing is parked. Filing a request there sends
@@ -1344,7 +1332,17 @@ echo "-- exit_code says when it is only part of the story"
 $ATH kill xc --force >/dev/null 2>&1
 $ATH new xc >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^xc ' && break; sleep 1; done
-cav() { $ATH run xc --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"flagged":"silent")}catch(e){console.log("x")}})'; }
+# The caveat is emitted once per SESSION, so each of these needs a fresh one —
+# otherwise every assertion after the first is measuring the fatigue guard
+# rather than the rule it is meant to test.
+cav() {
+  n="xc$RANDOM"
+  $ATH new "$n" >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8; do $ATH ls 2>/dev/null | grep -q "^$n " && break; sleep 1; done
+  r=$($ATH run "$n" --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"flagged":"silent")}catch(e){console.log("x")}})')
+  $ATH kill "$n" --force >/dev/null 2>&1
+  printf '%s' "$r"
+}
 check "a trailing echo hiding a failure is flagged" "flagged" "$(cav 'false; echo done')"
 # Only the misleading direction. A non-zero code from a compound line makes a
 # caller investigate anyway; exit 0 is the one that hides an earlier failure and
@@ -1488,6 +1486,21 @@ a=$(printf '%s\n%s\n%s\n' \
   | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=JSON.parse(d.trim().split("\n").filter(Boolean).pop()).result;console.log(r.isError?"refused":JSON.parse(r.content[0].text).name)}catch(e){console.log("x")}})')
 check "session= is accepted as an alias for name=" "aliaschk" "${a:-x}"
 $ATH kill aliaschk --force >/dev/null 2>&1
+
+echo
+echo "-- a caveat that appears every time teaches the reader to skip it"
+# Narrowing the compound-exit caveat to exit 0 was not enough: an agent that
+# pipes constantly still met it on nearly every call and said "I stopped
+# reading it". Said once it teaches the rule; repeated forever it trains the
+# reader to ignore it, which costs the occasion it was written for.
+$ATH kill cv --force >/dev/null 2>&1
+$ATH new cv >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^cv ' && break; sleep 1; done
+cv() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"shown":"quiet")}catch(e){console.log("x")}})'; }
+check "the first compound command carries the caveat" "shown" "$(cv 'true; echo a')"
+check "the second does not" "quiet" "$(cv 'true; echo b')"
+check "nor does a later pipeline" "quiet" "$(cv 'echo c | cat')"
+$ATH kill cv --force >/dev/null 2>&1
 
 echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
