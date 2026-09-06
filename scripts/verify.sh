@@ -1592,6 +1592,66 @@ check "a truncated command echo is labelled truncated" "ok" "$v"
 $ATH kill tq --force >/dev/null 2>&1
 
 echo
+echo "-- the framing hooks cannot be impersonated, not even by their own source"
+# A cold agent watched a remote bash session hand back the helper's OWN SOURCE
+# as command output, then go permanently mute on stdout while still reporting
+# exit_code 0. The pane showed markers with the nonce `"*)`.
+#
+# Root cause: a nonce is extracted by stripping up to "AGENT INPUT ID: " and
+# taking the next word. The bash side must read from `history 1`, which carries
+# a leading line number, so its pattern is UNANCHORED — and the hook's own
+# source contains that phrase inside a `case` pattern. Re-installing the hook
+# mid-session made it match itself and extract `"*)` as the nonce. Every later
+# command then framed under a bogus nonce, so the real one found no markers:
+# empty output, exit code intact. Silent, and wrong in the trusting direction.
+#
+# A nonce is 12 lowercase hex characters. Anything else is not one.
+ext() {
+  bash -c '
+    __ath_last="$1"
+    __ath_pending="${__ath_last#*AGENT INPUT ID: }"; __ath_pending="${__ath_pending%% *}"
+    case "$__ath_pending" in ""|*[!0-9a-f]*) __ath_pending="" ;; esac
+    printf %s "$__ath_pending"' _ "$1"
+}
+check "the hook's own case-pattern source is rejected" "" \
+      "$(ext '__ath_pre() { case "$1" in "AGENT INPUT ID: "*) __ath_pending=x')"
+check "a non-hex word is rejected" "" "$(ext '  512  AGENT INPUT ID: HELLO')"
+check "an empty extraction is rejected" "" "$(ext '  513  AGENT INPUT ID: ')"
+check "a real nonce is still accepted" "49f540ddf7dd" \
+      "$(ext '  514  AGENT INPUT ID: 49f540ddf7dd ')"
+# And end to end: a command whose own TEXT carries the phrase must not corrupt
+# the session that runs it.
+$ATH kill imp --force >/dev/null 2>&1
+$ATH new imp >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^imp ' && break; sleep 1; done
+$ATH run imp -- 'echo "AGENT INPUT ID: bogus"' >/dev/null 2>&1
+check "a later command still returns its own output" "still-working" \
+      "$($ATH run imp -- 'echo still-working' 2>/dev/null | tr -d "\n")"
+check "and its exit code" "7" "$($ATH run imp -- '(exit 7)' >/dev/null 2>&1; echo $?)"
+$ATH kill imp --force >/dev/null 2>&1
+
+echo
+echo "-- the helper is never typed into a live credential prompt"
+# Installing types ~1.8 KB of shell into the pane. At a password prompt every
+# character of it becomes a login attempt, the prompt is consumed before the
+# human reaches it, and the helper's source lands in the log where an agent
+# reads it back as command output. The self-heal reaches the installer from
+# inside `run`, after that function's own check has already passed.
+$ATH kill ci --force >/dev/null 2>&1
+$ATH new ci >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^ci ' && break; sleep 1; done
+$ATH start ci -- 'printf "Password: "; read -rs p' >/dev/null 2>&1
+sleep 3
+out=$(node -e '
+require("./packages/core/dist/index.js").installHelper("ci")
+  .then(()=>console.log("TYPED"))
+  .catch(e=>console.log(e.code||"refused"));' 2>/dev/null)
+check "installHelper refuses while a prompt is waiting" "credential_prompt" "${out:-x}"
+$ATH send ci -- C-c >/dev/null 2>&1; sleep 1
+$ATH kill ci --force >/dev/null 2>&1
+rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
+
+echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit $?

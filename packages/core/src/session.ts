@@ -868,6 +868,21 @@ export async function installHelper(
   _remote?: string,
   opts: InstallOptions = {},
 ): Promise<void> {
+  // NEVER type the helper into a live credential prompt.
+  //
+  // This installs by typing ~1.8 KB of shell into the pane. If the pane is
+  // sitting at `[sudo] password for dev:`, every one of those characters
+  // becomes a password attempt: the login fails, the prompt is consumed, and
+  // the human walking over to answer finds it gone. It also lands the helper's
+  // own source in the log, where an agent then reads it back as the output of
+  // whatever it thought it was running.
+  //
+  // The self-heal reaches here from inside `run`, AFTER that function's own
+  // credential check has passed — a prompt can appear in between, which is
+  // exactly when a command has stalled and the self-heal is most likely to
+  // fire. Refuse loudly rather than typing into a password field.
+  await assertNotCredentialPrompt(name);
+
   if (!opts.hooksOnly) {
     await sendLine(name, HELPER_ONELINE).catch(() => undefined);
     const token = randomToken();
