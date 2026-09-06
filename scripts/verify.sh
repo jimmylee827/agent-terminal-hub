@@ -261,7 +261,20 @@ if command -v claude >/dev/null 2>&1; then
   # an agent spends the run being interrupted instead of working.
   chk "hub tools are pre-allowed in user settings" "yes" \
       "$(node -e 'try{const s=require(process.env.HOME+"/.claude/settings.json");const a=(s.permissions&&s.permissions.allow)||[];process.stdout.write(a.includes("mcp__agent_terminal__run")?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
-  # ...except the destructive one, which must still ask.
+  # Every non-destructive tool must be allowed, not just the eight the list was
+  # born with. It drifted from 8 tools to 16 without the allow-list following, so
+  # `wait`, `purge` and `doctor` each raised an approval prompt on every call —
+  # the exact friction this block exists to prevent, silently reintroduced.
+  ALLOWED="$(node -pe 'try{JSON.parse(require("fs").readFileSync(process.env.HOME+"/.claude/settings.json","utf8")).permissions.allow.join(" ")}catch(e){""}' 2>/dev/null)"
+  ASKED="$(node -pe 'try{JSON.parse(require("fs").readFileSync(process.env.HOME+"/.claude/settings.json","utf8")).permissions.ask.join(" ")}catch(e){""}' 2>/dev/null)"
+  MISSING=""
+  for t in list new run read start poll send request_human requests await_human wait width doctor unpin; do
+    case " $ALLOWED " in *" mcp__agent_terminal__$t "*) ;; *) MISSING="$MISSING $t" ;; esac
+  done
+  chk "every non-destructive tool is pre-allowed" "" "$MISSING"
+  # ...except the destructive ones, which must still ask.
+  case " $ASKED " in *" mcp__agent_terminal__purge "*) PA=yes ;; *) PA=no ;; esac
+  chk "purge still prompts" "yes" "$PA"
   chk "kill still prompts" "yes" \
       "$(node -e 'try{const s=require(process.env.HOME+"/.claude/settings.json");const k=(s.permissions&&s.permissions.ask)||[];process.stdout.write(k.includes("mcp__agent_terminal__kill")?"yes":"no")}catch(e){process.stdout.write("no")}' 2>/dev/null)"
 fi

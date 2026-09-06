@@ -154,9 +154,18 @@ PERM_OUT="$(node -e '
 const fs=require("fs"), os=require("os"), path=require("path");
 const file = path.join(os.homedir(), ".claude", "settings.json");
 const PREFIX = "mcp__agent_terminal__";
-const ALLOW = ["list","new","run","read","start","poll","send","request_human"]
+// Every tool that is not destructive. This list drifted badly: it was written
+// when the server had eight tools and was never updated as more were added, so
+// seven of sixteen — including `wait`, `purge` and `doctor` — raised an approval
+// prompt on every call. That is precisely the friction this block exists to
+// remove, and it silently came back.
+const ALLOW = ["list","new","run","read","start","poll","send","request_human",
+               "requests","await_human","wait","width","doctor","unpin"]
                 .map(t => PREFIX + t);
-const ASK = [PREFIX + "kill"];
+// Both DESTROY something a human may want: `kill` a session someone is attached
+// to, `purge` the only record of what a session did. `ask` outranks `allow`, so
+// these keep prompting even if a broader rule is added later.
+const ASK = [PREFIX + "kill", PREFIX + "purge"];
 
 // Rules this installer wrote before the server was renamed. The `ath` server no
 // longer exists, so they match nothing and are dead weight in a file the user
