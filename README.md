@@ -1,12 +1,189 @@
 # agent-terminal-hub
 
-Long-lived terminals shared by an AI agent and you — on **one PTY**, so when a
-command needs a password you just type it, in the terminal the agent is already
-using, and it carries on.
+**Your AI coding agent and you, sharing one real terminal.**
+
+When a command needs a password, the agent doesn't give up and ask you to go run
+it somewhere else. It stops, tells you, and you type the password into the same
+terminal it is already using — then it carries on with the output.
+
+Built for **macOS + VS Code + an AI coding agent**. Works on Linux too.
+
+---
+
+## The problem it fixes
+
+Your agent's built-in shell tool starts a **fresh process with no terminal**
+every time it runs a command. Two consequences you have probably already hit:
+
+**`sudo` simply fails.** It reads passwords from `/dev/tty`, and there isn't
+one. The agent gets `sudo: a password is required` and writes *"I couldn't
+verify this — please check manually."*
+
+**Nothing persists.** `cd /some/path` and `export TOKEN=…` are gone by the next
+command, because the next command is a different process.
+
+So you end up as a copy-paste relay: the agent asks, you run it in your own
+terminal, you paste the output back.
+
+**With the hub**, the agent works in a real, long-lived terminal that you can
+join at any moment:
 
 ```
-┌── tmux server on a dedicated socket `-L ath` ──────────────────┐
-│   (isolated from your own tmux; outlives VSCode and the agent) │
+you ask the agent to audit a server
+  → agent: "I need sudo for the firewall rules"        ← it asks once, up front
+  → a notification appears in VS Code with an Attach button
+  → you click it, type your password, walk away
+  → agent continues, and the password stays valid for the rest of its work
+```
+
+You typed one password. You never pasted a command or an output.
+
+---
+
+## What you need
+
+| | |
+|---|---|
+| **macOS** or Linux | Windows needs WSL |
+| **tmux** | `brew install tmux` |
+| **Node 18+** | `brew install node` |
+| **An AI coding agent** | Claude Code, in VS Code or the terminal |
+
+Nothing needs installing on any remote server you connect to. That is a hard
+rule of the design — the hub leaves no trace on machines it drives.
+
+---
+
+## Install
+
+### Option 1 — ask your agent to do it
+
+Paste this to your AI agent:
+
+```
+Install agent-terminal-hub for me:
+
+  git clone https://github.com/jimmylee827/agent-terminal-hub
+  cd agent-terminal-hub
+  bash scripts/install.sh
+
+Then run `ath doctor` and tell me if anything failed.
+```
+
+That is safe to hand over — the installer only writes to this repo, `~/.local/bin`,
+`~/.claude`, and VS Code's extension folder, and it is safe to re-run.
+
+### Option 2 — do it yourself
+
+```bash
+brew install tmux node                                    # if you don't have them
+git clone https://github.com/jimmylee827/agent-terminal-hub
+cd agent-terminal-hub
+bash scripts/install.sh
+```
+
+### Either way, that is the whole install
+
+The script checks prerequisites **before** touching anything, then builds and
+wires up all four pieces:
+
+- the **`ath` command**, on your PATH
+- the **agent skill**, so your agent knows how to use it without being told
+- the **MCP server**, registered for your whole machine, not one folder
+- the **VS Code extension**, giving you a session list and an Attach button
+
+It then **proves each half works** instead of assuming — it speaks the MCP
+protocol to the server and counts the tools that answer, then creates a real
+session, runs a command in it, and checks the exit code comes back.
+
+Everything is symlinked into the repo, so updating is `git pull && npm run build`.
+Nothing needs reinstalling.
+
+> If it says `code` is not on your PATH: press <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
+> in VS Code, run *Shell Command: Install 'code' command in PATH*, and re-run the
+> installer. Or install the `.vsix` it names via *Extensions: Install from VSIX…*.
+
+---
+
+## Check it worked
+
+```bash
+ath doctor
+```
+
+Every line should say `ok`. Then ask your agent:
+
+> *"Use the terminal hub to create a session and tell me what OS this machine is."*
+
+If it creates a session and answers, you are done. **You do not need to teach it
+anything** — the skill and the typed tools are already in front of it.
+
+---
+
+## Using it
+
+Most of the time you don't. **The agent drives it; you only step in for
+passwords.** But it is an ordinary command-line tool as well:
+
+```bash
+ath ls                          # what sessions exist, and what each is doing
+ath attach build                # join a session and type in it yourself
+ath new box --remote myserver   # a session that lives on another machine over ssh
+ath purge build                 # erase a session's recorded transcript
+ath doctor --artifacts          # everything the hub has written to this machine
+```
+
+Sessions outlive VS Code, the agent, and your terminal window. Closing your
+laptop lid does not kill a build.
+
+---
+
+## The password handoff
+
+This is the part that makes the rest worth having.
+
+1. The agent runs something needing `sudo`. The command **stops at the prompt**
+   and stays alive.
+2. A request is filed **automatically** — the agent cannot forget to do this —
+   and a notification appears in VS Code.
+3. You attach, type the password, and detach. It is a normal terminal; nothing
+   about it is special.
+4. The agent collects the output and carries on. The `sudo` timestamp stays warm
+   for about 15 minutes, so it can keep working without asking again.
+
+**The agent never sees, types, or handles your password.** The skill and every
+tool description say so explicitly, and the design makes handing off to you
+*easier* than working around you — which is the only version of this that holds
+up in practice.
+
+---
+
+## What gets recorded, exactly
+
+Every session is written to `~/.ath/log/<name>.log` — the commands and their
+output. The file survives `ath kill`. This distinction is the one that matters,
+and it is not the intuitive one:
+
+| Typed at | Ends up in the log? | Examples |
+|---|---|---|
+| A prompt with echo **off** | **No.** Never captured. | `sudo` password, ssh passphrase, `read -s` |
+| An ordinary **echoing** prompt | **Yes** — and the agent can read it back | API key, token, `read -p` answers |
+
+The log records what the terminal *displays*. A password prompt displays nothing
+as you type, so nothing is recorded. An API key pasted at a normal prompt is
+displayed, so it is.
+
+Logs are `0600`. `ath purge <session>` erases one; `ath doctor --artifacts`
+lists everything the hub has ever written, and says which of it `purge` does not
+reach.
+
+---
+
+## How it works
+
+```
+┌── tmux server on its own socket `-L ath` ──────────────────────┐
+│   (isolated from your own tmux; outlives VS Code and the agent)│
 │   session ath-<name>                                           │
 │     ├─ pipe-pane ──────→ ~/.ath/log/<name>.log   (agent reads) │
 │     ├─ live pane ──────→ your attached client    (you type)    │
@@ -14,278 +191,49 @@ using, and it carries on.
 └───────▲──────────────────▲──────────────────▲──────────────────┘
         │                  │                  │
    ┌────┴─────┐      ┌─────┴──────┐    ┌──────┴─────────┐
-   │ ath CLI  │      │ MCP server │    │ VSCode panel   │
-   │ any agent│      │ typed tools│    │ TreeView+attach│
+   │ ath CLI  │      │ MCP server │    │ VS Code panel  │
+   │ any agent│      │ typed tools│    │ list + attach  │
    └──────────┘      └────────────┘    └────────────────┘
 ```
 
-## Why
+One PTY, three ways in. The agent and you are looking at the same terminal —
+that is the whole idea, and it is why the password flow needs no special
+machinery.
 
-An agent's shell tool runs each command in a fresh process with **no TTY**.
-So nothing persists between calls, and `sudo` — which reads its password from
-`/dev/tty` — fails instantly with nowhere to prompt. The usual result is a
-handshake: the agent gives up, you run the command somewhere else, you paste
-the output back.
+Exit codes travel back **inside the terminal output**, wrapped in a control byte
+so a command cannot forge its own status. Nothing is written to remote machines,
+which is why the same protocol works locally, over ssh, and inside a container.
 
-A hub session is a real terminal that outlives the agent, that the agent drives
-programmatically, and that you can step into mid-command.
+See [DESIGN.md](DESIGN.md) for the non-obvious parts — prompt detection,
+reconnect behaviour, and the hazards that exist only because a human shares the
+terminal.
 
-## Install
+---
 
-```bash
-git clone https://github.com/jimmylee827/agent-terminal-hub
-cd agent-terminal-hub
-bash scripts/install.sh
-```
+## Tested by agents that had never seen it
 
-That is the whole install. It checks prerequisites first and stops with a clear
-message if `tmux` or a recent Node are missing, builds everything, puts `ath` on
-your PATH, installs the Claude Code skill, registers the MCP server, and installs
-the VS Code extension.
+Every design decision here was checked by giving a fresh AI agent a real task on
+a real server, with no documentation beyond what ships in the repo, and reading
+what it got wrong. Thirteen such runs, each one fixing what the last one tripped
+over — a hang, a timing figure that was wrong by 4×, a status field that said a
+password prompt had been answered when it had not.
 
-It then **proves each half works** rather than assuming: it speaks the MCP
-protocol to the server and reports how many tools it offers, and it creates a
-session, runs a command in it, and checks the exit code comes back.
+If a message in this tool reads like it was written by someone watching an agent
+make that exact mistake, it was.
 
-The MCP server is registered at **user scope**, so it is available from every
-directory on the machine. `claude mcp add` defaults to per-project scope, which
-looks identical when you check it from the repo and gives an agent started
-anywhere else no MCP tools at all.
-
-The MCP server is a stdio server, so there is no daemon to start — your agent
-spawns one per session. Registering it is all that is needed; verifying it
-answers is what tells you the registration is worth anything.
-
-The installer also adds the hub's tools to `permissions.allow` in
-`~/.claude/settings.json`, because a registered server whose every call raises a
-prompt is not usable: the dialog offers only *once* or *this project*, so an
-agent doing ten terminal operations interrupts you ten times, and choosing *this
-project* buys nothing in the next directory. `kill` is deliberately left on
-`ask` — it destroys a session someone may be attached to. Your own `deny` and
-`ask` entries are never overridden, a malformed settings file is left untouched
-rather than rewritten, and the previous file is kept as
-`settings.json.before-ath`. To undo it, delete the `mcp__agent_terminal__*`
-lines.
-
-The server is registered as **`agent_terminal`** and its tools are bare verbs
-(`run`, `read`, `new`, `kill`…) rather than `ath` and `terminal_run`. That is a
-display decision, not a stylistic one: Claude Code's VS Code panel labels every
-call `<ServerName> [<toolName>]` and never reads the tool's title annotation, so
-the old names rendered as `Ath [terminal_run]`. These render as **`Agent
-Terminal [run]`**. Upgrading from an older install rewrites the registration and
-sweeps the dead `mcp__ath__*` permission rules out of your settings.
-
-Everything is symlinked into the repo, so updating is `git pull && npm run
-build` — nothing needs reinstalling. The script is safe to re-run.
-
-If the VS Code extension step reports that `code` is not on your PATH, either
-enable it once (Cmd+Shift+P -> *Shell Command: Install 'code' command in PATH*)
-and re-run, or install the `.vsix` it names via Cmd+Shift+P -> *Extensions:
-Install from VSIX...*.
-
-## Use
-
-```bash
-ath new build --cwd ~/proj      # a terminal that persists
-ath run build -- npm test       # blocking; real output, real exit code
-ath attach build                # you join the same terminal
-ath ls                          # what exists and what it is doing
-ath prompt build                # copyable handoff text for an agent
-```
-
-In VSCode, the **Agent Terminals** panel lists every session. Clicking one
-attaches a normal integrated terminal to it. When a session starts waiting on a
-password, its row turns amber, the status bar says so, and a notification
-offers an **Attach** button.
-
-## The password flow
-
-This is the case the project exists for.
-
-1. Agent runs `sudo …`; the command blocks on the prompt.
-2. The hub notices, on two independent signals: the foreground process is
-   `sudo`, and the last line of the pane looks like a prompt.
-3. `ath run` returns `needsInput: true` — a handoff, not a failure. The agent is
-   instructed to report it and stop, never to supply a credential.
-4. Your row turns amber and a notification appears. Click **Attach**.
-5. You type the password into the same PTY. The agent's command completes and
-   it reads the result.
-
-No copy-paste, nothing re-run, no round trip.
-
-## Design notes
-
-Things that are load-bearing and non-obvious:
-
-- **Output comes from a `pipe-pane` log, not `capture-pane`.** Reading a byte
-  range of an append-only log gives the exact bytes of one command, immune to
-  the 80×24 window and to reflow. Screen-scraping is not.
-- **Exit codes ride inside the end marker** — `<ATHE:<nonce>:0>` — printed by a
-  `__ath` shell helper and then erased from the screen, so the pane stays clean
-  for you while the log keeps the bytes. This replaced a sentinel *file*, which
-  quietly assumed agent and shell share a filesystem: a shell on the far side of
-  ssh writes that file to the far host, where the poller can never see it. A
-  marker comes back through the PTY, so the same protocol works locally, over
-  ssh, and inside a container.
-- **`pipe-pane` is never called with `-o`.** That flag only opens a pipe if none
-  exists, so calling it on an already-piping pane *toggles logging off*. Since a
-  pipe survives `respawn-pane`, using `-o` there silently blinds the agent.
-- **Commands run in the session's own shell**, so `cd` and `export` persist —
-  which also means a command containing `exit` really ends the shell. `run()`
-  watches for pane death alongside the marker and recovers the status from
-  `pane_dead_status`, instead of blocking until timeout.
-- **`remain-on-exit` + `respawn-pane`** keep the session alive through that, so
-  an agent typing `exit` cannot destroy a terminal you wanted.
-- **Metadata lives in `@ath_*` tmux options**, attached to the session itself,
-  so there is no sidecar state file that can desync from reality.
-- **A dedicated socket (`-L ath`) and an `ath-` name prefix** mean the hub can
-  never see, resize, or kill a session from your personal tmux.
-- **`window-size latest`**, so attaching from a small window does not shrink and
-  wrap the pane the agent is working in.
-
-### Hazards that only exist because a human shares the terminal
-
-Both of these were found in live use, not by the test suite — a suite with no
-one attached cannot produce either.
-
-- **Copy mode silences the agent.** `mouse on` means scrolling up to read output
-  puts the pane into copy mode, after which every `send-keys` fails with
-  `not in a mode`. The agent stops working because you looked at something.
-  Input paths check `#{pane_in_mode}` and send `-X cancel` first.
-- **A half-typed line gets spliced onto the agent's command.** Text left at the
-  prompt without Enter is concatenated with what the agent sends, and the
-  combined line is submitted. `sendLine` clears with `C-e` `C-u` first. The
-  tradeoff is that it can discard something you were mid-way through typing;
-  that is preferred to silent corruption, which additionally never emits an end
-  marker and so stalls the caller until its full timeout.
-- **A command that never reaches the shell fails fast.** If the start marker has
-  not appeared within 3s, `run()` installs the helper and retries once — which
-  is also what makes a shell it never set up (past an ssh hop, inside a
-  container) work — and only then raises `command_lost`.
-- **Two callers would splice into one command line.** Both read the log offset,
-  both send, and tmux interleaves the keystrokes into a single line the shell
-  then runs. A per-session lock file (`~/.ath/lock/`) serialises `ath` callers;
-  a second caller gets `session_busy` naming what is running, or queues with
-  `--wait`. A human typing directly cannot be locked out, and stays covered by
-  the line-clear and the `command_lost` backstop.
-
-### Deciding that a terminal is waiting for a human
-
-Two signals, and they are combined differently depending on what the answer is
-used for — because the cost of being wrong is not symmetric.
-
-`needs-input` requires prompt-shaped text **and** a foreground process that
-plausibly prompts (a known interactive tool, or a shell, since `read` is a
-builtin). Text alone used to be enough, which made `echo "Do you want to
-continue?"; sleep 8` report as waiting — raising a notification and making
-`run()` refuse the session while nothing was actually waiting.
-
-- **`run()`** uses that strict rule, and returns the moment it fires: aborting
-  a working command to report a false "needs input" is destructive, and the
-  agent then tells the user something untrue. This is also what turns a real
-  password prompt from a 120s stall into ~2s.
-- **The watcher** additionally promotes a *stalled* session with prompt-shaped
-  output even from an unknown command. A wrong amber row is cheap and the
-  human can just look at the pane.
-
-An idle shell is not caught by either, because an ordinary `PS1` (`… %`, `… $`)
-matches none of the prompt patterns — only an actual question does.
-
-### Remote hosts need no preparation
-
-`--remote` runs ssh with connection sharing and self-loading keys, so nothing
-has to be set up per machine:
-
-- `AddKeysToAgent=yes` (plus `UseKeychain=yes` on macOS) means a passphrase is
-  entered once **per key, ever** — not per host, not per session. Telling users
-  to run `ssh-add` for each machine they touch is the thing this avoids.
-- `ControlMaster=auto` with `ControlPersist=8h` keeps one authenticated
-  connection alive and shared, so a reconnect costs no authentication at all.
-- `ServerAlive*` notices a dead link in ~90s rather than hanging on TCP.
-
-Override with `ATH_SSH_OPTIONS` if you need something different.
-
-### A remote session never silently becomes a local one
-
-If ssh drops, the pane falls back to the **local** shell while every label
-still says remote. Left alone, a command meant for another machine runs on this
-one and reports success — the worst failure this design could have. Before
-running anything in a session with a remote host, the hub checks it is still
-inside the connection, reconnects if not, and refuses (`remote_disconnected`)
-rather than running locally.
-
-### Knowing a command ended when the shell it ran in is gone
-
-Three different situations, none of which write an end marker:
-
-| Case | How it is caught |
-|---|---|
-| The pane's own shell exits | `pane_dead` — the pane really is gone |
-| A nested shell exits (`exit` in an ssh session) | the foreground command falls back from `ssh` to a shell |
-| A plain sub-shell exits (`exit` in a nested `bash`) | the count of shells on the pane's tty drops |
-
-The last one needs the process count because the foreground command is a shell
-both before and after. "Output stopped moving" cannot distinguish it from a
-shell builtin loop working in silence — the tty count can, and does not move
-for the busy case.
-
-### sudo caching comes free
-
-A session is a real, persistent tty, so sudo's default per-tty credential cache
-works normally: one password entry covers every later `sudo` the agent runs in
-that session, for the sudoers timeout. There is no need to weaken sudoers with
-`timestamp_type=global` to make an agent workflow usable — which is the usual
-advice, and which trades away per-tty isolation for every process you own.
-
-## Security
-
-The agent has a `send` primitive for `C-c` and `y/n`. It must never type a
-credential, and the shipped skill and MCP tool descriptions say so explicitly.
-Secrets are typed by you, into the attached pane, going straight to the PTY.
-
-**What reaches the log, precisely** — this distinction is the one that matters,
-and it is not the intuitive one:
-
-| Typed at | Reaches `~/.ath/log/` ? | Examples |
-|---|---|---|
-| A prompt with terminal echo **off** | **No.** Never captured. | `sudo` password, ssh passphrase, `read -s` |
-| An ordinary **echoing** prompt | **Yes**, and an agent can read it back | API key, token, username, `read -p` answers |
-
-`pipe-pane` records what the terminal displays. A password prompt displays
-nothing as you type, so nothing is recorded — the common case is safe. An API
-key pasted at a normal prompt is displayed, so it is recorded.
-
-Logs are `0600`. Wipe one with `ath purge <session>`, or **Purge Recorded
-Output** in the panel. That is deliberately not an MCP tool: discarding the
-record is a human's decision, not an agent's.
+---
 
 ## Verify
 
 ```bash
-bash scripts/verify.sh
+bash scripts/verify.sh --local
 ```
 
-The regression suite — 111 assertions against real tmux: exit-code fidelity for
-every shape of command, stdout+stderr capture, state persistence, output
-integrity, survival of `exit`, locking, claims, and the framing protocol.
+370+ assertions covering the CLI, the MCP surface, nested shells, and the
+credential path.
 
-```bash
-bash scripts/verify.sh <session> "LABEL"
-```
+---
 
-The edge battery — 70 assertions run against a session you already have, so the
-same checks can be pointed at every context that matters:
+## License
 
-```bash
-ath new work --cwd ~           && bash scripts/verify.sh work "LOCAL"
-ath new box --remote myserver  && bash scripts/verify.sh box  "REMOTE"
-ath send box --text -- bash    && bash scripts/verify.sh box  "NESTED"
-```
-
-It covers exit codes across compound commands, quoting, output that impersonates
-the framing protocol, long-command splicing, and console hygiene — asserting the
-hub's own plumbing never appears in the terminal a human is watching.
-
-## Requirements
-
-macOS or Linux (tmux). Node 18+. Windows would need WSL.
+MIT.

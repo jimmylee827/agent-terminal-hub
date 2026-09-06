@@ -1,9 +1,8 @@
 import { appendFile } from 'node:fs/promises';
-import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import {
-  ATH_HOME,
+  NOTIFY_LOG,
   ancestorPids,
   bestPathAffinity,
   claim,
@@ -13,6 +12,7 @@ import {
   listRequests,
   openElection,
   releaseOwnClaim,
+  rotateNotifyLog,
   sleep,
   type HumanRequest,
   type Session,
@@ -113,9 +113,25 @@ function log(line: string): void {
   // of this were spent asking which window did what. All windows append here,
   // so the whole picture is one file read.
   void appendFile(NOTIFY_LOG, `${entry}\n`).catch(() => undefined);
+  maybeRotate();
 }
 
-const NOTIFY_LOG = path.join(ATH_HOME, 'notify.log');
+/**
+ * Nothing else bounds this file. It reached 6 MB and 55,000 lines in four days
+ * of ordinary use, and `ath purge` cannot see it.
+ *
+ * Checked every `ROTATE_EVERY` lines rather than on each append: a `stat` per
+ * line is pure waste on the hot path, and the cap does not need to be exact —
+ * overshooting by a few hundred lines costs nothing, and the counter starts at
+ * the limit so a window that opens on an already-huge file rotates at once.
+ */
+const ROTATE_EVERY = 200;
+let sinceRotateCheck = ROTATE_EVERY;
+function maybeRotate(): void {
+  if (++sinceRotateCheck < ROTATE_EVERY) return;
+  sinceRotateCheck = 0;
+  void rotateNotifyLog().catch(() => undefined);
+}
 
 const needsInputKey = (name: string): string => `needs-input.${name}`;
 const requestKey = (id: string): string => `request.${id}`;

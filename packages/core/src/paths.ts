@@ -14,6 +14,143 @@ export const LOG_DIR = path.join(ATH_HOME, 'log');
 export const RC_DIR = path.join(ATH_HOME, 'rc');
 export const HELPER_PATH = path.join(ATH_HOME, 'helper.sh');
 export const TMUX_CONF = path.join(ATH_HOME, 'tmux.conf');
+export const NOTIFY_LOG = path.join(ATH_HOME, 'notify.log');
+
+/** Above this, a log is trimmed; below `LOG_KEEP_BYTES` is what survives. */
+export const LOG_MAX_BYTES = 32 * 1024 * 1024;
+const LOG_KEEP_BYTES = 8 * 1024 * 1024;
+
+/**
+ * `notify.log` is append-only diagnostics from the editor extension, written
+ * on a path that never consults the session lock. It reached 6 MB and 55,000
+ * lines in four days of ordinary use with nothing in the system bounding it —
+ * the same failure as an untrimmed session log, in a file `purge` cannot see.
+ *
+ * Rotated rather than aged out: it is the record you want AFTER a bug, so
+ * dropping the oldest lines by date discards exactly the ones that explain how
+ * a wedged request got that way.
+ */
+export const NOTIFY_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Everything the hub leaves on this machine, and whether `purge` removes it.
+ *
+ * Exists because the honest answer to "what did that record?" was scattered
+ * across six modules, and the two surfaces that should have given it — `kill`
+ * and `purge` — described a fraction of it. `purge` in particular reads as the
+ * thing you run when a secret lands, while touching exactly one file out of a
+ * thousand.
+ *
+ * Declared here rather than assembled from each module's own constant because
+ * those modules import THIS one; reaching back for them would be a cycle. The
+ * cost is that a new directory has to be added in two places, which the
+ * contract check in scripts/verify.sh enforces.
+ */
+export interface AthArtifact {
+  /** Path relative to ~/.ath. */
+  name: string;
+  absolute: string;
+  /** What a reader would find in it. */
+  holds: string;
+  /** Removed by `ath purge`? */
+  purged: boolean;
+  /**
+   * Could a reader reconstruct something about what was done here?
+   *
+   * The distinction `purge` has to draw is not "file vs directory" but "leaves
+   * a trace vs does not". `tmux.conf` surviving a purge is uninteresting;
+   * `requests/` surviving it is not, because its reason text quotes the command.
+   */
+  sensitive: boolean;
+  /** How it is bounded, when nothing else removes it. */
+  bounded: string;
+}
+
+export const ATH_ARTIFACTS: readonly AthArtifact[] = [
+  {
+    name: 'log/',
+    // Named for the DIRECTORY, because that is what the reported size measures.
+    // Labelled `log/<session>.log` it read as one file while showing the total
+    // for all of them — a number that silently answered a different question.
+    absolute: LOG_DIR,
+    holds: 'one <session>.log per session — every command run, and every byte it printed',
+    purged: true,
+    sensitive: true,
+    bounded: `trimmed to the last ${LOG_KEEP_BYTES / 1024 / 1024} MB above ${LOG_MAX_BYTES / 1024 / 1024} MB`,
+  },
+  {
+    name: 'rc/',
+    absolute: RC_DIR,
+    holds: 'per-command sentinels — exit codes, timing, first-run flags. No command text',
+    purged: false,
+    sensitive: true,
+    bounded: 'reaped after 6h',
+  },
+  {
+    name: 'requests/',
+    absolute: path.join(ATH_HOME, 'requests'),
+    holds: 'open and recently-answered human requests. The reason text QUOTES the command',
+    purged: false,
+    sensitive: true,
+    bounded: 'resolved requests expire',
+  },
+  {
+    name: 'claim/',
+    absolute: path.join(ATH_HOME, 'claim'),
+    holds: 'which editor window owns a request — pid and timestamp only',
+    purged: false,
+    sensitive: false,
+    bounded: 'cleared when the request resolves',
+  },
+  {
+    name: 'election/',
+    absolute: path.join(ATH_HOME, 'election'),
+    holds: 'leader election between editor windows',
+    purged: false,
+    sensitive: false,
+    bounded: 'transient',
+  },
+  {
+    name: 'lock/',
+    absolute: path.join(ATH_HOME, 'lock'),
+    holds: 'per-session mutexes',
+    purged: false,
+    sensitive: false,
+    bounded: 'transient',
+  },
+  {
+    name: 'ssh/',
+    absolute: path.join(ATH_HOME, 'ssh'),
+    holds: 'ssh ControlMaster sockets and generated config. Hostnames, no credentials',
+    purged: false,
+    sensitive: true,
+    bounded: 'sockets close with the connection',
+  },
+  {
+    name: 'notify.log',
+    absolute: NOTIFY_LOG,
+    holds: 'UI notification diagnostics — session names and request ids',
+    purged: false,
+    sensitive: true,
+    bounded: 'rotated at 1 MB, one generation kept as notify.log.1',
+  },
+  {
+    name: 'helper.sh',
+    absolute: HELPER_PATH,
+    holds: 'the generated shell helper. No session data',
+    purged: false,
+    sensitive: false,
+    bounded: 'regenerated',
+  },
+  {
+    name: 'tmux.conf',
+    absolute: TMUX_CONF,
+    holds: 'the generated tmux config. No session data',
+    purged: false,
+    sensitive: false,
+    bounded: 'regenerated',
+  },
+];
 
 export function logPath(name: string): string {
   return path.join(LOG_DIR, `${name}.log`);
@@ -98,9 +235,12 @@ export function logicalName(tmux: string): string {
 export const HELPER_ONELINE =
   `__ath() { __ath_n="$1"; shift; ` +
   `printf '\\036<ATHS:%s>\\036\\r\\033[K' "$__ath_n"; ` +
+  // The command times ITSELF. See ATHD below.
+  `__ath_t0=$(date +%s 2>/dev/null); ` +
   `eval "$@"; __ath_rc=$?; ` +
   `__ath_m="<ATHE:$__ath_n:$__ath_rc:$(pwd 2>/dev/null | base64 2>/dev/null | tr -d '\\n'):$(command -v __ath_bpost >/dev/null 2>&1 || command -v __ath_post >/dev/null 2>&1 && echo 1 || echo 0)>"; ` +
   `printf '\\036%s\\036\\r\\033[K' "$__ath_m"; ` +
+  `if [ -n "$__ath_t0" ]; then printf '\\036<ATHD:%s:%s>\\036\\r\\033[K' "$__ath_n" "$(( $(date +%s) - __ath_t0 ))"; __ath_t0=""; fi; ` +
   `if [ -n "$COLUMNS" ]; then __ath_r=$(( \${#__ath_m} / COLUMNS )); ` +
   `while [ "$__ath_r" -gt 0 ]; do printf '\\033[A\\033[2K'; __ath_r=$((__ath_r-1)); done; fi; ` +
   `return $__ath_rc; }`;
@@ -173,9 +313,10 @@ const HOOKS_BOTH =
   `*) printf '\\036<ATHT:%s>\\036\\r\\033[K' "$__ath_pending" ;; esac; return ;; esac; ` +
   `if [ -n "$__ath_pending" ]; then __ath_n="$__ath_pending"; __ath_pending=""; ` +
   `else __ath_h=$((__ath_h+1)); __ath_n="h$__ath_h"; fi; ` +
-  `printf '\\036<ATHS:%s>\\036\\r\\033[K' "$__ath_n"; }; ` +
+  `printf '\\036<ATHS:%s>\\036\\r\\033[K' "$__ath_n"; __ath_t0=$(date +%s 2>/dev/null); }; ` +
   `__ath_post() { __ath_rc=$?; [ -n "$__ath_n" ] || return; ` +
   `printf '\\036<ATHE:%s:%d:%s>\\036\\r\\033[K' "$__ath_n" "$__ath_rc" "$(pwd 2>/dev/null | base64 2>/dev/null | tr -d '\\n')"; ` +
+  `if [ -n "$__ath_t0" ]; then printf '\\036<ATHD:%s:%s>\\036\\r\\033[K' "$__ath_n" "$(( $(date +%s) - __ath_t0 ))"; __ath_t0=""; fi; ` +
   `__ath_n=""; }; ` +
   `autoload -Uz add-zsh-hook; add-zsh-hook preexec __ath_pre; add-zsh-hook precmd __ath_post; ` +
   `elif [ -n "$BASH_VERSION" ]; then ` +
@@ -228,7 +369,9 @@ const HOOKS_BOTH =
   `__ath_ar="$(printf '\\342\\206\\263')"; ` +
   `while [ "$__ath_d" -gt 0 ]; do __ath_mk="$__ath_mk$__ath_ar"; __ath_d=$((__ath_d-1)); done; ` +
   `PS1="$__ath_mk $PS1"; fi; ` +
-  `[ -n "$__ath_n" ] && { printf '\\036<ATHE:%s:%d:%s:%s>\\036\\r\\033[K' "$__ath_n" "$__ath_rc" "$(pwd 2>/dev/null | base64 2>/dev/null | tr -d '\\n')" "$__ath_env"; __ath_n=""; }; ` +
+  `[ -n "$__ath_n" ] && { printf '\\036<ATHE:%s:%d:%s:%s>\\036\\r\\033[K' "$__ath_n" "$__ath_rc" "$(pwd 2>/dev/null | base64 2>/dev/null | tr -d '\\n')" "$__ath_env"; ` +
+  `if [ -n "$__ath_t0" ]; then printf '\\036<ATHD:%s:%s>\\036\\r\\033[K' "$__ath_n" "$(( $(date +%s) - __ath_t0 ))"; __ath_t0=""; fi; ` +
+  `__ath_n=""; }; ` +
   // bash has no preexec, so the tag is recovered from history instead. It is
   // the line that just ran, by definition, and reading it needs nothing typed.
   `__ath_last="$(HISTTIMEFORMAT= history 1 2>/dev/null)"; ` +
@@ -257,7 +400,7 @@ const HOOKS_BOTH =
   `*) printf '\\036<ATHT:%s>\\036\\r\\033[K' "$__ath_pending" ;; esac ;; esac; ` +
   `if [ -n "$__ath_pending" ]; then __ath_n="$__ath_pending"; __ath_pending=""; ` +
   `else __ath_h=$((__ath_h+1)); __ath_n="h$__ath_h"; fi; ` +
-  `printf '\\036<ATHS:%s>\\036\\r\\033[K' "$__ath_n"; }; ` +
+  `printf '\\036<ATHS:%s>\\036\\r\\033[K' "$__ath_n"; __ath_t0=$(date +%s 2>/dev/null); }; ` +
   // FIRST in the chain: `$?` at entry is the real command's status, and
   // anything running ahead of us would overwrite the exit code we exist to
   // carry. Still appended, never assigned — a user's prompt keeps working.
@@ -290,6 +433,34 @@ const HOOKS_BOTH =
   // and every tag line answers "command not found" — 38 times in one battery.
   `export -f \u2193\u2193\u2193 __ath_bpost 2>/dev/null; export PROMPT_COMMAND 2>/dev/null; ` +
   `fi`;
+
+/**
+ * `<ATHD:nonce:seconds>` — the command's OWN measurement of how long it took.
+ *
+ * A separate marker rather than a field appended to `<ATHE:…>`, because that
+ * marker already carries a variable number of optional trailing fields whose
+ * meaning depends on which shell emitted it (the wrapper's fourth field is a
+ * 0/1 flag, bash's is base64). A fifth would be ambiguous with both. A new
+ * marker type collides with nothing, and any parser that does not know it
+ * simply skips it.
+ *
+ * It exists because the hub's own estimate was not merely imprecise, it was
+ * useless, and three cold agents said so independently: a 47s job reported as
+ * 256s, a 44s job as a 170-second-wide bracket, and the same 44s job as
+ * [38,185] — "worse than no number", "decoration, not data". Every one of them
+ * ended up timing commands by hand with `date +%s`, which is precisely what
+ * this now does for them.
+ *
+ * The hub could only ever report when it LOOKED. The shell that ran the
+ * command knows when it started and when it stopped, on one clock, so there is
+ * no observation window and no skew to correct for.
+ *
+ * Degrades silently: a shell without `date` sets no start time, emits no
+ * marker, and the caller falls back to the observation bracket as before.
+ */
+export function durationMarkerRe(nonce: string): RegExp {
+  return new RegExp(`<ATHD:${nonce}:(\\d+)>`);
+}
 
 /** The line typed before each command, announcing whose it is. */
 export function agentTagLine(nonce: string): string {
@@ -353,10 +524,6 @@ async function writeIfChanged(file: string, body: string): Promise<void> {
   await fs.writeFile(file, body, { mode: 0o600 });
 }
 
-/** Above this, a log is trimmed; below `KEEP_BYTES` is what survives. */
-export const LOG_MAX_BYTES = 32 * 1024 * 1024;
-const LOG_KEEP_BYTES = 8 * 1024 * 1024;
-
 /**
  * Trim a session's log if it has grown past the cap.
  *
@@ -402,18 +569,49 @@ export async function rotateIfNeeded(
   return { rotated: true, from: size, to: keep };
 }
 
+export interface PurgeResult {
+  /** Bytes discarded from the session log. */
+  bytes: number;
+  /** Still on disk after this call, and still telling a reader something. */
+  survives: readonly AthArtifact[];
+}
+
 /**
  * Empty a session's log.
  *
  * Exists because input typed at an *echoing* prompt (an API key, a token) is
  * captured here and is readable by any agent with `read` access. Not exposed
  * over MCP: discarding the record is a human's decision.
+ *
+ * Returns what it did NOT cover, because the name promises more than the
+ * function delivers. It truncates one file; nine other things the hub wrote
+ * are untouched, and one of them (`requests/`) quotes the command back. A
+ * caller that prints only "purged" is making a claim this cannot support.
  */
-export async function purgeLog(name: string): Promise<void> {
-  await fs.truncate(logPath(name), 0).catch(() => undefined);
+export async function purgeLog(name: string): Promise<PurgeResult> {
+  const file = logPath(name);
+  let bytes = 0;
+  try {
+    bytes = (await fs.stat(file)).size;
+  } catch {
+    /* never written */
+  }
+  await fs.truncate(file, 0).catch(() => undefined);
+  return { bytes, survives: ATH_ARTIFACTS.filter((a) => !a.purged && a.sensitive) };
 }
 
-/** Remove .rc sentinels left behind by commands that never completed. */
+/**
+ * Sentinel files that outlive the command that made them.
+ *
+ * Every extension the hub writes into `rc/` belongs here. It listed only `.rc`
+ * for a long time while three more accumulated beside it — `.t` (timing), and
+ * `.caveat`/`.boot` (one-shot flags) — so the reaper cleaned 9 files out of
+ * 241 and the oldest survivor was four days old. Adding state without adding
+ * it here is the bug this comment exists to prevent.
+ */
+const RC_SUFFIXES = ['.rc', '.t', '.caveat', '.boot'] as const;
+
+/** Remove sentinels left behind by commands that never completed. */
 export async function reapStaleRc(maxAgeMs = 6 * 60 * 60 * 1000): Promise<number> {
   let removed = 0;
   let entries: string[];
@@ -424,7 +622,7 @@ export async function reapStaleRc(maxAgeMs = 6 * 60 * 60 * 1000): Promise<number
   }
   const cutoff = Date.now() - maxAgeMs;
   for (const entry of entries) {
-    if (!entry.endsWith('.rc')) continue;
+    if (!RC_SUFFIXES.some((s) => entry.endsWith(s))) continue;
     const file = path.join(RC_DIR, entry);
     try {
       const stat = await fs.stat(file);
@@ -437,6 +635,32 @@ export async function reapStaleRc(maxAgeMs = 6 * 60 * 60 * 1000): Promise<number
     }
   }
   return removed;
+}
+
+/**
+ * Rotate `notify.log` once it passes the cap, keeping one generation.
+ *
+ * By RENAME, not by rewriting in place. Several editor windows append to this
+ * file, each with its own open/write/close, and none of them takes the session
+ * lock — a read-tail-truncate-write cycle would silently drop whatever landed
+ * between the read and the write. `rename` is atomic, and the next append
+ * recreates the file.
+ *
+ * One generation, overwritten: the ceiling is two files, so the cap is a real
+ * bound rather than a slower leak.
+ */
+export async function rotateNotifyLog(maxBytes = NOTIFY_MAX_BYTES): Promise<boolean> {
+  try {
+    if ((await fs.stat(NOTIFY_LOG)).size <= maxBytes) return false;
+  } catch {
+    return false; // never written
+  }
+  try {
+    await fs.rename(NOTIFY_LOG, `${NOTIFY_LOG}.1`);
+    return true;
+  } catch {
+    return false; // raced another window; it rotated, we did not
+  }
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   ensureLayout,
   frameHooksFor,
   logPath,
+  durationMarkerRe,
   rcPath,
   rotateIfNeeded,
 } from './paths';
@@ -22,6 +23,7 @@ import {
   paneStatus,
   respawn,
   sendLine,
+  readMeta,
   setMeta,
   shellDepth,
   validateName,
@@ -67,7 +69,14 @@ const TAIL_WINDOW_BYTES = 256 * 1024;
  * Must track the end marker's optional trailing fields. Missing them here does
  * not fail loudly — it silently prints a wall of base64 into the user's output.
  */
-const MARKER_LINE_RE = /<ATH[SETR]:[A-Za-z0-9]+(?::-?\d+)?(?::[A-Za-z0-9+/=]*){0,2}>/;
+// Every marker letter the hub emits: Start, End, Tag-ack, pRobe, Duration.
+//
+// Adding a marker type means adding it HERE too, or its text reaches the
+// caller as if it were output. `D` was missed on its first day and the console
+// hygiene check caught it immediately — which is the entire reason that check
+// exists, since nothing else in the suite reads what an agent would actually
+// see.
+const MARKER_LINE_RE = /<ATH[SETRD]:[A-Za-z0-9]+(?::-?\d+)?(?::[A-Za-z0-9+/=]*){0,2}>/;
 
 /** Enough of the log tail to be certain the end marker is inside it. */
 const MARKER_SCAN_BYTES = 32 * 1024;
@@ -94,13 +103,40 @@ export function endMarker(nonce: string): string {
  * exit code, which is the part everything depends on, must still parse.
  */
 function endMarkerRe(nonce: string): RegExp {
-  return new RegExp(`<ATHE:${nonce}:(-?\\d+)(?::([A-Za-z0-9+/=]*))?(?::([A-Za-z0-9+/=]*))?>`);
+  // The SENTINEL is REQUIRED, not decorative.
+  //
+  // Without it, a command could end itself early and report whatever status it
+  // liked: the nonce is echoed into the pane on the tag line, so a command can
+  // read it back out of shell history and print a matching `<ATHE:…:0:…>`.
+  // Demonstrated, not theorised — a command that forged exit 0 while really
+  // exiting 7 was believed, and the hub reported 0.
+  //
+  // Every real emitter already wraps the marker in \036 (all three checked:
+  // both hook paths and the fallback wrapper), and `latestHandle` has always
+  // required it. This parse simply never did, so the rule the comment beside
+  // it claimed — "only SENTINEL-wrapped markers count" — was true of one
+  // reader and not the other.
+  //
+  // The severity is low: an agent already controls what it runs, so this is
+  // not a privilege boundary. It matters because the exit code is the one
+  // value the hub asserts as fact, and a fact that can be spoofed by the thing
+  // being measured is not a fact.
+  return new RegExp(
+    `${SENTINEL}<ATHE:${nonce}:(-?\\d+)(?::([A-Za-z0-9+/=]*))?(?::([A-Za-z0-9+/=]*))?>`,
+  );
 }
 
 export interface CommandEnd {
   code: number;
   /** Working directory the command finished in, if the helper reported it. */
   cwd?: string;
+  /**
+   * Wall-clock seconds, measured BY THE SHELL that ran the command.
+   *
+   * Present whenever that shell had `date`. This is a measurement, unlike the
+   * observation bracket, which could only ever say when the hub looked.
+   */
+  measuredSeconds?: number;
   /**
    * The shell this command ran in still has the framing hooks.
    *
@@ -140,8 +176,19 @@ function decodeB64(value: string | undefined): string | undefined {
 async function findCommandEnd(logFile: string, nonce: string): Promise<CommandEnd | undefined> {
   const raw = await readLogTailBytes(logFile, MARKER_SCAN_BYTES);
   if (!raw) return undefined;
-  for (const line of toLines(raw)) {
-    const hit = endMarkerRe(nonce).exec(line);
+  // The command's own measurement, if its shell could take one. Read from the
+  // same buffer, so it costs nothing. See durationMarkerRe.
+  const measured = durationMarkerRe(nonce).exec(raw);
+  const measuredSeconds = measured ? Number(measured[1]) : undefined;
+  // Matched against the RAW capture, not against `toLines`.
+  //
+  // `toLines` runs `stripAnsi`, which removes control characters — including
+  // the SENTINEL that makes a marker unforgeable. Requiring the sentinel while
+  // matching post-strip text can therefore never match, which is exactly what
+  // happened: every command timed out. `latestHandle` has always scanned the
+  // raw tail for this reason; this reader simply never did.
+  {
+    const hit = endMarkerRe(nonce).exec(raw);
     if (hit?.[1] !== undefined) {
       // The 4th field means different things by source, and they are trivially
       // separable: the WRAPPER writes a hooks flag, exactly "0" or "1"; the
@@ -153,6 +200,7 @@ async function findCommandEnd(logFile: string, nonce: string): Promise<CommandEn
         cwd: decodeB64(hit[2]),
         hooks: isFlag ? extra === '1' : undefined,
         env: isFlag ? undefined : decodeB64(extra),
+        ...(Number.isFinite(measuredSeconds) ? { measuredSeconds } : {}),
       };
     }
   }
@@ -200,6 +248,13 @@ async function markStarted(nonce: string, offset: number): Promise<void> {
 async function timingFor(
   nonce: string,
   done: boolean,
+  /**
+   * The shell's own measurement, when it took one.
+   *
+   * Supplied, everything below is skipped: there is nothing to estimate. The
+   * bracket exists only for shells that could not measure.
+   */
+  measuredSeconds?: number,
 ): Promise<
   | {
       exact: boolean;
@@ -211,6 +266,23 @@ async function timingFor(
     }
   | undefined
 > {
+  // A measurement beats every heuristic below it.
+  if (done && measuredSeconds !== undefined && Number.isFinite(measuredSeconds)) {
+    let startOffset: number | undefined;
+    try {
+      const [, o] = (await fs.readFile(path.join(RC_DIR, `${nonce}.t`), 'utf8')).trim().split(/\s+/);
+      startOffset = o === undefined ? undefined : Number(o);
+    } catch {
+      /* the offset is a nicety; the duration is the answer */
+    }
+    return {
+      exact: true,
+      seconds: measuredSeconds,
+      observed: true,
+      ...(Number.isFinite(startOffset) ? { startOffset } : {}),
+    };
+  }
+
   const file = path.join(RC_DIR, `${nonce}.t`);
   let began: number;
   let startOffset: number | undefined;
@@ -875,6 +947,20 @@ async function runLocked(
     }
     await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
   }
+  // Record the command AT DISPATCH, with no exit code.
+  //
+  // `run` recorded only on completion, so a command that PARKED at a prompt
+  // was never recorded at all — and `ath ls` went on showing the previous
+  // command beside the previous exit code. An agent watching a session parked
+  // on `sudo -v` was shown `last_command: "sudo -n true", last_exit_code: 1`:
+  // true of a command that had already finished, and read together, the exact
+  // opposite of what was happening. It called that "quietly wrong data, which
+  // is worse than an error, because there is nothing to prompt a second look".
+  //
+  // An empty `last_rc` already means "still running" everywhere else — it is
+  // how `busyDetail` tells an in-flight command from a finished one, and how
+  // `start` has always behaved. `run` simply never took part.
+  await recordLast(clean, command, null);
   let completion = await waitForCompletion(
     clean, timeoutMs, pollMs, log, offset, nonce, outerCommand, baselineShells,
   );
@@ -1055,6 +1141,13 @@ async function runLocked(
 
   const output = extractBetweenMarkers(raw, nonce, command);
   const needsHuman = await raiseHumanWall(clean, command, output, nonce);
+  // The pane can be resized by a human attaching — most often to answer the
+  // very password prompt this command raised. Checked here, once per command,
+  // so the change surfaces on the first result after it happens.
+  const widthChange = await noteWidthChange(
+    clean,
+    (await get(clean).catch(() => undefined))?.paneWidth,
+  ).catch(() => undefined);
 
   return {
     session: clean,
@@ -1064,11 +1157,40 @@ async function runLocked(
     ...(needsHuman ? { needsHuman } : {}),
     // Only when no wall fired: if one did, the request exists and the warning
     // would be noise. The dangerous case is the SILENT one.
-    ...(!needsHuman && (credentialBlindSpot(command) ?? traversalBlindSpot(command))
-      ? { warning: credentialBlindSpot(command) ?? traversalBlindSpot(command) }
+    // The credential blind-spot only matters when the command FAILED.
+    //
+    // `sudo -n true` that exits 0 proves the timestamp is cached: nothing was
+    // hidden, because there was nothing to hide. Warning anyway told an agent
+    // its deliberate, successful cache-check "may mean the command never ran"
+    // — while it was looking at the SUDO_CACHED=yes the command had printed.
+    // The traversal warning gets no such reprieve: `du` exits 0 while
+    // under-reporting, which is the entire hazard.
+    ...(!needsHuman &&
+    ((exitCode !== 0 ? credentialBlindSpot(command) : undefined) ?? traversalBlindSpot(command))
+      ? {
+          warning:
+            (exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
+            traversalBlindSpot(command),
+        }
       : {}),
-    // ALWAYS marked, explained ONCE. See firstCaveatFor.
-    ...(compoundExitCaveat(command)
+    // Marked only when the number can actually MISLEAD, explained once.
+    //
+    // It used to mark every compound line. An agent that batches probes with
+    // `;` — the natural shape for a survey, and the one this tool's
+    // one-command-per-session rhythm pushes you toward — saw it on nearly
+    // every call and reported that it "stopped carrying information... visual
+    // noise by the fourth call". A signal that never varies is not a signal.
+    //
+    // It only misleads on exit 0: that is the case where an earlier failure is
+    // hidden behind a later success. A NON-ZERO code has already told the
+    // reader to go look, so the marker adds nothing there.
+    ...(compoundExitCaveat(command) &&
+    // `;`-joined: only exit 0 can mislead — a non-zero code already sends the
+    // reader to the output. A PIPELINE is different and stays marked either
+    // way: its code is the last stage's, so a non-zero tells you that stage
+    // failed and still says nothing about the ones before it. Filtering both
+    // the same way would have silently dropped the harder case.
+    (compoundExitCaveat(command) === 'last-pipeline-stage-only' || exitCode === 0)
       ? {
           exitCaveat: compoundExitCaveat(command),
           ...((await firstCaveatFor(clean))
@@ -1076,8 +1198,26 @@ async function runLocked(
                 exitCaveatNote:
                   'The exit code above is the status of only the last part of this line — an ' +
                   'earlier failure can be hidden by a later success, and a pipeline reports its ' +
-                  'last stage. Read the output rather than trusting the number. (Shown once per ' +
-                  'session; the short marker stays on every affected command.)',
+                  'last stage. Read the output rather than trusting the number. ' +
+                  // NOT a prescription to use `&&`.
+                  //
+                  // That was the previous wording, and the next agent rebutted
+                  // it precisely: `&&` "is often wrong for exploration, where I
+                  // want later parts to run when an earlier one fails" — which
+                  // is exactly what happened when its `ufw status` failed and
+                  // the following `iptables -S` held the answer it needed.
+                  //
+                  // `;` is the RIGHT choice there, and a meaningless exit code
+                  // is a trade the caller accepted, not a mistake to correct.
+                  // So both options are stated as options.
+                  (compoundExitCaveat(command) === 'last-command-only'
+                    ? 'If you need the code to mean something, join with `&&` — the line then ' +
+                      'stops at the first failure and reports it. If you are exploring and want ' +
+                      'every part to run regardless, `;` is right and reading the output is the ' +
+                      'correct way to check it. '
+                    : 'For a pipeline, `set -o pipefail` makes the exit code reflect any failing ' +
+                      'stage rather than only the last. ') +
+                  '(Shown once per session; the short marker stays on every affected command.)',
               }
             : {}),
         }
@@ -1085,6 +1225,7 @@ async function runLocked(
     timedOut: false,
     needsInput: state === 'needs-input',
     state,
+    ...(widthChange ? { paneWidthChanged: widthChange } : {}),
     logOffset: offset,
     // Surfaced even on success. The directory and environment are restored,
     // but a reconnect still means the remote shell is a NEW process: anything
@@ -1242,10 +1383,36 @@ function isPureAssignment(fragment: string): boolean {
  */
 export function envAssignments(command: string): string[] {
   if (!command) return [];
-  return command
-    .split(/[;\n]|&&/)
-    .map((part) => part.trim())
-    .filter(isPureAssignment);
+  // Split on separators that are NOT inside quotes.
+  //
+  // Splitting the raw text made every `;` a boundary, including the ones
+  // inside a quoted program. `ss -tlnp | awk '{a=$4; p=""; print}'` therefore
+  // yielded the fragment `p=""`, which is a perfectly good assignment in
+  // isolation — so the hub stored `p` as a session variable and would have
+  // replayed it on reconnect. An agent found exactly that in its `remote_env`
+  // and said, correctly, that it makes the restore guarantee weaker than the
+  // documentation claims.
+  //
+  // This is the SAME bug already fixed on the shell side, where an unanchored
+  // glob matched an `=` anywhere in the line. It was fixed there and left
+  // here, in the other language, doing the same thing to the same input.
+  //
+  // Quoted spans are blanked to equal-length filler before splitting, so
+  // offsets are preserved and the split lands only on real separators. The
+  // technique is lifted from `compoundExitCaveat`, one function away, which
+  // has been doing it correctly the whole time.
+  const masked = command
+    .replace(/'[^']*'/g, (m) => "'".padEnd(m.length, ' '))
+    .replace(/"[^"]*"/g, (m) => '"'.padEnd(m.length, ' '));
+  const out: string[] = [];
+  let start = 0;
+  const boundary = /[;\n]|&&/g;
+  for (let m = boundary.exec(masked); m !== null; m = boundary.exec(masked)) {
+    out.push(command.slice(start, m.index));
+    start = m.index + m[0].length;
+  }
+  out.push(command.slice(start));
+  return out.map((part) => part.trim()).filter(isPureAssignment);
 }
 
 /** Variable name an assignment fragment sets, for last-one-wins merging. */
@@ -1295,6 +1462,32 @@ function busyDetail(session: Session): string {
     return `"${cmd.length > 70 ? `${cmd.slice(0, 67)}…` : cmd}"`;
   }
   return `"${session.currentCommand || 'something'}"`;
+}
+
+/**
+ * Notice that the pane was resized between two commands.
+ *
+ * `window-size latest` means a human attaching sets the size — which is
+ * correct for a shared terminal, and is exactly what happens when they attach
+ * to answer a password prompt. The consequence is that output shape can change
+ * in the middle of a survey, and until now nothing said so at the time: the
+ * width was visible in `list` if you thought to look, documented if you had
+ * read that far, and announced never.
+ *
+ * Comparing against the last value costs one string read, so the only silent
+ * corruption path in the tool now announces itself on the first command after
+ * it happens.
+ */
+async function noteWidthChange(
+  name: string,
+  now: number | undefined,
+): Promise<{ from: number; to: number } | undefined> {
+  if (!now || now <= 0) return undefined;
+  const previous = Number(await readMeta(name, 'pw').catch(() => '')) || 0;
+  await setMeta(name, 'pw', String(now)).catch(() => undefined);
+  // A first command has nothing to compare against, and is not a change.
+  if (!previous || previous === now) return undefined;
+  return { from: previous, to: now };
 }
 
 async function recordLast(name: string, command: string, code: number | null): Promise<void> {
@@ -1385,7 +1578,18 @@ export async function start(name: string, command: string): Promise<StartResult>
     }
     await recordLast(clean, command, null);
 
-    return { session: clean, command, handle: nonce, offset };
+    // Same hazards as `run`. See StartResult.warning: this path reported none,
+    // so the one command shape most likely to be backgrounded — a long
+    // filesystem walk with stderr thrown away — was also the one nothing
+    // checked.
+    const startWarning = credentialBlindSpot(command) ?? traversalBlindSpot(command);
+    return {
+      session: clean,
+      command,
+      handle: nonce,
+      offset,
+      ...(startWarning ? { warning: startWarning } : {}),
+    };
   });
 }
 
@@ -1477,7 +1681,21 @@ export async function latestHandle(name: string): Promise<string | undefined> {
   const log = logPath(clean);
   const size = await fileSize(log);
   const tail = await readLogFrom(log, Math.max(0, size - MARKER_SCAN_BYTES));
-  const re = new RegExp(`${SENTINEL}<ATHS:([A-Za-z0-9]+)>`, 'g');
+  // AGENT frames only — never a human's.
+  //
+  // `[A-Za-z0-9]+` also matched the `h<n>` frames the hooks open around
+  // commands the HUMAN types, and one of those is open at every idle prompt by
+  // construction: the shell draws a prompt, the frame opens, and it does not
+  // close until the person runs something. So the moment a human answered a
+  // password prompt, this returned THEIR open frame instead of the agent's
+  // finished command.
+  //
+  // `await_human` then polled a handle that can never complete. The command it
+  // was actually waiting on had exited 0 seconds earlier, and the agent sat
+  // there reporting "still waiting" at a prompt the human had already answered
+  // — the precise failure this function was written to prevent, arriving
+  // through the other door. A handle is 12 hex characters; require that.
+  const re = new RegExp(`${SENTINEL}<ATHS:([0-9a-f]{12})>`, 'g');
   let found: string | undefined;
   for (let m = re.exec(tail); m !== null; m = re.exec(tail)) found = m[1];
   return found;
@@ -1561,7 +1779,7 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     }
   }
 
-  const timing = await timingFor(handle, done);
+  const timing = await timingFor(handle, done, end?.measuredSeconds);
   // Offsets are per SESSION, so `since` from an earlier job is silently valid
   // and silently wrong: it re-reads the previous command's output, which a
   // caller may then attribute to this one. Nothing errored, so nothing warned.
@@ -1842,13 +2060,42 @@ function credentialBlindSpot(command: string): string | undefined {
  * plausible, caught only by cross-checking df.
  */
 function traversalBlindSpot(command: string): string | undefined {
-  if (!walksRecursively(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
-  if (!SYSTEM_PATH_RE.test(command)) return undefined;
+  // Both halves must be in the SAME segment of a compound line.
+  //
+  // Testing the whole line meant a `/dev/null` anywhere re-triggered the
+  // warning about the walker — including on the very command that had FOLLOWED
+  // the advice: an agent re-ran its `du` with `2>/tmp/du.err` and a line count,
+  // and was warned again for the unrelated redirect in the second half. It
+  // said two false positives in twelve commands were enough that it "began
+  // skimming them", which is how it under-weighted the one that was right.
+  const segments = command.split(/;|&&|\|\|/);
+  const guilty = segments.some(
+    (seg) => walksRecursively(seg) && STDERR_DISCARDED_RE.test(seg) && SYSTEM_PATH_RE.test(seg),
+  );
+  if (!guilty) return undefined;
+  // State what is OBSERVED, never a cause that was not.
+  //
+  // This used to say "permission errors are being destroyed". It fired on a
+  // `sudo du -x` that reported 498 MB against a true 20 GB — right that the
+  // number was wrong, right about the magnitude, and wrong about why: the agent
+  // redirected stderr to a file on the retry and found it EMPTY. There were no
+  // permission errors. `-x` had refused to cross into the overlay mounts.
+  //
+  // The agent's verdict is the reason this wording changed: "a warning that
+  // misdiagnoses is a warning that eventually gets ignored". It nearly was —
+  // running under sudo, "permission errors" is exactly the premise a reader can
+  // dismiss, and dismissing it would have shipped the wrong number.
+  //
+  // So the claim is now the one thing actually known from the command text:
+  // stderr is gone. What it would have said — a permission denial, a mount not
+  // crossed, a vanished path — is unknowable from here, and naming one guess
+  // stakes the warning's credibility on it.
   return (
-    'This walks a system path and sends stderr to /dev/null, so permission errors are being ' +
-    'destroyed — anything unreadable is silently omitted and the exit code will still be 0. A ' +
-    'total from this may be far short of the truth. Redirect stderr to a FILE and read it, or ' +
-    'use 2>&1, and cross-check totals against an independent source.'
+    'This walks a filesystem and discards stderr, so ANY error it hits is invisible — a ' +
+    'permission denial, a mount it declined to cross (-x/--one-file-system), a path that ' +
+    'vanished mid-walk — and the exit code stays 0 regardless. A total from this can be far ' +
+    'short of the truth. Send stderr to a FILE and read it (or use 2>&1), and cross-check the ' +
+    'total against an independent source such as df or docker system df.'
   );
 }
 

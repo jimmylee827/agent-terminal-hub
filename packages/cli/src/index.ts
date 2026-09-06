@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { promises as fsp } from 'node:fs';
+import * as nodePath from 'node:path';
 
 import {
   assertNotCredentialPrompt,
   assertRemoteConnected,
   attachedClientsNote,
   AthError,
+  ATH_ARTIFACTS,
+  ATH_HOME,
+  LOG_DIR,
   SOCKET,
   TMUX_CONF,
   Watcher,
@@ -17,10 +22,12 @@ import {
   kill,
   list,
   clearRequest,
+  deleteRequest,
   listAllRequests,
   formatDuration,
   latestHandle,
   listRequests,
+  logPath,
   notePrompts,
   reapResolvedRequests,
   lockHolder,
@@ -34,10 +41,14 @@ import {
   sendKeys,
   sendLine,
   setPinned,
+  setWidth,
   start,
   tmuxBin,
   tmuxName,
-  effectiveCwd,} from '@ath/core';
+  effectiveCwd,
+  toWire,
+  type AthArtifact,
+} from '@ath/core';
 
 import { flagBool, flagNumber, flagString, parseArgs } from './args';
 import { invalidKeys } from './keys';
@@ -92,8 +103,10 @@ const HELP = `${c.bold('ath')} — long-lived terminals shared by agents and hum
 
 ${c.bold('Sessions')}
   ath new [name] [--cwd DIR] [--remote HOST] [--pin] [--label TEXT]
+       [--width N]                 pane columns (default 200; wider = less truncation)
   ath ls [--json]
   ath kill <name> · ath rename <old> <new> · ath pin|unpin <name>
+  ath width <name> <cols>          re-assert pane width on a LIVE session
   ath gc [--max-idle-hours N]
 
 ${c.bold('Driving a session')}
@@ -111,9 +124,9 @@ ${c.bold('Driving a session')}
 ${c.bold('Humans')}
   ath attach <name>                enter the terminal the agent is using
   ath prompt <name>                copyable handoff text for an agent
-  ath purge <name> | --all         wipe a session's recorded output
+  ath purge <name> | --all         wipe a session's transcript (only that)
   ath watch [--json]               stream state changes
-  ath doctor
+  ath doctor [--artifacts]         health checks, or everything left on disk
 
 ${c.bold('Exit codes for run')}
   0    the command succeeded          ${c.dim('(or its own non-zero code)')}
@@ -144,6 +157,7 @@ async function main(): Promise<number> {
         remote: flagString(flags, 'remote'),
         label: flagString(flags, 'label'),
         pin: flagBool(flags, 'pin'),
+        width: flagNumber(flags, 'width', 0) || undefined,
         // `owner` said "human" for every session, including ones an agent
         // created — the field exists to say who a terminal belongs to, and
         // answering the same thing regardless made it useless. ATH_INSIDE is
@@ -154,7 +168,7 @@ async function main(): Promise<number> {
           (process.env.ATH_INSIDE || !process.stdin.isTTY ? 'agent' : 'human'),
       });
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify(session, null, 2));
+        console.log(JSON.stringify(toWire(session), null, 2));
       } else {
           // Show the REMOTE host for a remote session. Printing the local cwd
           // for `ath new box --remote myserver` reads as though --remote had
@@ -165,6 +179,10 @@ async function main(): Promise<number> {
             : session.cwd;
           console.log(`${c.green('created')} ${c.bold(session.name)}  ${c.dim(where)}`);
         console.log(c.dim(`attach with:  ath attach ${session.name}`));
+        // Said once, at the moment the recording starts, because there is no
+        // later moment where a person would think to ask. The session records
+        // everything printed in it and outlives both the agent and the editor.
+        console.log(c.dim(`recording to: ${logPath(session.name)}`));
       }
       return 0;
     }
@@ -184,7 +202,7 @@ async function main(): Promise<number> {
         const full = flagBool(flags, 'full');
         console.log(
           JSON.stringify(
-            full ? sessions : sessions.map(({ paneTail: _drop, ...rest }) => rest),
+            toWire(full ? sessions : sessions.map(({ paneTail: _drop, ...rest }) => rest)),
             null,
             2,
           ),
@@ -229,7 +247,7 @@ async function main(): Promise<number> {
       });
 
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(toWire(result), null, 2));
       } else if (result.output) {
         console.log(result.output);
       }
@@ -255,6 +273,16 @@ async function main(): Promise<number> {
       // different. Say what happened and how to get back.
       // Loud, and raised by the system rather than by the agent choosing to.
       // Same reason as the MCP side: computed for rounds, shown by nobody.
+      // Same signal on the human's surface — they are the one who resized it.
+      if (result.paneWidthChanged) {
+        console.error(
+          c.yellow(
+            `[ath] pane resized ${result.paneWidthChanged.from} → ${result.paneWidthChanged.to} ` +
+              `columns since the last command here. Column-aligned output (ps, docker ps, ` +
+              `lsblk) will format differently from now on.`,
+          ),
+        );
+      }
       if (result.warning) {
         console.error(c.yellow(`\n[ath] ${result.warning}`));
       }
@@ -313,7 +341,7 @@ async function main(): Promise<number> {
       if (!cmd) return fail('nothing to start. usage: ath start <name> -- <command>');
       const started = await start(name, cmd);
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify(started, null, 2));
+        console.log(JSON.stringify(toWire(started), null, 2));
       } else {
         console.log(`${c.green('started')} ${c.bold(name)}  handle ${started.handle}`);
         console.log(c.dim(`poll with:  ath poll ${name} --handle ${started.handle} --since ${started.offset}`));
@@ -327,7 +355,7 @@ async function main(): Promise<number> {
       if (!handle) return fail('a --handle is required. get one from: ath start');
       const result = await poll(name, handle, flagNumber(flags, 'since', 0));
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(toWire(result), null, 2));
         return 0;
       }
       if (result.output) console.log(result.output);
@@ -371,7 +399,7 @@ async function main(): Promise<number> {
       const name = requireName(positional[0]);
       if (flags.since !== undefined) {
         const result = await readSince(name, flagNumber(flags, 'since', 0));
-        if (flagBool(flags, 'json')) console.log(JSON.stringify(result, null, 2));
+        if (flagBool(flags, 'json')) console.log(JSON.stringify(toWire(result), null, 2));
         else {
           if (result.output) console.log(result.output);
           console.error(c.dim(`\n[ath] resume with --since ${result.nextOffset}`));
@@ -380,7 +408,7 @@ async function main(): Promise<number> {
       }
       const text = await readTail(name, flagNumber(flags, 'tail', 200));
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify({ ...(await get(name)), output: text }, null, 2));
+        console.log(JSON.stringify(toWire({ ...(await get(name)), output: text }), null, 2));
       } else {
         console.log(text);
       }
@@ -428,15 +456,72 @@ async function main(): Promise<number> {
     }
 
     case 'purge': {
+      // What purge covers is stated at the point of use, every time.
+      //
+      // The command reads as "make it gone", and people reach for it after
+      // typing something they regret. It truncates ONE file. Nine other things
+      // the hub wrote are untouched, and `requests/` quotes the command back.
+      // Printing "purged" alone lets a caller believe a guarantee this does
+      // not provide, so the shortfall is disclosed here rather than buried in
+      // documentation nobody reads at the moment they need it.
+      const report = (survives: readonly AthArtifact[]): void => {
+        if (survives.length === 0) return;
+        console.error(c.yellow('[ath] purge clears the session transcript only. Still on disk:'));
+        for (const a of survives) {
+          console.error(c.dim(`        ~/.ath/${a.name.padEnd(18)} ${a.holds}`));
+        }
+        console.error(c.dim(`        full list: ath doctor --artifacts`));
+      };
+
       if (flagBool(flags, 'all')) {
-        const all = await list({ withState: false });
-        for (const s of all) await purgeLog(s.name);
-        console.log(`purged ${all.length} log(s)`);
+        // Every transcript on disk, NOT every live session.
+        //
+        // Iterating `list()` meant `--all` could not reach the logs of sessions
+        // that had already been killed — which is most of them, and exactly the
+        // ones nobody is going to purge by name. "purged 2 log(s)" was then
+        // printed over a directory holding 742 files, which is the same class
+        // of overclaim this whole command was just fixed for.
+        const names = (await fsp.readdir(LOG_DIR).catch(() => [] as string[]))
+          .filter((f) => f.endsWith('.log'))
+          .map((f) => f.slice(0, -'.log'.length));
+        const live = new Set((await list({ withState: false })).map((s) => s.name));
+        let bytes = 0;
+        let survives: readonly AthArtifact[] = [];
+        for (const n of names) {
+          const r = await purgeLog(n);
+          bytes += r.bytes;
+          survives = r.survives;
+        }
+        // Orphans are the interesting number: they are what a caller did not
+        // know was still there.
+        const orphans = names.filter((n) => !live.has(n)).length;
+        console.log(
+          `purged ${names.length} transcript(s), ${fmtBytes(bytes)} discarded` +
+            (orphans ? ` (${orphans} from sessions that no longer exist)` : ''),
+        );
+        report(survives);
         return 0;
       }
       const name = requireName(positional[0]);
-      await purgeLog(name);
-      console.log(`purged recorded output for ${name}`);
+      const { bytes, survives } = await purgeLog(name);
+      console.log(`purged recorded output for ${name} — ${fmtBytes(bytes)} discarded`);
+      report(survives);
+      return 0;
+    }
+
+    case 'width': {
+      const name = requireName(positional[0]);
+      const cols = Number(positional[1]);
+      if (!Number.isFinite(cols) || cols <= 0) {
+        console.error('usage: ath width <name> <columns>   e.g. ath width build 500');
+        return 2;
+      }
+      const applied = await setWidth(name, cols, flagNumber(flags, 'rows', 0) || undefined);
+      console.log(`${name} pane is now ${applied} columns`);
+      // Say the part that makes this a re-assertion rather than a setting.
+      console.error(
+        c.dim('[ath] window-size is `latest`, so the next client to attach sets it again.'),
+      );
       return 0;
     }
 
@@ -468,6 +553,16 @@ async function main(): Promise<number> {
       const note = attachedClientsNote(attached);
       console.log(`${name} killed`);
       if (note) console.error(c.yellow(`[ath] ${note}`));
+      // The transcript OUTLIVES the session, and this is the last moment anyone
+      // is thinking about this session at all. Killing it reads as cleanup, so
+      // saying nothing here lets the file be forgotten while it still holds
+      // every byte the session printed. Size, so the disclosure is concrete,
+      // and the exact command, so acting on it needs no lookup.
+      const left = await pathSize(logPath(name));
+      if (left > 0) {
+        console.error(c.dim(`[ath] transcript kept: ${logPath(name)} (${fmtBytes(left)})`));
+        console.error(c.dim(`[ath] remove it with:  ath purge ${name}`));
+      }
       return 0;
     }
 
@@ -483,7 +578,7 @@ async function main(): Promise<number> {
       const json = flagBool(flags, 'json');
       const watcher = new Watcher();
       watcher.on('change', (change) => {
-        if (json) console.log(JSON.stringify({ type: 'change', ...change }));
+        if (json) console.log(JSON.stringify(toWire({ type: 'change', ...change })));
         else console.log(`${change.name}: ${change.previous} -> ${change.current}`);
       });
       watcher.on('error', (err: Error) => console.error(c.red(`[ath] ${err.message}`)));
@@ -604,7 +699,12 @@ async function main(): Promise<number> {
               console.error(
                 code === 130 || code === 143
                   ? c.red(`[ath] "${name}" was interrupted (exit ${code}) — NOT answered.`)
-                  : c.green(`[ath] "${name}" answered — exit ${code}.`),
+                  : c.green(`[ath] "${name}" finished — exit ${code}.`) +
+                    (code === 0
+                      ? c.dim(`\n[ath] exit 0 says the command ended cleanly. It does NOT prove\n` +
+                              `      elevation, or that a human typed anything. Verify with\n` +
+                              `      "sudo -n true" before relying on it.`)
+                      : ''),
               );
               return code;
             }
@@ -664,10 +764,26 @@ async function main(): Promise<number> {
         if (res?.done) {
           if (res.output) console.log(res.output);
           const code = res.exitCode ?? 0;
+          // "answered — exit 0" is SUCCESS-SHAPED for something it does not prove.
+          //
+          // A cold agent read it as confirmation of elevation, then said it had
+          // to run `sudo -n true && echo ELEVATION_CONFIRMED` anyway because it
+          // did not trust the message — "the docs warn about this, but the
+          // success-shaped message pulls the other way". When the wording and
+          // the documentation disagree, the wording wins, so fix the wording:
+          // report what actually happened (the command ended) and name the one
+          // check that does prove elevation.
           console.error(
             code === 130 || code === 143
               ? c.red(`[ath] "${name}" was interrupted (exit ${code}) — NOT answered.`)
-              : c.green(`[ath] "${name}" answered — exit ${code}.`),
+              : c.green(`[ath] "${name}" — prompt answered, command finished with exit ${code}.`) +
+                (code === 0
+                  ? c.dim(
+                      `\n[ath] That the prompt was answered is what this observed. Exit 0 does\n` +
+                        `      NOT prove the answer was CORRECT — a wrong password can still\n` +
+                        `      end cleanly. Verify with "sudo -n true" before relying on it.`,
+                    )
+                  : ''),
           );
           return code;
         }
@@ -685,8 +801,18 @@ async function main(): Promise<number> {
       // is filed but has no surface is not an ask, it is a dropped message.
       const open = await listAllRequests();
       if (flagBool(flags, 'clear')) {
-        for (const r of open) await clearRequest(r.id);
-        console.log(`cleared ${open.length} request(s)`);
+        // DELETE, not mark-resolved. `clearRequest` is the automatic path's
+        // verb: it keeps a resolved record so an agent can still collect the
+        // outcome. Used here it removed nothing — on an already-resolved
+        // request it merely refreshed `resolvedAt` — while still printing
+        // "cleared N request(s)". Report what was actually removed.
+        let gone = 0;
+        for (const r of open) if (await deleteRequest(r.id)) gone++;
+        console.log(
+          gone === open.length
+            ? `cleared ${gone} request(s)`
+            : `cleared ${gone} of ${open.length} request(s) — ${open.length - gone} could not be removed`,
+        );
         return 0;
       }
       if (open.length === 0) {
@@ -734,10 +860,30 @@ async function main(): Promise<number> {
         // password, an interrupt sudo turned into 1, and the command simply
         // failing, so report the code and refuse to interpret it.
         const succeeded = finished && code === 0;
+        // `resolvedAt` is POSITIVE PROOF a human dealt with this, written when
+        // it happened. Without this clause the renderer called an answered
+        // prompt "NOT answered — cancelled or timed out", because `finished`
+        // comes from polling the log and the log had been purged. An agent
+        // read that and said it would have re-prompted its human needlessly.
+        //
+        // Same root cause as the `await_human` hang: durable evidence on disk
+        // discarded in favour of an inference that cannot survive a purge.
+        const answeredOnRecord = r.resolvedAt !== undefined;
         const abandoned =
-          r.parked === true && !finished && state !== undefined && state !== 'needs-input';
+          r.parked === true &&
+          !finished &&
+          !answeredOnRecord &&
+          state !== undefined &&
+          state !== 'needs-input';
         const tag = state === undefined
-          ? c.red('SESSION GONE — the answer was lost')
+          ? // A killed session does NOT mean the answer was lost, if the record
+            // says it was answered before the session went away. Claiming the
+            // loss is the same falsehood as "NOT answered", in a third place —
+            // all three branches inferred from live state and ignored the one
+            // durable fact written at the moment the human acted.
+            answeredOnRecord
+            ? c.green('answered — session has since been killed')
+            : c.red('SESSION GONE — the answer was lost')
           : succeeded
             ? c.green(`DONE — exit 0`)
             : finished && interrupted
@@ -746,19 +892,54 @@ async function main(): Promise<number> {
                 ? c.yellow(`finished — exit ${code} (not proof anyone answered)`)
                 : abandoned
                   ? c.red('NOT answered — the prompt was cancelled or timed out')
-                  : r.parked
-                    ? c.yellow('waiting for a human')
-                    : c.yellow('blocked — needs you, session not held');
+                  : answeredOnRecord
+                    ? c.green('answered — resolved, outcome no longer in the log')
+                    : r.parked
+                      ? c.yellow('waiting for a human')
+                      : c.yellow('blocked — needs you, session not held');
         console.log(`${c.yellow(r.id)}  ${c.bold(r.session)}  ${age} ago  ${tag}`);
-        console.log(`      ${r.reason}`);
+        // The reason is stored VERBATIM when the request is filed, so it is
+        // written in the present tense — "is waiting at a prompt… attach and
+        // answer it". Printed unchanged under a status line reading "DONE",
+        // the two lines contradict each other, and the imperative is the one a
+        // skimming reader acts on. An agent said it "would plausibly re-ping
+        // you about something answered three minutes ago" — which is the
+        // failure the request queue exists to prevent, rebuilt one line lower.
+        //
+        // The text is still worth showing: it is the record of what was asked.
+        // It just has to stop reading as a live instruction.
+        const settled = finished || r.resolvedAt !== undefined;
+        console.log(settled ? c.dim(`      (asked) ${r.reason}`) : `      ${r.reason}`);
         if (finished && r.handle) {
-          console.log(`      collect it: ath poll ${r.session} --handle ${r.handle}`);
+          // Say where the handle came from. An agent that ran the command with
+          // `run` was offered a handle it had never been given, and called it
+          // "something not in my context".
+          console.log(
+            c.dim(`      collect it: ath poll ${r.session} --handle ${r.handle}`) +
+              c.dim(' (the hub minted this handle; every framed command has one)'),
+          );
         }
       }
       return 0;
     }
 
     case 'doctor': {
+      // `--artifacts` answers "what did this leave on my machine?" — a question
+      // the hub could not previously answer from any surface, while writing to
+      // ten places and documenting four of them.
+      if (flagBool(flags, 'artifacts')) {
+        console.log(`Everything the hub writes, under ${ATH_HOME}\n`);
+        for (const a of ATH_ARTIFACTS) {
+          const size = fmtBytes(await pathSize(a.absolute));
+          const tag = a.purged ? c.yellow('purged') : c.dim('kept  ');
+          console.log(`  ${a.name.padEnd(20)} ${size.padStart(9)}  ${tag}  ${a.holds}`);
+          console.log(`  ${' '.repeat(31)}  ${c.dim(`bounded: ${a.bounded}`)}`);
+        }
+        console.log(
+          `\n  ${c.dim('ath purge <name>')} clears only the line marked "purged", and only for that session.`,
+        );
+        return 0;
+      }
       const { ok, checks } = await doctor();
       for (const [label, pass, detail] of checks) {
         console.log(`${pass ? c.green('ok  ') : c.red('FAIL')}  ${label.padEnd(24)} ${c.dim(detail)}`);
@@ -782,6 +963,45 @@ async function main(): Promise<number> {
       console.error(`unknown command: ${command}\n`);
       console.log(HELP);
       return 2;
+  }
+}
+
+function fmtBytes(n: number): string {
+  if (n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+/**
+ * Bytes at a path, whether it is a file or a directory.
+ *
+ * One level deep, not recursive: every artifact directory the hub writes is
+ * flat, and a recursive walk here would be answering a question nobody asked
+ * while giving `ssh/` a chance to follow a socket.
+ */
+async function pathSize(p: string): Promise<number> {
+  try {
+    const st = await fsp.stat(p);
+    if (!st.isDirectory()) return st.size;
+    const names = await fsp.readdir(p);
+    let total = 0;
+    for (const n of names) {
+      try {
+        const s = await fsp.lstat(nodePath.join(p, n));
+        if (s.isFile()) total += s.size;
+      } catch {
+        /* raced */
+      }
+    }
+    return total;
+  } catch {
+    return 0; // not created yet
   }
 }
 

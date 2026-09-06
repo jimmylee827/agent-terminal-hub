@@ -1,6 +1,6 @@
 ---
 name: agent-terminal
-description: Use a persistent terminal that the human shares, via the `ath` CLI or the agent-terminal-hub MCP tools. Use when a task needs shell state to survive between calls (exports, virtualenvs, an ssh connection, a dev server), when a command may need sudo or any password, when working on a remote host, or when the user mentions ath, a terminal session, or asks you to keep a terminal open.
+description: Use a persistent terminal that the human shares, via the `ath` CLI or the agent-terminal-hub MCP tools. Use when a task needs shell state to survive between calls (exports, virtualenvs, an ssh connection, a dev server), when a command may need sudo or any password, when a command may run long or hang and you would want to watch it, interrupt it, or answer a prompt it raises (builds, installs, migrations, `docker exec`, anything interactive), when working on a remote host, or when the user mentions ath, a terminal session, or asks you to keep a terminal open.
 ---
 
 # Shared terminal sessions
@@ -25,8 +25,9 @@ else — you say so, and they type it into the same terminal you are using.
    handoff. But anything typed at an *ordinary* prompt — an API key, a
    token — IS in the log and will appear in your `read` output. Do not repeat
    such a value back, quote it, or write it anywhere; tell the user it is in
-   the session log and that `ath purge <name>` clears it.
-3. **`needsInput` is a handoff, not an error.** Report it and stop. Do not
+   the session log and that `ath purge <name>` clears it. Say plainly that
+   purge clears the transcript **only** — see "What this leaves on disk".
+3. **`needs_input` is a handoff, not an error.** Report it and stop. Do not
    retry, do not try `sudo -S`, do not work around it.
    When you come back, note that **an exit code cannot tell you a human
    answered.** Only exit 0 says the command did what it was asked; any other
@@ -35,6 +36,27 @@ else — you say so, and they type it into the same terminal you are using.
    The hub reports the code and refuses to interpret it — do the same, and
    confirm elevation with `sudo -n true` before relying on it.
 4. **Do not kill sessions you did not create**, unless asked.
+
+## Which surface to use
+
+**If the `agent_terminal` MCP tools are in your tool list, use them.** Same
+semantics, typed arguments, no shell quoting: `list`, `new`, `run`, `start`,
+`poll`, `read`, `send`, `request_human`, `requests`, `await_human`, `kill`.
+Reach for the `ath` CLI only when MCP is not registered, or for `attach`,
+`purge`, `doctor` and `watch`, which have no MCP equivalent by design.
+
+The examples below are written in CLI syntax because it is the more compact
+form to read. **Both surfaces use the same field names** — `exit_code`,
+`needs_input`, `timed_out`, `next_offset`, `log_offset`, `last_command`,
+`pane_width` — so nothing needs translating as you read. (They diverged once,
+CLI camelCase against MCP snake_case, and this file carried a mapping table;
+an agent noted that a table "means the doc knows this is a cost and passes it
+to me anyway". Both now serialise through one function.)
+
+MCP results additionally carry fields the CLI prints as prose rather than data:
+`what_to_do`, `parallel_work`, `exit_code_covers`, `took_seconds`,
+`human_requested`, `recorded_to`, `warning`. Read `what_to_do` first when it is
+present — it is the instruction, and the rest is context for it.
 
 ## Commands
 
@@ -65,7 +87,7 @@ ath poll web --handle <h> --since <n> --json
 # -> { done, exitCode, output, nextOffset }
 ```
 
-Pass the previous `nextOffset` back as `--since` each time so you get only
+Pass the previous `next_offset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin.
 
@@ -79,16 +101,9 @@ Do not test this with a command that finishes quickly. A job that ends in a
 second leaves the session idle again before you look, which reads as "the
 session stayed usable" and is how you end up building on the wrong model.
 
-With MCP available, prefer the typed tools — same semantics. They are namespaced
-under the `agent_terminal` server: `mcp__agent_terminal__list`, `__new`, `__run`,
-`__start`, `__poll`, `__read`, `__send`, `__request_human`, `__requests`,
-`__await_human`, `__kill`. The whole credential handoff can be driven from MCP
-alone — `__requests` to see what is outstanding, `__await_human` instead of
-polling in a loop.
-
 The offset you pass back when polling is per SESSION, not per handle. It keeps
 climbing across jobs, so hand back whatever you were last given rather than
-assuming a new job starts at zero. (The CLI calls it `nextOffset`; the MCP
+assuming a new job starts at zero. (The CLI calls it `next_offset`; the MCP
 tools use the snake_case spelling.)
 
 ## When a command needs a password
@@ -119,6 +134,10 @@ the same text, and the **MCP** tools return `human_requested: true` plus a
 `what_to_do` saying the request is already filed. Whichever surface you are on,
 the result itself tells you — you should never have to check `ath requests` to
 discover that a request exists. If the result says nothing, none was filed.
+
+The whole handoff can be driven from MCP alone: `request_human` to raise the
+editor notification, `requests` to see what is outstanding, and `await_human`
+instead of polling in a loop.
 
 `ath ls` marks the session `asked-for-you` while a request is outstanding, and
 stops once the command it describes has finished. `ath requests` lists what is
@@ -246,10 +265,10 @@ Fields worth checking on the `--json` form:
 
 | Field | Meaning |
 |---|---|
-| `exitCode` | The real exit status. `null` if it did not finish. |
-| `needsInput` | Waiting on a human. Hand off; do not retry. |
-| `timedOut` | Still running. Output is partial; poll with `ath read`. |
-| `shellExited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
+| `exit_code` | The real exit status. `null` if it did not finish. |
+| `needs_input` | Waiting on a human. Hand off; do not retry. |
+| `timed_out` | Still running. Output is partial; poll with `ath read`. |
+| `shell_exited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
 
 ## What the shared terminal looks like
 
@@ -279,21 +298,88 @@ A plain `exit` there returns you one level, it does not end the session.
 - **`owner`** is `agent` when the CLI is driven from inside a hub pane or
   without a TTY, `human` otherwise. It says who the terminal belongs to, not
   who typed the last command.
-- **`cwd` vs `remoteCwd` in `--json`.** For a remote session `cwd` is the LOCAL
-  pane path, which is the launcher, not where your commands run. `remoteCwd` is
+- **`cwd` vs `remote_cwd` in `--json`.** For a remote session `cwd` is the LOCAL
+  pane path, which is the launcher, not where your commands run. `remote_cwd` is
   the truth. The human-readable `ath ls` already shows `host:path`.
-- **`ath ls --json` omits `paneTail`** — the whole visible pane, several KB.
+- **`ath ls --json` omits `pane_tail`** — the whole visible pane, several KB.
   Pass `--full` if you actually want it.
-- **`remoteEnv` accumulates**, last write winning per variable, and holds both
+- **`remote_env` accumulates**, last write winning per variable, and holds both
   the assignments this session made and ones a human typed. It is replayed
   after a reconnect.
 - **`ath run` output is real capture**, not a screen scrape: it is read from the
   pipe-pane log between markers, so long output is neither wrapped nor
-  truncated. `paneTail` is a screen capture and IS wrapped — the two are
+  truncated. `pane_tail` is a screen capture and IS wrapped — the two are
   different mechanisms, which is why they can disagree.
+
+  **Your output cannot impersonate a marker.** Every real marker is wrapped in
+  a control byte the shell never emits by accident, so a command that prints
+  `<ATHE:deadbeefcafe:99:…>` — deliberately or from a log it is echoing — is
+  passed through as ordinary output and the real exit code still wins. Print
+  whatever you like; you cannot end your own command early or forge its status.
 - **`ath requests` keeps resolved requests for an hour**, labelled `ANSWERED`,
   `NOT answered — interrupted`, or `SESSION GONE`. An empty list means nothing
   was ever filed.
+
+## Questions the rest of this file kept raising
+
+Four things a cold agent worked out it could not answer from the docs. The
+answers are cheap to state and each one changes a decision.
+
+**A command can be both timed out and parked.** `timed_out` and `needs_input` are
+independent flags, not a choice. If a command parks at a prompt one second
+before its timeout you get **both** true — and the human request is still filed,
+because parking is what files it. Act on `needs_input` first: a timeout you can
+retry, a prompt you cannot. Only `timed_out` alone means "still running".
+
+**A prompt has to be quiet to count.** Detection is pattern-based over the last
+pane line, unwrapped first so a hard-wrapped line is not mistaken for two. But a
+match alone is not enough — output must go quiet for **1.2 s** before a
+prompt-shaped line is treated as parked. So a command printing a prompt-like
+string in a stream of output does not trip it, and a genuinely slow command is
+never mistaken for a parked one unless it also stops printing.
+
+**`took_seconds` is measured by the shell that ran the command, not estimated
+by the hub.** It is exact and does not depend on how often you polled — a
+44-second job polled once, ten seconds late, still reports 44.
+
+The old estimate is still there as a fallback, and you can tell them apart: an
+exact figure arrives as `took_seconds`, a fallback as `ran_between_seconds`
+with a `timing_note` saying so. You will only see the fallback where the remote
+shell has no `date`. If you do get a bracket, treat it as "when the hub
+looked", not as a duration — its upper bound is the first moment *any* code
+path noticed the command had finished, which may be the editor's watcher rather
+than your own call, so it can be far wider than your polling interval.
+
+**Two remote sessions to the same host share one ssh connection, not one
+shell.** `ControlMaster` keeps a single TCP connection per host, so the second
+session costs no handshake — but each gets its own channel and its own TTY.
+That is why the sudo timestamp does *not* carry across them and each needs its
+own password. One connection, two terminals.
+
+## What this leaves on disk
+
+Every session is recorded. `pipe-pane` appends **everything printed in the
+pane** — your commands, your output, and the human's, whether or not you read
+it — to `~/.ath/log/<session>.log`. It outlives the session, the agent and the
+editor. Nothing rotates it until 32 MB.
+
+Tell the user this exists when it matters (before they type a secret at an
+echoing prompt, or after they already have). Do not treat `kill` as cleanup.
+
+`ath purge <name>` truncates **that one transcript**, and nothing else. Two
+things survive it and still describe what happened:
+
+| survives purge | holds |
+| --- | --- |
+| `~/.ath/requests/` | the reason text of each human request — it **quotes the command** |
+| `~/.ath/rc/` | exit codes and timings per command. No command text. Reaped after 6h |
+
+`ath doctor --artifacts` prints the full list of ten, with sizes and what each
+one is bounded by. Use it when the human asks what the hub left behind; do not
+guess from this table, which names only the two that matter most.
+
+A password prompt is the one safe case: it echoes nothing, so the password is
+in no file, and there is nothing to purge after a sudo handoff.
 
 ## Gotchas
 
@@ -317,12 +403,11 @@ A plain `exit` there returns you one level, it does not end the session.
   panel attaches one per session it displays, so a session nobody has touched
   commonly shows 1. Use it to know someone *could* be watching, never as proof
   a human is present.
-- Timing is exact only while a command is RUNNING. Once it has finished the hub
-  can only bracket it — it never sees the instant a command ends, just when
-  something looked — so it reports a bound if you polled while the job ran, and
-  reports nothing at all if you did not. A withheld number is deliberate: an
-  earlier version guessed, and a 47-second job came back as 256. If you need a
-  real duration, time the command itself.
+- Timing is measured by the shell, so it is exact and independent of your
+  polling. Three earlier versions of this field were estimates and all three
+  were badly wrong — a 47-second job reported as 256, and a 44-second job as
+  `[38, 185]` — which is why it now comes from the machine that ran the command
+  rather than from anything the hub observed.
 - **If the ssh connection drops**, the session does not die and does not hang.
   The next command reconnects automatically and comes back with
   `reconnecting: true` — the working directory and anything this session
@@ -348,6 +433,25 @@ A plain `exit` there returns you one level, it does not end the session.
   (`--json`, `-o` fields, `--no-headers`), sanity-check that totals add up, or
   filter the repeats (`grep -v '^ *r '`). Anything width- or height-aware —
   `vmstat`, `iostat`, `ps`, `docker ps`, `column`, `top` — can do this.
+- **The pane width can CHANGE BETWEEN TWO CALLS, so output shape is not stable
+  within one session.** This is the part that catches people: it is not that
+  the pane is narrow, it is that it does not stay the same. The terminal is
+  shared, and a human attaching resizes it — `window-size latest` is deliberate,
+  because a person should not be handed a pane wrapped to someone else's
+  dimensions. So a column layout you calibrated on one call can silently differ
+  on the next, with nothing announcing the change.
+
+  One agent watched `lsblk` print `MOUNTPOIN`, reported a truncation defect,
+  then re-measured and found the pane at 156 columns printing `MOUNTPOINT` in
+  full — the width had moved underneath it because someone attached in between.
+  It was right the first time about what it saw and wrong about why.
+
+  Check it with `pane_width` in `list`, set it at creation with `--width` /
+  `width`, and change it on a live session with `ath width <name> <cols>` (or
+  the `width` MCP tool) — which costs nothing, where recreating the session
+  would throw away the sudo timestamp and cost your human another password.
+  None of that makes it *guaranteed*: the only real defence is output that does
+  not depend on width.
 - `ath send` takes tmux **key names**, not prose. `ath send x -- 'hello world'`
   is rejected; use `--text` to type literal text.
 - A reconnect restores the working directory and the variables **this session
@@ -360,4 +464,4 @@ A plain `exit` there returns you one level, it does not end the session.
   it as a local command.
 - `exit` inside a session ends the shell your command ran in. In a remote or
   nested shell that drops you one level out rather than killing the session,
-  and you get `shellExited`. Prefer `(exit 1)` when you just want a code.
+  and you get `shell_exited`. Prefer `(exit 1)` when you just want a code.

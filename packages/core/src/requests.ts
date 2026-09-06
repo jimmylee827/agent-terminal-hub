@@ -124,6 +124,26 @@ export async function clearRequest(id: string): Promise<void> {
   }
 }
 
+/**
+ * Delete a request outright, for a human who said "get rid of it".
+ *
+ * `clearRequest` MARKS resolved — correct for the automatic path, where a
+ * resolved record is kept so an agent can still learn its outcome. It is the
+ * wrong verb for `ath requests --clear`, which reached for it and therefore
+ * deleted nothing: on an already-resolved request it just rewrote `resolvedAt`
+ * to now. An agent ran it twice, was told "cleared 1 request(s)" both times,
+ * and had to remove the file by hand — a command reporting success while doing
+ * nothing, in the one workflow this tool exists for.
+ */
+export async function deleteRequest(id: string): Promise<boolean> {
+  try {
+    await fs.unlink(path.join(REQUEST_DIR, `${id}.json`));
+    return true;
+  } catch {
+    return false; // already gone
+  }
+}
+
 /** Every request, resolved ones included. `listRequests` returns only open. */
 export async function listAllRequests(): Promise<HumanRequest[]> {
   return listRequests({ includeResolved: true });

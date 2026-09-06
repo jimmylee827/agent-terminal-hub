@@ -284,6 +284,26 @@ export async function setMeta(name: string, key: string, value: string): Promise
   await tmux(['set-option', '-t', tmuxName(clean), `@ath_${key}`, safe]);
 }
 
+/**
+ * Read back one stored value.
+ *
+ * `get()` returns the fields `list()` was taught to parse; this is for state
+ * that only one caller cares about and does not belong in every session
+ * summary. Missing options answer empty rather than throwing, because "not set
+ * yet" is the ordinary first case, not an error.
+ */
+export async function readMeta(name: string, key: string): Promise<string> {
+  const clean = validateName(name);
+  const out = await tmux([
+    'show-options',
+    '-qv',
+    '-t',
+    tmuxName(clean),
+    `@ath_${key}`,
+  ]).catch(() => ({ stdout: '' }));
+  return (out.stdout ?? '').trim();
+}
+
 /** Shells whose syntax the POSIX `__ath` helper is valid in. */
 const POSIX_SHELLS = ['zsh', 'bash', 'sh', 'dash', 'ksh'];
 
@@ -750,6 +770,36 @@ export async function rename(from: string, to: string): Promise<void> {
 
 export async function setPinned(name: string, pinned: boolean): Promise<void> {
   await setMeta(name, 'pinned', pinned ? '1' : '0');
+}
+
+/**
+ * Resize a LIVE session's pane.
+ *
+ * Width was settable only at creation, so an agent that discovered its output
+ * was being truncated had exactly one remedy: destroy the session and make a
+ * wider one — which throws away the sudo timestamp with it and costs the human
+ * another password. That is a steep price for a column layout.
+ *
+ * It does not make the width permanent, and nothing here pretends otherwise:
+ * `window-size latest` means the next client to attach sets the size again,
+ * deliberately, because a person should not be handed a pane wrapped to
+ * someone else's terminal. This buys back the ability to re-assert it.
+ */
+export async function setWidth(name: string, cols: number, rows?: number): Promise<number> {
+  const clean = validateName(name);
+  const width = Math.min(Math.max(Math.floor(cols), 20), 2000);
+  const current = await get(clean);
+  const height = rows === undefined ? undefined : Math.min(Math.max(Math.floor(rows), 5), 500);
+  await tmux([
+    'resize-window',
+    '-t',
+    tmuxName(clean),
+    '-x',
+    String(width),
+    ...(height === undefined ? [] : ['-y', String(height)]),
+  ]);
+  void current;
+  return width;
 }
 
 /** Kill unpinned sessions that have been idle longer than `maxIdleMs`. */

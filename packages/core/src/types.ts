@@ -115,6 +115,16 @@ export interface RunResult {
    */
   shellExited?: boolean;
   /**
+   * The pane was resized since this session's previous command.
+   *
+   * The one condition in the hub that can silently corrupt output, and until
+   * now the one with no runtime signal: a human attaching to answer a password
+   * prompt resizes the pane, so a column layout calibrated before the handoff
+   * reads differently after it. Two agents hit it; the second put it plainly —
+   * "the errors are excellent; the silent state changes are the gap".
+   */
+  paneWidthChanged?: { from: number; to: number };
+  /**
    * Present when the command is still running (a prompt or a timeout). Pass it
    * to `poll` to pick the same command back up rather than re-running it.
    */
@@ -151,6 +161,15 @@ export interface StartResult {
   handle: string;
   /** Byte offset to pass as the first `poll(..., since)`. */
   offset: number;
+  /**
+   * A hazard in the command itself, same as `run` reports.
+   *
+   * `start` computed none at all, so a command whose stderr was discarded ran
+   * silently here while the identical command through `run` was flagged. A
+   * cold agent lost 50 GB from a `du` total that way — the guard existed and
+   * simply was not wired to this path.
+   */
+  warning?: string;
 }
 
 export interface PollResult {
@@ -203,6 +222,20 @@ export interface CreateOptions {
   pin?: boolean;
   owner?: string;
   label?: string;
+  /**
+   * Pane columns. Defaults to 200.
+   *
+   * Worth setting wide when output will be PARSED: tmux truncates to the pane,
+   * so `lsblk -o …,MOUNTPOINT` printed its header as `MOUNTPOIN` at 156
+   * columns and anything read by column position would have been silently
+   * wrong. An agent hit exactly that and could find no lever for it.
+   *
+   * It is not a guarantee. `window-size latest` means a human attaching sets
+   * the size — which is the correct trade for a terminal they share, and why
+   * one session measured 156 (a person attached to type a password) while its
+   * sibling stayed at 200. For output you intend to parse, prefer a format
+   * that does not depend on width at all: `--json`, `--format`, `-o`.
+   */
   width?: number;
   height?: number;
 }

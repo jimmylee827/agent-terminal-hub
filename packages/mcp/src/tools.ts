@@ -34,6 +34,13 @@ export const TOOL_DEFINITIONS = [
           description: 'Alias for `name`, since every other tool calls it `session`.',
         },
         cwd: { type: 'string', description: 'Working directory to start in.' },
+        width: {
+          type: 'integer',
+          description:
+            'Pane columns (default 200). tmux TRUNCATES output to the pane width, so a wide ' +
+            'value protects anything you intend to parse by column. Not a guarantee: a human ' +
+            'attaching resizes the pane. For parsing, prefer --json/--format/-o instead.',
+        },
         remote: { type: 'string', description: 'Host to ssh into immediately, e.g. "myserver".' },
         pin: { type: 'boolean', description: 'Protect from automatic cleanup.' },
         label: { type: 'string', description: 'Human-readable note shown in the GUI.' },
@@ -50,7 +57,13 @@ export const TOOL_DEFINITIONS = [
       'command is waiting on a password or a confirmation prompt. Do NOT attempt to answer it and ' +
       'never send a credential — report it to the human, who is attached to the same terminal and ' +
       'will type it. Then continue with the `read` tool. (The CLI signals these as exit codes 75 ' +
-      'and 76; here they are the `needs_input` and `timed_out` fields instead.)',
+      'and 76; here they are the `needs_input` and `timed_out` fields instead.) ' +
+      // The second architecture-determining fact. Same reason as `start`: an
+      // agent reading only the schemas plans the wrong session layout, and
+      // discovers it after its human has already typed one password.
+      'SUDO DOES NOT CROSS SESSIONS: the credential timestamp is per-TTY, so a password typed ' +
+      'in one session does not cover another and the human is asked again. Keep all privileged ' +
+      'work in ONE session.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -98,7 +111,15 @@ export const TOOL_DEFINITIONS = [
       'Start a command WITHOUT waiting for it, returning a handle. Use this for anything ' +
       'long-lived — a dev server, a long build, a migration — where blocking is the wrong shape. ' +
       'Poll it with the `poll` tool to get incremental output and, eventually, the real exit code. ' +
-      'For ordinary commands prefer the `run` tool, which just waits.',
+      'For ordinary commands prefer the `run` tool, which just waits. ' +
+      // The fact that decides the ARCHITECTURE, stated where an agent reading
+      // only the schemas will see it. A cold agent noted that these two facts
+      // live in the skill file and nowhere else, so "an agent working from tool
+      // schemas alone gets this wrong" — and would run sudo in a backgrounded
+      // session, costing its human a second password.
+      'NON-BLOCKING FOR YOU, BUT THE SESSION GOES BUSY: the next command sent to this same ' +
+      'session is refused until this finishes. Concurrent work needs a SECOND session, created ' +
+      'in advance — not this tool twice.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -232,7 +253,96 @@ export const TOOL_DEFINITIONS = [
       additionalProperties: false,
     },
   },
+  
+  
   {
+    name: 'wait',
+    annotations: { title: 'Wait for a session to go idle', readOnlyHint: true, destructiveHint: false },
+    description:
+      'Block until a session finishes what it is doing, or until the timeout. Use this after ' +
+      '`start` instead of calling `poll` in a loop — an agent without it polled a 20-second job ' +
+      'at 19 seconds and was effectively blind for the whole run. Returns as soon as the session ' +
+      'is idle; if it is waiting on a human instead, that is reported rather than waited out, ' +
+      'because no amount of waiting will clear a password prompt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'Session to wait on.' },
+        timeout_seconds: {
+          type: 'integer',
+          description: 'Give up after this long (default 60, max 300). Returns still_running.',
+        },
+      },
+      required: ['session'],
+      additionalProperties: false,
+    },
+  },
+
+  {
+    name: 'width',
+    annotations: { title: 'Set pane width', readOnlyHint: false, destructiveHint: false },
+    description:
+      "Re-assert a LIVE session's pane width, in columns. tmux truncates output to the pane, " +
+      'and the width is NOT stable — the terminal is shared, so a human attaching resizes it, ' +
+      'and a column layout you calibrated on one call can differ on the next. Use this when you ' +
+      'find output being cut; the alternative used to be recreating the session, which discards ' +
+      'the sudo timestamp and costs your human another password. Check the current value with ' +
+      '`pane_width` in `list`. For anything you intend to parse, width-independent output ' +
+      '(--json, -o fields, --no-headers) remains the only real defence.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'Session to resize.' },
+        columns: { type: 'integer', description: 'Pane width in columns (20-2000).' },
+      },
+      required: ['session', 'columns'],
+      additionalProperties: false,
+    },
+  },
+{
+    name: 'purge',
+    annotations: { title: 'Erase a session transcript', readOnlyHint: false, destructiveHint: true },
+    description:
+      "Erase a session's recorded transcript. Every session is recorded to " +
+      '~/.ath/log/<name>.log — every command and every byte of output — and that file SURVIVES ' +
+      '`kill`. Use this when you were told to leave nothing behind, or when something sensitive ' +
+      'was printed. It clears the transcript ONLY: ~/.ath/requests/ still holds the reason text ' +
+      'of any human request, which quotes the command, and ~/.ath/rc/ holds exit codes and ' +
+      'timings for about 6 hours. Run `doctor` for the full list of what is left.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session: { type: 'string', description: 'Session whose transcript to erase.' },
+      },
+      required: ['session'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'doctor',
+    annotations: { title: 'What the hub left on disk', readOnlyHint: true, destructiveHint: false },
+    description:
+      'List everything the hub has written to this machine, with sizes, and say which of it ' +
+      '`purge` removes. Use it to answer "what did this leave behind?" before reporting that a ' +
+      'task left nothing.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'unpin',
+    annotations: { title: 'Unpin a session', readOnlyHint: false, destructiveHint: false },
+    description:
+      'Remove a pin so the session can be killed. A pin marks a terminal as protected; `kill` ' +
+      'refuses a pinned session. If YOU pinned it, this is how you undo that — previously there ' +
+      'was no way back from an MCP-only session, and the refusal said a human had claimed the ' +
+      'terminal even when the agent had pinned it itself.',
+    inputSchema: {
+      type: 'object',
+      properties: { session: { type: 'string', description: 'Session to unpin.' } },
+      required: ['session'],
+      additionalProperties: false,
+    },
+  },
+{
     name: 'kill',
     annotations: { title: 'Close a terminal', readOnlyHint: false, destructiveHint: true },
     description:

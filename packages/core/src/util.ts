@@ -220,3 +220,29 @@ export function formatDuration(seconds: number): string {
   if (h < 24) return `${h}h${m % 60 ? ` ${m % 60}m` : ''}`;
   return `${Math.floor(h / 24)}d${h % 24 ? ` ${h % 24}h` : ''}`;
 }
+
+/**
+ * Convert an object's keys to the snake_case both surfaces speak.
+ *
+ * The CLI dumped internal objects verbatim (`exitCode`) while MCP hand-mapped
+ * them (`exit_code`), so the same field had two names one call apart. The
+ * skill file grew a translation table — which, as the agent who paid for it
+ * put it, "means the doc knows this is a cost and passes it to me anyway".
+ *
+ * One function rather than a second hand-written map: a hand-written one is
+ * how they diverged in the first place, and it would drift again the next time
+ * a field is added. Keys only — values are never touched, so a path, a command
+ * or base64 passes through byte-exact.
+ */
+export function toWire<T>(value: T): unknown {
+  if (Array.isArray(value)) return value.map((v) => toWire(v));
+  if (value === null || typeof value !== 'object') return value;
+  // Date, Buffer and friends are values, not records: converting their keys
+  // would corrupt them.
+  if (Object.getPrototypeOf(value) !== Object.prototype) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()] = toWire(v);
+  }
+  return out;
+}

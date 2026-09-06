@@ -199,23 +199,45 @@ if [ "${INTERNAL_CONTRACT:-0}" = "1" ]; then
 pass=0; fail=0; failed=()
 chk() { if [ "$2" = "$3" ]; then pass=$((pass+1)); else fail=$((fail+1)); failed+=("$1")
   printf '  FAIL %s\n       expected: %s\n       actual:   %s\n' "$1" "$2" "$3"; fi; }
-SK="$(cd "$(dirname "$0")/.." && pwd)/skills/agent-terminal/SKILL.md"
+RP="$(cd "$(dirname "$0")/.." && pwd)"
+SK="$RP/skills/agent-terminal/SKILL.md"
 C="_tc$$"
 echo "═══ CONTRACT ═══"
 $ATH_BIN new "$C" --cwd /tmp >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8; do $ATH_BIN ls 2>/dev/null | grep -q "^$C .*idle" && break; sleep 1; done
 
 J="$($ATH_BIN run "$C" --json -- 'true' 2>/dev/null)"
-for f in exitCode timedOut needsInput logOffset; do
+for f in exit_code timed_out needs_input log_offset; do
   chk "run --json emits $f" "yes" "$(printf '%s' "$J" | grep -q "\"$f\"" && echo yes || echo no)"
 done
-# the exact trap: a field the docs name but the tool never emits
-chk "docs name no field the tool lacks" "0" \
-    "$(grep -oE '\`(exit_code|needs_input|timed_out|next_offset|shell_exited)\`' "$SK" 2>/dev/null | wc -l | tr -d ' ')"
+# The exact trap: a field the docs name but NEITHER surface emits.
+#
+# This used to ban the snake_case spellings outright, assuming the skill file
+# described the CLI only. That assumption expired: three cold agents worked
+# almost entirely through MCP and one called the CLI-shaped doc "a translation
+# tax on every read", so the file now carries an explicit CLI-to-MCP field
+# mapping. Banning those names would ban the fix.
+#
+# The original intent survives — a doc must not name a field nothing emits — so
+# this now verifies the mapping is TRUE rather than absent.
+for f in exit_code needs_input timed_out next_offset; do
+  if grep -q "$f" "$SK" 2>/dev/null; then
+    chk "doc's MCP field $f really exists" "yes" \
+        "$(grep -q "$f" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+  fi
+done
+# `shell_exited` was on this list when the doc was CLI-only and the tool emitted
+# `shellExited`; the snake_case spelling was invented then. After unification it
+# is the REAL name — verified emitted on `run --json` when a shell exits — so
+# banning it would ban the truth. Second check in this suite to outlive its own
+# assumption after that rename; the first was "docs name no field the tool
+# lacks", which banned the very spellings the fix introduced.
+chk "docs name no invented field" "0" \
+    "$(grep -oE '`(exit_status|is_done|exitStatus|isDone)`' "$SK" 2>/dev/null | wc -l | tr -d ' ')"
 
 L="$($ATH_BIN ls --json 2>/dev/null)"
-chk "ls --json omits paneTail"   "no"  "$(printf '%s' "$L" | grep -q '"paneTail"' && echo yes || echo no)"
-chk "ls --json --full keeps it"  "yes" "$($ATH_BIN ls --json --full 2>/dev/null | grep -q '"paneTail"' && echo yes || echo no)"
+chk "ls --json omits pane_tail"  "no"  "$(printf '%s' "$L" | grep -q '"pane_tail"' && echo yes || echo no)"
+chk "ls --json --full keeps it"  "yes" "$($ATH_BIN ls --json --full 2>/dev/null | grep -q '"pane_tail"' && echo yes || echo no)"
 chk "agent-created owner"        "agent" "$(printf '%s' "$L" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const s=JSON.parse(d).find(x=>x.name===process.argv[1]);process.stdout.write(s.owner)}catch(e){process.stdout.write("?")}})' "$C")"
 
 # every command the skill tells an agent to run must exist
@@ -246,6 +268,494 @@ fi
 chk "skill mentions ath await"   "yes" "$(grep -q 'ath await' "$SK" && echo yes || echo no)"
 chk "skill drops the dead idiom" "no"  "$(grep -qF "until ath requests" "$SK" && echo yes || echo no)"
 
+# ---- disclosure: what the hub leaves behind, said where it is read ---------
+#
+# A cold agent rated the tool 8/10 and found no bugs, having driven it for a
+# full survey — and never learned that every byte was being recorded, because
+# no surface said so. These assertions exist so that silence cannot come back.
+# They check the DELIVERY, not the data: an earlier warning was computed
+# correctly and displayed by neither surface, and the tests passed because they
+# read --json, which dumps every field whether or not a human would ever see it.
+
+chk "new discloses the transcript" "yes" \
+    "$($ATH_BIN new "${C}d" --cwd /tmp 2>&1 | grep -q 'recording to:' && echo yes || echo no)"
+
+# kill must name BOTH the surviving file and the command that removes it.
+KOUT="$($ATH_BIN kill "${C}d" --force 2>&1)"
+chk "kill names the surviving transcript" "yes" \
+    "$(printf '%s' "$KOUT" | grep -q 'transcript kept:' && echo yes || echo no)"
+chk "kill names the purge command"        "yes" \
+    "$(printf '%s' "$KOUT" | grep -q 'ath purge' && echo yes || echo no)"
+
+# purge must not claim more than it does.
+POUT="$($ATH_BIN purge "$C" 2>&1)"
+chk "purge states its own limit"    "yes" \
+    "$(printf '%s' "$POUT" | grep -q 'transcript only' && echo yes || echo no)"
+chk "purge names requests/ as surviving" "yes" \
+    "$(printf '%s' "$POUT" | grep -q 'requests/' && echo yes || echo no)"
+
+# The enumeration must be complete. Counted, not eyeballed: the previous count
+# was given as "six" from memory when the real figure was ten, twice in a row.
+DOUT="$($ATH_BIN doctor --artifacts 2>&1)"
+chk "doctor --artifacts lists all ten" "10" \
+    "$(printf '%s' "$DOUT" | grep -cE '^  (log/|rc/|requests/|claim/|election/|lock/|ssh/|notify\.log|helper\.sh|tmux\.conf)')"
+
+# Every directory the hub actually creates must appear in that enumeration.
+# This is the check the ATH_ARTIFACTS comment promises: the list is hand-written
+# beside the code that creates these paths, so nothing stops the two diverging.
+for d in log rc requests claim election lock ssh; do
+  chk "artifact list covers $d/" "yes" \
+      "$(printf '%s' "$DOUT" | grep -q "^  $d/" && echo yes || echo no)"
+done
+
+# Retention is exercised, not read.
+#
+# The first draft of these two grepped the SOURCE for a suffix list and a
+# symbol name — which is the same mistake as testing a warning by reading
+# --json: it confirms the code says the right thing, not that running it does
+# the right thing. Both run against a scratch ATH_HOME instead.
+RETEN="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+(async()=>{
+  // reaper: every suffix the hub writes into rc/, and nothing it does not.
+  fs.mkdirSync(path.dirname(a.rcPath("x")),{recursive:true});
+  const old=new Date(Date.now()-24*3600*1000);
+  for (const e of ["rc","t","caveat","boot","other"]) {
+    const f=path.join(path.dirname(a.rcPath("x")),`aaaa1111.${e}`);
+    fs.writeFileSync(f,""); fs.utimesSync(f,old,old);
+  }
+  out.push((await a.reapStaleRc())===4?"reap4":"reapBAD");
+  out.push(fs.existsSync(path.join(path.dirname(a.rcPath("x")),"aaaa1111.other"))?"keptUnknown":"ateUnknown");
+  // notify: under the cap nothing moves; over it, exactly one generation.
+  fs.writeFileSync(a.NOTIFY_LOG,"x".repeat(64));
+  out.push((await a.rotateNotifyLog())===false?"underNoop":"underBAD");
+  fs.writeFileSync(a.NOTIFY_LOG,"y".repeat(a.NOTIFY_MAX_BYTES+10));
+  out.push((await a.rotateNotifyLog())===true?"overRotates":"overBAD");
+  fs.writeFileSync(a.NOTIFY_LOG,"z".repeat(a.NOTIFY_MAX_BYTES+10));
+  await a.rotateNotifyLog();
+  const gens=fs.readdirSync(path.dirname(a.NOTIFY_LOG)).filter(f=>f.startsWith("notify.log."));
+  out.push(gens.length===1?"oneGeneration":"gensBAD:"+gens.length);
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "reaper covers every rc suffix"      "yes" "$(printf '%s' "$RETEN" | grep -q reap4        && echo yes || echo no)"
+chk "reaper leaves unknown files alone"  "yes" "$(printf '%s' "$RETEN" | grep -q keptUnknown  && echo yes || echo no)"
+chk "notify.log untouched under the cap" "yes" "$(printf '%s' "$RETEN" | grep -q underNoop   && echo yes || echo no)"
+chk "notify.log rotates over the cap"    "yes" "$(printf '%s' "$RETEN" | grep -q overRotates && echo yes || echo no)"
+chk "notify.log keeps ONE generation"    "yes" "$(printf '%s' "$RETEN" | grep -q oneGeneration && echo yes || echo no)"
+
+# ---- await_human must not report "still waiting" at an answered prompt -----
+#
+# Found by a cold agent mid-run. It asked for a password, the human typed it,
+# `sudo -v` exited 0 — and await_human answered `still_waiting`, so the agent
+# concluded the password had NOT been typed and went off to do other work.
+#
+# Two independent causes, so two checks. Either one alone reproduces it.
+AWAIT="$(ATH_HOME="$(mktemp -d)" node -e '
+const fs=require("fs"), path=require("path"), out=[];
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const home=process.env.ATH_HOME, S="\x1e";
+fs.mkdirSync(path.join(home,"log"),{recursive:true});
+// An agent command that finished, then the human prompt frame the shell opens
+// at every idle prompt and does not close until the person runs something.
+fs.writeFileSync(path.join(home,"log","t.log"),
+  `${S}<ATHS:c5206908f3d2>${S}\nout\n${S}<ATHE:c5206908f3d2:0:Lw==:>${S}\n${S}<ATHS:h8>${S}\n`);
+(async()=>{
+  out.push((await a.latestHandle("t"))==="c5206908f3d2"?"agentNonce":"HUMANFRAME");
+  // A resolved request must still be findable: it is the proof a human answered.
+  const r=await a.requestHuman("t","need password","agent","c5206908f3d2",true);
+  await a.clearRequest(r.id);
+  const all=await a.listAllRequests();
+  out.push(all.some(x=>x.handle==="c5206908f3d2"&&x.resolvedAt)?"resolvedVisible":"resolvedLOST");
+  out.push((await a.listRequests()).length===0?"openExcludes":"openBAD");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "latestHandle ignores human frames"      "yes" "$(printf '%s' "$AWAIT" | grep -q agentNonce      && echo yes || echo no)"
+chk "an answered request stays discoverable" "yes" "$(printf '%s' "$AWAIT" | grep -q resolvedVisible && echo yes || echo no)"
+chk "…while dropping out of the open list"   "yes" "$(printf '%s' "$AWAIT" | grep -q openExcludes    && echo yes || echo no)"
+
+# ---- start() must warn about the same hazards run() does -------------------
+#
+# A cold agent backgrounded `du -x / 2>/dev/null` and got a total 50 GB short,
+# because /var/lib/docker is root-only and the errors went to the bin. The
+# traversal guard already existed — it was simply never wired to `start`, so
+# the one command shape most likely to be backgrounded was the one nothing
+# checked. Tested through the real path, not by reading the source.
+SW="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athv$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"w",cwd:"/tmp"});
+  for(let i=0;i<10;i++){const s=await a.get("w").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const r=await a.start("w","du -x --max-depth=2 / 2>/dev/null");
+  process.stdout.write(r.warning?"warned":"SILENT");
+  await a.kill("w").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "start warns on discarded stderr" "warned" "$SW"
+
+# ---- never offer a session a human is being asked about --------------------
+#
+# `parallel_work` told an agent a session parked at a sudo prompt was "idle and
+# usable right now". State alone races the pane; an open request does not.
+PW="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.requestHuman("parked","password needed","agent","aaaaaaaaaaaa",true);
+  const asked=new Set((await a.listRequests()).map(r=>r.session));
+  process.stdout.write(asked.has("parked")?"withheld":"OFFERED");
+})();
+' 2>/dev/null)"
+chk "a session with an open request is withheld" "withheld" "$PW"
+
+# The two facts that decide the session ARCHITECTURE must be in the tool
+# schemas, not only the skill file: an agent reading schemas alone planned the
+# wrong layout and would have cost its human a second password.
+chk "start schema states the session goes busy" "yes" \
+    "$(grep -q 'SESSION GOES BUSY' "$RP/packages/mcp/src/tools.ts" && echo yes || echo no)"
+chk "run schema states sudo is per-session"     "yes" \
+    "$(grep -q 'SUDO DOES NOT CROSS SESSIONS' "$RP/packages/mcp/src/tools.ts" && echo yes || echo no)"
+
+# ---- timing is MEASURED, not observed ---------------------------------------
+#
+# Three cold agents in a row reported this field as useless: a 47s job as 256s,
+# a 44s job as a 170-second bracket, the same job as [38,185]. All three ended
+# up timing commands by hand. The shell now times itself, so the figure no
+# longer depends on when anyone looked.
+#
+# Tested with ONE LATE POLL — the exact shape that produced [38,185]. Polling
+# promptly would hide a regression back to the observation window.
+TIMING="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="atht$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"tq",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("tq").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const s=await a.start("tq","sleep 5");
+  await new Promise(r=>setTimeout(r,9000));      // look LATE, and only once
+  const p=await a.poll("tq",s.handle,s.offset);
+  process.stdout.write(`${p.done} ${p.elapsedExact} ${p.elapsedSeconds}`);
+  await a.kill("tq").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "a 5s job polled once, late, reports 5s" "true true 5" "$TIMING"
+
+# The marker must not reach the caller as output. Every marker letter has to be
+# in MARKER_LINE_RE; `D` was missed on its first day.
+chk "every marker letter is filtered from reads" "yes" \
+    "$(grep -q 'ATH\[SETRD\]' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# ---- the request record must never call an answered prompt unanswered ------
+#
+# An agent's password WAS typed and the command completed; `ath requests`
+# rendered it as "NOT answered — the prompt was cancelled or timed out",
+# because `finished` is polled from a log that had since been purged. The agent
+# said it would have re-prompted its human. `resolvedAt` is written the moment
+# a human acts and survives the purge — three separate branches ignored it.
+#
+# And `--clear` reported "cleared 1 request(s)" twice while deleting nothing:
+# it called clearRequest, which MARKS resolved, so on an already-resolved
+# record it only refreshed the timestamp.
+REQ="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  const r=await a.requestHuman("s","sudo -v is waiting","agent","abc123abc123",true);
+  await a.clearRequest(r.id);                       // the human answers
+  const rec=(await a.listAllRequests())[0];
+  const marked = rec && rec.resolvedAt ? "marked" : "NOTMARKED";
+  const gone  = (await a.deleteRequest(rec.id)) ? "deleted" : "NOTDELETED";
+  const left  = (await a.listAllRequests()).length;
+  process.stdout.write(`${marked} ${gone} left=${left}`);
+})();
+' 2>/dev/null)"
+chk "answering a request records resolvedAt" "yes" \
+    "$(printf '%s' "$REQ" | grep -q marked  && echo yes || echo no)"
+chk "--clear actually deletes the record"    "yes" \
+    "$(printf '%s' "$REQ" | grep -q deleted && echo yes || echo no)"
+chk "and nothing is left behind"             "yes" \
+    "$(printf '%s' "$REQ" | grep -q 'left=0' && echo yes || echo no)"
+# The renderer must not contradict the record it just read — asserted on the
+# TEXT A PERSON SEES, not by grepping the source for a variable name. A source
+# grep proves the code says something, never that running it prints it; that
+# distinction is why the original bug survived a passing suite.
+RH="$(mktemp -d)"
+RENDER="$(ATH_HOME="$RH" ATH_SOCKET="athr$$" sh -c '
+  '"$ATH_BIN"' new rq --cwd /tmp >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8; do '"$ATH_BIN"' ls 2>/dev/null | grep -q "^rq .*idle" && break; sleep 1; done
+  node -e "
+    const a=require(\"'"$RP"'/packages/core/dist/index.js\");
+    (async()=>{ const r=await a.requestHuman(\"rq\",\"sudo -v is waiting\",\"agent\",\"abc123abc123\",true);
+                await a.clearRequest(r.id); })();
+  " 2>/dev/null
+  '"$ATH_BIN"' requests 2>&1
+  '"$ATH_BIN"' kill rq --force >/dev/null 2>&1
+')"
+chk "an answered prompt is not called unanswered" "yes" \
+    "$(printf '%s' "$RENDER" | grep -q 'NOT answered' && echo no || echo yes)"
+chk "and is reported as answered, in words"        "yes" \
+    "$(printf '%s' "$RENDER" | grep -q 'answered' && echo yes || echo no)"
+
+# ---- warnings must not fire where they do not apply ------------------------
+#
+# Two false positives in twelve commands taught an agent to skim them, and it
+# then under-weighted the one that was correct. A warning's value is entirely
+# its credibility.
+WARN="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athw$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"w",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("w").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const hazard = await a.run("w","du -xh -d1 /etc 2>/dev/null",{timeoutMs:20000});
+  // the REMEDY: stderr to a file, with an unrelated /dev/null later in the line
+  const remedy = await a.run("w","du -xh -d1 /etc 2>/tmp/du.err; wc -l < /tmp/du.err 2>/dev/null",{timeoutMs:20000});
+  // a privileged non-interactive check that SUCCEEDS hides nothing
+  const ok = await a.run("w","sudo -n true 2>/dev/null || true",{timeoutMs:20000});
+  process.stdout.write(`${hazard.warning?"h":"H"}${remedy.warning?"R":"r"}${ok.warning?"O":"o"}`);
+  await a.kill("w").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "the real hazard still warns"                  "yes" "$(printf '%s' "$WARN" | grep -q '^h' && echo yes || echo no)"
+chk "following the advice does not re-warn"        "yes" "$(printf '%s' "$WARN" | grep -q 'r'  && echo yes || echo no)"
+chk "a successful privileged check does not warn"  "yes" "$(printf '%s' "$WARN" | grep -q 'o$' && echo yes || echo no)"
+
+# ---- an MCP-only agent must be able to clean up after itself --------------
+#
+# Two agents in a row were told to leave nothing behind and could not: `purge`,
+# `doctor` and `unpin` existed only on the CLI, so a session that began in MCP
+# could not finish there. One of them pinned its own session, was then refused
+# a kill on the grounds that "a human marked this terminal as theirs", and had
+# to shell out. Withholding purge was deliberate — discarding a record is a
+# human's decision — but an agent CARRYING OUT that instruction is executing
+# the human's decision, not substituting its own.
+for t in purge doctor unpin; do
+  chk "MCP exposes $t" "yes" \
+      "$(grep -q "name: '$t'" "$RP/packages/mcp/src/tools.ts" && echo yes || echo no)"
+done
+
+# ---- one serializer, so the two surfaces cannot drift again ---------------
+#
+# The CLI dumped internal objects verbatim (exit_code) while MCP hand-mapped
+# them (exit_code): the same field with two names one call apart, papered over
+# by a table in the docs. An agent noted a table "means the doc knows this is a
+# cost and passes it to me anyway".
+CLIKEYS="$($ATH_BIN run "$C" --json -- 'true' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(Object.keys(JSON.parse(d)).join(" "))}catch(e){process.stdout.write("x")}})')"
+for f in exit_code needs_input timed_out log_offset; do
+  chk "CLI --json emits $f" "yes" "$(printf '%s' "$CLIKEYS" | grep -q "$f" && echo yes || echo no)"
+done
+chk "and no camelCase survives" "yes" \
+    "$(printf '%s' "$CLIKEYS" | grep -qE 'exitCode|needsInput|timedOut|logOffset' && echo no || echo yes)"
+
+# ---- the truncation hazard has a lever ------------------------------------
+#
+# The docs describe tmux truncating output to the pane width, and offered no
+# way to change it: an agent watched `MOUNTPOINT` render as `MOUNTPOIN` and
+# said "the docs describe the hazard carefully and then offer no lever".
+WIDE="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athx$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"wx",cwd:"/tmp",width:500});
+  for(let i=0;i<12;i++){const s=await a.get("wx").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const r=await a.run("wx","tput cols",{timeoutMs:20000});
+  process.stdout.write(r.output.trim());
+  await a.kill("wx").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "a program inside the session sees the width it was given" "500" "$WIDE"
+
+# ---- a parked session must not show the PREVIOUS command's outcome --------
+#
+# `run` recorded a command only when it completed, so one that parked at a
+# prompt was never recorded — and `ls` kept showing the command before it,
+# beside that command's exit code. An agent watching a session parked on
+# `sudo -v` was shown `last_command: "sudo -n true", last_exit_code: 1`, which
+# read as "sudo failed" while sudo was in fact waiting for a password. It
+# called that "quietly wrong data, which is worse than an error".
+#
+# An empty exit code already means "still running" everywhere else; `run` just
+# never took part.
+PARK="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athp$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"pk",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("pk").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  await a.run("pk","false",{timeoutMs:15000}).catch(()=>{});          // finishes, exit 1
+  await a.run("pk","printf \"[sudo] password for dev: \"; read -rs p",{timeoutMs:8000}).catch(()=>{});
+  await new Promise(r=>setTimeout(r,1500));
+  const s=await a.get("pk");
+  const stale = /^false$/.test((s.lastCommand||"").trim()) || s.lastExitCode !== undefined;
+  process.stdout.write(stale?"STALE":"fresh");
+  await a.sendKeys("pk",["C-c"]).catch(()=>{});
+  await a.kill("pk").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "a parked session does not report the previous command" "fresh" "$PARK"
+
+# ---- a settled request must not read as a live instruction ----------------
+#
+# The reason text is stored verbatim when a request is filed, in the present
+# tense. Printed unchanged beneath a "DONE" status it contradicts it, and the
+# imperative is the half a skimming reader acts on: an agent said it "would
+# plausibly re-ping you about something answered three minutes ago".
+SETTLED="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="aths$$" sh -c '
+  '"$ATH_BIN"' new sq --cwd /tmp >/dev/null 2>&1
+  for _ in 1 2 3 4 5 6 7 8; do '"$ATH_BIN"' ls 2>/dev/null | grep -q "^sq .*idle" && break; sleep 1; done
+  node -e "
+    const a=require(\"'"$RP"'/packages/core/dist/index.js\");
+    (async()=>{const r=await a.requestHuman(\"sq\",\"x is waiting at a prompt. Attach and answer it.\",\"agent\",\"abc123abc123\",true);
+    await a.clearRequest(r.id);})();" 2>/dev/null
+  '"$ATH_BIN"' requests 2>&1
+  '"$ATH_BIN"' kill sq --force >/dev/null 2>&1
+')"
+chk "a settled request marks its reason as history" "yes" \
+    "$(printf '%s' "$SETTLED" | grep -q '(asked)' && echo yes || echo no)"
+
+# ---- MCP must have a bounded wait, and must not wait out a human ----------
+chk "MCP exposes wait" "yes" \
+    "$(grep -q "name: 'wait'" "$RP/packages/mcp/src/tools.ts" && echo yes || echo no)"
+chk "wait reports a prompt instead of blocking on it" "yes" \
+    "$(grep -q "outcome: 'needs_human'" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- width must be re-assertable on a LIVE session -------------------------
+#
+# It was settable only at creation, so an agent finding its output truncated
+# had one remedy: destroy the session and rebuild it wider — discarding the
+# sudo timestamp and costing the human another password. Tested end to end,
+# including that session state SURVIVES the resize, since surviving is the
+# entire reason this exists.
+WID="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athW$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"wz",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("wz").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  await a.run("wz","export MARK=kept",{timeoutMs:15000});
+  const before=(await a.run("wz","tput cols",{timeoutMs:15000})).output.trim();
+  await a.setWidth("wz",500);
+  const after=(await a.run("wz","tput cols",{timeoutMs:15000})).output.trim();
+  const mark=(await a.run("wz","echo $MARK",{timeoutMs:15000})).output.trim();
+  process.stdout.write(`${before} ${after} ${mark}`);
+  await a.kill("wz").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "a live pane can be widened"            "yes" "$(printf '%s' "$WID" | grep -q ' 500 ' && echo yes || echo no)"
+chk "and the session survives the resize"   "yes" "$(printf '%s' "$WID" | grep -q 'kept$' && echo yes || echo no)"
+chk "exposed on both surfaces"              "yes" \
+    "$(grep -q "name: 'width'" "$RP/packages/mcp/src/tools.ts" && grep -q "case 'width'" "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# The instability belongs with the PARSING hazards, not as a footnote on a flag.
+# An agent reported a truncation defect, re-measured, and found the width had
+# moved underneath it because someone attached between two calls.
+chk "width instability is stated as a hazard" "yes" \
+    "$(grep -q 'CHANGE BETWEEN TWO CALLS' "$SK" && echo yes || echo no)"
+
+# ---- the env tracker must not harvest text from inside quotes -------------
+#
+# `envAssignments` split on `;` with no quote awareness, so
+# `awk '{a=$4; p=""; print}'` produced the fragment `p=""` — a valid assignment
+# in isolation. The hub stored `p` as a session variable and would have
+# replayed it on reconnect. An agent found exactly that and said it makes the
+# restore guarantee weaker than the docs claim.
+#
+# This is the SAME bug already fixed on the shell side, left standing in the
+# TypeScript. Both directions are checked: no garbage, and real exports still
+# captured — a filter that catches everything by capturing nothing is not a fix.
+ENVA="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const junk = a.envAssignments(`ss -tlnp | awk \x27{a=$4; p=""; print}\x27`).length === 0;
+const real = a.envAssignments("cd /tmp; export FOO=bar; ls").join("") === "export FOO=bar";
+const str  = a.envAssignments(`echo "a=1; b=2"`).length === 0;
+process.stdout.write(`${junk?"noJunk":"JUNK"} ${real?"keepsReal":"LOSTREAL"} ${str?"noStr":"STR"}`);
+' 2>/dev/null)"
+chk "quoted text is not harvested as env"   "yes" "$(printf '%s' "$ENVA" | grep -q noJunk    && echo yes || echo no)"
+chk "real exports are still captured"       "yes" "$(printf '%s' "$ENVA" | grep -q keepsReal && echo yes || echo no)"
+chk "assignments inside a string are not"   "yes" "$(printf '%s' "$ENVA" | grep -q noStr     && echo yes || echo no)"
+
+# ---- the doc must not name a field in the spelling the tool does not emit --
+#
+# The file states in bold that both surfaces share field names, then went on
+# naming `remoteCwd` and `remoteEnv` in prose. An agent typed those, got a
+# silent `None`, and concluded the feature was unimplemented — "a mistyped key
+# should not look identical to an absent value". Seventeen sites survived the
+# rename because I fixed the mapping table and not the paragraphs around it.
+chk "no camelCase field names remain in the skill" "0" \
+    "$(grep -oE '`(remoteCwd|remoteEnv|paneTail|lastCommand|lastExitCode|creatorPids|paneWidth|needsInput|exitCode|timedOut|nextOffset|logOffset|shellExited)`' "$SK" 2>/dev/null | wc -l | tr -d ' ')"
+
+# ---- the only silent-corruption path must announce itself -----------------
+#
+# A human attaching resizes the pane — usually to answer the very prompt the
+# command raised — so output shape changes mid-session. Two agents hit it. The
+# second put it exactly: "this is the one condition in the whole tool that can
+# silently corrupt output, and it's the one condition with no runtime signal…
+# the errors are excellent; the silent state changes are the gap."
+#
+# Three states are checked, because a signal that fires always is as useless as
+# one that never fires: quiet on the first command, loud on the one after a
+# resize, quiet again when nothing more changes.
+WCH="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athC$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const {execSync}=require("child_process");
+(async()=>{
+  await a.create({name:"cw",cwd:"/tmp",width:200});
+  for(let i=0;i<12;i++){const s=await a.get("cw").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const one=await a.run("cw","echo 1",{timeoutMs:15000});
+  try{execSync(`tmux -L athC'"$$"' resize-window -t ath-cw -x 156 -y 40`)}catch(e){}
+  const two=await a.run("cw","echo 2",{timeoutMs:15000});
+  const three=await a.run("cw","echo 3",{timeoutMs:15000});
+  process.stdout.write(
+    `${one.paneWidthChanged?"BASELOUD":"baseQuiet"} ` +
+    `${two.paneWidthChanged && two.paneWidthChanged.from===200 && two.paneWidthChanged.to===156 ? "announced":"MISSED"} ` +
+    `${three.paneWidthChanged?"REPEATS":"settles"}`);
+  await a.kill("cw").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "no signal before anything changes" "yes" "$(printf '%s' "$WCH" | grep -q baseQuiet && echo yes || echo no)"
+chk "a resize is announced with both widths" "yes" "$(printf '%s' "$WCH" | grep -q announced && echo yes || echo no)"
+chk "and it does not repeat afterwards" "yes" "$(printf '%s' "$WCH" | grep -q settles   && echo yes || echo no)"
+
+# The doc named log_offset as shared while MCP never emitted it — an agent
+# looked for what it had been promised and did not find it.
+chk "MCP run emits log_offset" "yes" \
+    "$(grep -q 'log_offset: result.logOffset' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- output must not be able to impersonate a marker ----------------------
+#
+# A cold agent asked what happens if a command's own output contains something
+# resembling a marker. The defence is real — every marker is wrapped in a
+# control byte — but it was documented nowhere, so the agent had to take it on
+# faith. It is now stated in the skill file, which means it is a CLAIM, and an
+# unverified claim in that file is the exact failure a previous agent caught:
+# a doc promising something the tool does not do.
+FORGE="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athF$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.create({name:"fk",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("fk").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  // A convincing fake END marker claiming exit 99, printed mid-output.
+  const r = await a.run("fk",`echo before; echo "<ATHE:deadbeefcafe:99:Lw==:>"; echo after`,{timeoutMs:20000});
+  const rightCode = r.exitCode === 0;                       // the REAL status, not 99
+  const passedThrough = /deadbeefcafe/.test(r.output);       // shown as ordinary output
+  const notTruncated = /after/.test(r.output);               // did not end the command early
+  process.stdout.write(`${rightCode?"code":"CODE"} ${passedThrough?"shown":"SWALLOWED"} ${notTruncated?"whole":"TRUNCATED"}`);
+  await a.kill("fk").catch(()=>{});
+})();
+' 2>/dev/null)"
+chk "a forged marker cannot set the exit code" "yes" "$(printf '%s' "$FORGE" | grep -q 'code'  && echo yes || echo no)"
+chk "and is passed through as ordinary output" "yes" "$(printf '%s' "$FORGE" | grep -q 'shown' && echo yes || echo no)"
+chk "and cannot end the command early"         "yes" "$(printf '%s' "$FORGE" | grep -q 'whole' && echo yes || echo no)"
+chk "the skill states this defence"            "yes" \
+    "$(grep -q 'cannot impersonate a marker' "$SK" && echo yes || echo no)"
+
+# The skill must carry the same disclosure the CLI does.
+chk "skill documents what survives purge" "yes" \
+    "$(grep -q 'What this leaves on disk' "$SK" && echo yes || echo no)"
+chk "skill points at doctor --artifacts"  "yes" \
+    "$(grep -q 'doctor --artifacts' "$SK" && echo yes || echo no)"
+# The description is what decides whether the skill LOADS. It triggered on
+# state, sudo and remote, so a hang-prone command reached an agent that had
+# never read any of this.
+chk "skill triggers on long/hanging work" "yes" \
+    "$(awk '/^description:/{print}' "$SK" | grep -qE 'hang|run long' && echo yes || echo no)"
+
+$ATH_BIN kill "${C}d" --force >/dev/null 2>&1 || true
 $ATH_BIN kill "$C" --force >/dev/null 2>&1 || true
 printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
@@ -393,7 +903,7 @@ echo "-- a remote session reports where it actually runs"
 # somewhere it had never been.
 set -- $(node -e '
 const a=require(process.argv[1]+"/packages/core/dist/index.js");
-const local={name:"x",tmuxName:"ath-x",state:"idle",cwd:"/local/repo",currentCommand:"zsh",
+const local={name:"x",tmuxName:"ath-x",state:"idle",cwd:"/local/repo",current_command:"zsh",
   attached:0,created:0,pinned:false,owner:"agent",logPath:"/x",paneDead:false};
 const remote={...local,remote:"myserver",remoteCwd:"/srv/app"};
 const noneYet={...local,remote:"myserver"};
@@ -435,8 +945,8 @@ echo "-- session survives a shell exit, and auto-respawns"
 start=$(date +%s)
 json=$($ATH run "$S" --json -- 'echo before; exit 9')
 elapsed=$(( $(date +%s) - start ))
-code=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).exitCode))')
-exited=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(!!JSON.parse(b).shellExited))')
+code=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).exit_code))')
+exited=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(!!JSON.parse(b).shell_exited))')
 check "shell exit reported, not hung" "true" "$exited"
 check "shell exit code recovered" "9" "$code"
 [ "$elapsed" -lt 15 ] && ok "returned promptly (${elapsed}s, not a timeout)" \
@@ -451,7 +961,7 @@ $ATH run "$S" -- 'sudo -k' >/dev/null 2>&1
 $ATH send "$S" --text -- "sudo -p 'Password:' true" >/dev/null
 sleep 2
 state=$($ATH ls --json | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const s=JSON.parse(b).find(x=>x.name===process.argv[1]);console.log(s?s.state:"missing")})' "$S")
-cmd=$($ATH ls --json | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const s=JSON.parse(b).find(x=>x.name===process.argv[1]);console.log(s?s.currentCommand:"missing")})' "$S")
+cmd=$($ATH ls --json | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const s=JSON.parse(b).find(x=>x.name===process.argv[1]);console.log(s?s.current_command:"missing")})' "$S")
 check "state flips to needs-input" "needs-input" "$state"
 check "process signal agrees (sudo)" "sudo" "$cmd"
 $ATH send "$S" -- C-c >/dev/null; sleep 0.5
@@ -512,7 +1022,7 @@ sleep 1
 tm send-keys -t "ath-$S" -l 'echo HUMAN-TYPED-THIS' 2>/dev/null
 tm send-keys -t "ath-$S" Enter 2>/dev/null
 sleep 6
-agentout=$($ATH poll "$S" --handle "$handle" --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{try{const r=JSON.parse(b);console.log((r.output||"").replace(/\n/g," ")+"|"+r.exitCode)}catch(e){console.log("parse-error|")}})')
+agentout=$($ATH poll "$S" --handle "$handle" --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{try{const r=JSON.parse(b);console.log((r.output||"").replace(/\n/g," ")+"|"+r.exit_code)}catch(e){console.log("parse-error|")}})')
 case "$agentout" in
   *AGENT-OWN-OUTPUT*"|7") ok "agent gets its OWN output and exit code, not the human's" ;;
   *) bad "agent gets its OWN output and exit code, not the human's" "AGENT-OWN-OUTPUT|7" "$agentout" ;;
@@ -563,8 +1073,8 @@ echo
 echo "-- needs-input must not fire on a command that is merely working"
 start=$(date +%s)
 json=$($ATH run "$S" --json --timeout 12 -- 'echo "Do you want to continue?"; sleep 4')
-ni=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(!!JSON.parse(b).needsInput))')
-rc=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).exitCode))')
+ni=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(!!JSON.parse(b).needs_input))')
+rc=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).exit_code))')
 check "prompt-shaped output while busy is not needs-input" "false" "$ni"
 check "and the command ran to completion" "0" "$rc"
 
@@ -574,7 +1084,7 @@ $ATH run "$S" -- 'sudo -k' >/dev/null 2>&1
 start=$(date +%s)
 json=$($ATH run "$S" --json -- 'sudo -p "Password:" true' 2>/dev/null); rcode=$?
 elapsed=$(( $(date +%s) - start ))
-ni=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(!!JSON.parse(b).needsInput))')
+ni=$(printf '%s' "$json" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(!!JSON.parse(b).needs_input))')
 check "real sudo prompt still detected" "true" "$ni"
 [ "$elapsed" -lt 8 ] && ok "detected in ${elapsed}s, not at the 120s timeout" \
                      || bad "detected quickly" "<8s" "${elapsed}s"
@@ -600,7 +1110,7 @@ sleep 3
 pj=$($ATH poll "$S" --handle "$h" --since "$off" --json)
 done2=$(printf '%s' "$pj" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).done))')
 outp=$(printf '%s' "$pj" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).output))')
-ec=$(printf '%s' "$pj" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).exitCode))')
+ec=$(printf '%s' "$pj" | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>console.log(JSON.parse(b).exit_code))')
 check "poll reports done" "true" "$done2"
 check "poll reports the exit code" "0" "$ec"
 check "poll output is clean of protocol plumbing" "BACKGROUNDED" "$outp"
@@ -1161,7 +1671,7 @@ check "the session stops being flagged asked-for-you" "ok" "$v"
 
 echo
 echo "-- a busy session names the command, not the transport"
-# `currentCommand` is the pane's foreground PROCESS, which on a remote session
+# `current_command` is the pane's foreground PROCESS, which on a remote session
 # is `ssh`. An agent was told its 70-second checksum job was "already running
 # ssh" — true of the pane, useless to the caller.
 $ATH start rq -- 'sleep 6' >/dev/null 2>&1; sleep 1
@@ -1210,7 +1720,7 @@ w=$($ATH run bl --json -- 'sudo -n true 2>/dev/null' 2>/dev/null \
     | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).warning?"warned":"silent")}catch(e){console.log("x")}})')
 check "sudo with stderr discarded is warned about" "warned" "$w"
 w=$($ATH run bl --json -- 'sudo -n true 2>&1' 2>/dev/null \
-    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.warning?"warned":(j.needsHuman?"detected":"neither"))}catch(e){console.log("x")}})')
+    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.warning?"warned":(j.needs_human?"detected":"neither"))}catch(e){console.log("x")}})')
 check "2>&1 keeps detection working, and is not warned about" "detected" "$w"
 w=$($ATH run bl --json -- 'ls /tmp 2>/dev/null' 2>/dev/null \
     | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).warning?"warned":"quiet")}catch(e){console.log("x")}})')
@@ -1261,7 +1771,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^el ' && break;
 h=$($ATH start el -- 'true' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
 sleep 2
 j=$($ATH poll el --handle "$h" --json 2>/dev/null)
-e=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);const hi=j.elapsedUpperSeconds!==undefined?j.elapsedUpperSeconds:j.elapsedSeconds;console.log(hi===undefined?"missing":(hi<=4?"fast":"slow"))}catch(e){console.log("x")}})')
+e=$(printf '%s' "$j" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);const hi=j.elapsed_upper_seconds!==undefined?j.elapsed_upper_seconds:j.elapsed_seconds;console.log(hi===undefined?"missing":(hi<=4?"fast":"slow"))}catch(e){console.log("x")}})')
 check "a job that finished instantly is reported as fast" "fast" "$e"
 $ATH kill el --force >/dev/null 2>&1
 
@@ -1300,12 +1810,12 @@ $ATH new tm >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tm ' && break; sleep 1; done
 h=$($ATH start tm -- 'sleep 8; echo x' 2>&1 | grep -oE '[0-9a-f]{12}' | head -1)
 sleep 3
-ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"already-done":(j.elapsedExact===true?"exact":"other"))}catch(e){console.log("x")}})')
+ex=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.done?"already-done":(j.elapsed_exact===true?"exact":"other"))}catch(e){console.log("x")}})')
 check "while running, the figure is exact" "exact" "${ex:-x}"
 sleep 9
-br=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);const bracket=j.elapsedLowerSeconds!==undefined||j.elapsedSeconds!==undefined;console.log(j.done&&bracket&&j.elapsedObserved===true?"reported":"withheld")}catch(e){console.log("x")}})')
+br=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);const bracket=j.elapsed_lower_seconds!==undefined||j.elapsed_seconds!==undefined;console.log(j.done&&bracket&&j.elapsed_observed===true?"reported":"withheld")}catch(e){console.log("x")}})')
 check "after a mid-run poll, a bracket is reported not withheld" "reported" "${br:-x}"
-ob=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsedObserved===true?"observed":"claims-unobserved")}catch(e){console.log("x")}})')
+ob=$($ATH poll tm --handle "$h" --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).elapsed_observed===true?"observed":"claims-unobserved")}catch(e){console.log("x")}})')
 check "and it does not claim nobody looked" "observed" "${ob:-x}"
 $ATH kill tm --force >/dev/null 2>&1
 
@@ -1316,7 +1826,7 @@ echo "-- a non-interactive refusal informs the agent without summoning a human"
 rm -f "${ATH_HOME:-$HOME/.ath}"/requests/*.json 2>/dev/null || true
 $ATH new nr >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^nr ' && break; sleep 1; done
-g=$($ATH run nr --json -- 'sudo -n true 2>&1' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).needsHuman?"told":"silent")}catch(e){console.log("x")}})')
+g=$($ATH run nr --json -- 'sudo -n true 2>&1' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).needs_human?"told":"silent")}catch(e){console.log("x")}})')
 check "the agent is told elevation is needed" "told" "${g:-x}"
 n=$(node -e 'require("./packages/core/dist/index.js").listAllRequests().then(r=>console.log(r.filter(x=>x.session==="nr").length))' 2>/dev/null)
 check "but no request is filed, because nothing is waiting" "0" "${n:-x}"
@@ -1339,7 +1849,7 @@ cav() {
   n="xc$RANDOM"
   $ATH new "$n" >/dev/null 2>&1
   for _ in 1 2 3 4 5 6 7 8; do $ATH ls 2>/dev/null | grep -q "^$n " && break; sleep 1; done
-  r=$($ATH run "$n" --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"flagged":"silent")}catch(e){console.log("x")}})')
+  r=$($ATH run "$n" --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_caveat?"flagged":"silent")}catch(e){console.log("x")}})')
   $ATH kill "$n" --force >/dev/null 2>&1
   printf '%s' "$r"
 }
@@ -1501,8 +2011,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^cv ' && break;
 # directions one round apart — "I stopped reading it" and "it fired once then
 # went quiet while the hazard remained" — and both were right about a different
 # failure. Neither always nor once is correct for the same text.
-cvm() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"marked":"none")}catch(e){console.log("x")}})'; }
-cvn() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveatNote?"explained":"quiet")}catch(e){console.log("x")}})'; }
+cvm() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_caveat?"marked":"none")}catch(e){console.log("x")}})'; }
+cvn() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_caveat_note?"explained":"quiet")}catch(e){console.log("x")}})'; }
 check "the first compound command is explained" "explained" "$(cvn 'true; echo a')"
 check "the second is not explained again" "quiet" "$(cvn 'true; echo b')"
 check "but it is still marked" "marked" "$(cvm 'true; echo c')"
@@ -1556,7 +2066,11 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^wr ' && break;
 cliout=$($ATH run wr --timeout 20 -- 'find /etc -maxdepth 0 2>/dev/null' 2>&1)
 # Match a stable phrase, not the exact prose — this assertion broke once when
 # the wording was tightened, which tests the copywriter rather than the code.
-case "$cliout" in *"permission errors are being"*) v=ok ;; *) v="not shown" ;; esac
+# The phrase changed when the warning stopped ASSERTING a cause it had not
+# observed: it blamed permission errors on a `du -x` whose stderr was EMPTY,
+# and the real culprit was -x declining to cross a mount. "discards stderr" is
+# the part that is true by construction, so it is the stable anchor.
+case "$cliout" in *"discards stderr"*) v=ok ;; *) v="not shown" ;; esac
 check "the CLI shows the warning to a human" "ok" "$v"
 mcpw=$(printf '%s\n%s\n%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"v","version":"0"}}}' \
@@ -1577,7 +2091,7 @@ $ATH new bs >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^bs ' && break; sleep 1; done
 contradictions=0
 for i in 1 2 3 4 5 6 7 8; do
-  r=$($ATH run bs --json -- "ls -la /etc | head -20; echo n=$i" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.exitCode!==null&&j.state==="busy"?"bad":"ok")}catch(e){console.log("x")}})')
+  r=$($ATH run bs --json -- "ls -la /etc | head -20; echo n=$i" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);console.log(j.exit_code!==null&&j.state==="busy"?"bad":"ok")}catch(e){console.log("x")}})')
   [ "$r" = "ok" ] || contradictions=$((contradictions+1))
 done
 check "done and busy never co-occur across repeated runs" "0" "$contradictions"
@@ -1594,7 +2108,7 @@ console.log(typeof m.quoteForMessage==="function"?"exported":"internal");' 2>/de
 $ATH kill tq --force >/dev/null 2>&1
 $ATH new tq >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tq ' && break; sleep 1; done
-msg=$($ATH run tq --json -- 'echo "a fairly long preamble here to push past the limit"; sudo -n true 2>&1 || echo "-> no, as expected"' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).needsHuman||"")}catch(e){console.log("")}})')
+msg=$($ATH run tq --json -- 'echo "a fairly long preamble here to push past the limit"; sudo -n true 2>&1 || echo "-> no, as expected"' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).needs_human||"")}catch(e){console.log("")}})')
 case "$msg" in *"(truncated)"*) v=ok ;; "") v="no advisory" ;; *) v="silently cut" ;; esac
 check "a truncated command echo is labelled truncated" "ok" "$v"
 $ATH kill tq --force >/dev/null 2>&1

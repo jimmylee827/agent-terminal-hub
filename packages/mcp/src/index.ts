@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { promises as fsp } from 'node:fs';
+
 import {
   assertRemoteConnected,
   attachedClientsNote,
@@ -10,13 +12,19 @@ import {
   list,
   listAllRequests,
   listRequests,
+  logPath,
+  ATH_ARTIFACTS,
+  ATH_HOME,
   notePrompts,
   reapResolvedRequests,
   poll,
   readSince,
   readTail,
+  purgeLog,
   requestHuman,
   run,
+  setPinned,
+  setWidth,
   sendKeys,
   start,
   summarize,
@@ -107,7 +115,21 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // where anything runs.
           cwd: effectiveCwd(s),
           local_cwd: s.remote ? s.cwd : undefined,
-          current_command: s.currentCommand,
+          // Omitted for a remote session, where it is always "ssh".
+          //
+          // It is tmux's `pane_current_command`, and for a remote session that
+          // is the transport, not the work — an agent reported it as "ssh" for
+          // all three of its sessions and said it "carries no information".
+          // Reporting the same constant for every session is worse than
+          // reporting nothing: it looks like an answer. `last_command` is the
+          // field that actually says what ran.
+          ...(s.remote && s.currentCommand === 'ssh'
+            ? {}
+            : { current_command: s.currentCommand }),
+          // Who created this session. Set at creation and never surfaced
+          // anywhere, so an agent that read about it in the docs could not find
+          // it in any output and could not say what drove it.
+          owner: s.owner,
           pinned: s.pinned,
           remote: s.remote,
           // NOT necessarily humans. This is tmux's client count, and the VS
@@ -116,6 +138,11 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // it. Labelled `attached_humans`, that read as "a person is here",
           // and an agent reasonably could not account for the number.
           attached_clients: s.attached,
+          // Reported because the docs warn that tmux truncates to this width
+          // and then gave no way to see it. An agent found `MOUNTPOINT`
+          // rendered as `MOUNTPOIN`, correctly identified the cause from the
+          // docs, and had no surface telling it the pane was 156 columns.
+          pane_width: s.paneWidth,
           last_command: s.lastCommand,
           last_exit_code: s.lastExitCode,
           summary: summarize(s),
@@ -135,6 +162,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         remote: args.remote as string | undefined,
         label: args.label as string | undefined,
         pin: Boolean(args.pin),
+        width: args.width === undefined ? undefined : Number(args.width),
         owner: 'agent',
       });
       return json({
@@ -143,11 +171,28 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // creating a session on another machine answered with this Mac's path.
         // The first field a caller reads must not be the wrong one; the local
         // path is still available, named for what it is.
-        cwd: effectiveCwd(session),
+        // For a REMOTE session this must be the remote path, as it is in `list`.
+        //
+        // `effectiveCwd` falls back to the local directory until the remote
+        // shell has reported one — and at creation it never has, so `new`
+        // answered with this Mac's path while `list` answered with the remote
+        // one. Same key, opposite meaning, one call apart. A fresh remote
+        // session's shell sits in the remote home, so say that.
+        cwd: session.remote ? (session.remoteCwd ?? '~') : effectiveCwd(session),
         ...(session.remote ? { remote: session.remote, local_cwd: session.cwd } : {}),
         state: session.state,
         note: 'This session persists between your calls. Reuse it rather than creating another.',
         human_can_join_with: `ath attach ${session.name}`,
+        // Disclosed at creation, because no later call has a reason to mention
+        // it and the recording has already started. An agent that knows the
+        // transcript exists can warn its human before echoing a secret into
+        // the pane; one that does not, cannot. It also outlives this session,
+        // so the caller is told how it goes away.
+        recorded_to: logPath(session.name),
+        recording_note:
+          'Everything printed in this session is appended there, including output you did not read. It survives `kill`; remove it with `ath purge ' +
+          session.name +
+          '`.',
       });
     }
 
@@ -163,7 +208,25 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         session: result.session,
         exit_code: result.exitCode,
         state: result.state,
+        // The doc names this as a shared field and MCP never emitted it, so an
+        // agent working here could not find what it had been promised — the
+        // same shape of gap as a doc naming a field in the wrong spelling.
+        log_offset: result.logOffset,
       };
+
+      // The only silent-corruption path in the tool, finally given a voice.
+      // A human attaching — usually to answer a password prompt this very
+      // command raised — resizes the pane, so anything parsed by column reads
+      // differently from here on. Two agents hit it; neither was told.
+      if (result.paneWidthChanged) {
+        payload.pane_width_changed = result.paneWidthChanged;
+        payload.what_to_do =
+          `The pane was resized from ${result.paneWidthChanged.from} to ` +
+          `${result.paneWidthChanged.to} columns since your last command here — a human ` +
+          `attaching does that. Width-aware tools (ps, docker ps, lsblk, vmstat) will format ` +
+          `differently from now on. If you are parsing by column, re-read rather than trusting ` +
+          `a layout you calibrated earlier, or switch to width-independent output.`;
+      }
 
       // A request was filed on the caller's behalf — SAY SO.
       //
@@ -263,6 +326,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           `Poll with this handle and next_offset (${started.offset}) — that number continues ` +
           `session "${started.session}"'s byte stream, so a NEW job does not start at 0. Pass ` +
           'back whatever you were last given.',
+        // Named at the point of DECISION, not the point of failure.
+        //
+        // `session_busy` already explains itself well when a caller trips it;
+        // an agent rated that message best-in-class. But it only arrives after
+        // the second dispatch has been refused. The fact that decides whether
+        // to dispatch at all — is there another session free right now — was
+        // available here and never offered, so the caller had to fail first to
+        // learn it. Computed live because a stale name is worse than none.
+        parallel_work: await parallelHint(started.session),
+        ...(started.warning ? { warning: started.warning } : {}),
       });
     }
 
@@ -282,19 +355,40 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // agent that HAD polled mid-run and been answered. That statement was
       // false about their own session, and it discarded the bracket, which is
       // the actual answer: "between 26 and 60 seconds" is information.
-      if (result.elapsedExact && result.elapsedSeconds !== undefined) {
-        payload.running_for_seconds = result.elapsedSeconds;
-      } else if (result.elapsedSeconds !== undefined) {
-        payload.took_seconds = result.elapsedSeconds;
+      // `exact` no longer implies "still running".
+      //
+      // It used to: the only exact figure available was "how long since I
+      // started it", which is a duration-so-far. Now a finished command can
+      // report its OWN measurement, taken by the shell that ran it, so the
+      // label has to come from `done` rather than from the precision.
+      // Mislabelling a finished 6-second job as `running_for_seconds` would be
+      // a new way to be wrong about the same field.
+      if (result.elapsedSeconds !== undefined) {
+        if (result.done) {
+          payload.took_seconds = result.elapsedSeconds;
+          if (result.elapsedExact) {
+            payload.timing_note =
+              'Measured by the shell that ran the command, not estimated by the hub.';
+          }
+        } else {
+          payload.running_for_seconds = result.elapsedSeconds;
+        }
       } else if (result.elapsedLowerSeconds !== undefined) {
         payload.ran_between_seconds = [result.elapsedLowerSeconds, result.elapsedUpperSeconds];
         payload.timing_note = result.elapsedObserved
-          ? 'A bracket, not a measurement: it was still running when last checked and finished ' +
-            'before the next look. Poll more often for a tighter figure.'
+          ? 'A bracket, not a measurement: the shell running this could not time it (no `date`), ' +
+            'so this is only when the hub looked — it was still running at one check and done by ' +
+            'the next. Poll more often for a tighter figure.'
           : `Upper bound only. The 0 is because nothing ever saw it running; the ` +
             `${result.elapsedUpperSeconds}s is simply how long ago YOU started it — this check ` +
             `is the first look, so all that is known is that it finished somewhere in between. ` +
             `Poll while a job runs if you need its duration.`;
+        // Both branches above tell the caller to poll harder, which makes the
+        // bracket tighter and never exact — the hub can only report when it
+        // LOOKED. A command that timestamps itself is measured by the machine
+        // running it, so it does not depend on this tool's cadence at all.
+        payload.timing_note +=
+          ' For an exact figure, time it inside the command itself — the hub can only report when it looked.';
         if ((result.elapsedUpperSeconds ?? 0) <= 2) {
           payload.what_to_do =
             'This finished within a couple of seconds. If you started it expecting long-running ' +
@@ -454,9 +548,24 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // an unexplained identifier is one more thing to wonder about.
       let handleSource = 'you passed it';
       if (!handle) {
-        const open = (await listRequests()).filter((r) => r.session === session && r.handle);
-        handle = open[open.length - 1]?.handle;
-        handleSource = 'the open request for this session';
+        // RESOLVED requests count, and are in fact the better evidence.
+        //
+        // This filtered to OPEN requests only — so the instant a human answered
+        // and the request was marked resolved, the one record that proved they
+        // had answered became invisible here. The lookup then fell through to
+        // the log, which handed back the human's own open prompt frame, and the
+        // tool reported "still_waiting" at a prompt that had been answered and
+        // a command that had exited 0. The agent believed the password had not
+        // been typed and moved on to other work.
+        //
+        // A request resolved seconds ago is exactly what this is looking for.
+        const mine = (await listAllRequests().catch(() => []))
+          .filter((r) => r.session === session && r.handle)
+          .sort((a, b) => (a.resolvedAt ?? a.createdAt) - (b.resolvedAt ?? b.createdAt));
+        handle = mine[mine.length - 1]?.handle;
+        handleSource = mine[mine.length - 1]?.resolvedAt
+          ? 'a request for this session that has since been answered'
+          : 'the open request for this session';
         if (!handle) {
           handle = await latestHandle(session).catch(() => undefined);
           handleSource = 'the last command framed in this session';
@@ -501,6 +610,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               session,
               handle,
               handle_from: handleSource,
+              // An agent called this "a handle I never created and do not
+              // fully understand". Saying where it came from was not enough
+              // without saying what it IS.
+              ...(args.handle === undefined
+                ? {
+                    handle_note:
+                      'The hub mints a handle for every command it frames, including ones you ran ' +
+                      'with `run` rather than `start` — so this identifies a command you did issue, ' +
+                      'even though you were never handed the id. It is valid until the session ends, ' +
+                      'and polling a finished one returns its result again rather than an error.',
+                  }
+                : {}),
               next_offset: res.nextOffset,
               // Say that the credential is now cached, rather than leaving it to
               // be guessed. An agent guessed "the usual 15 minutes" and said it
@@ -541,6 +662,110 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       }
     }
 
+    case 'wait': {
+      const session = String(args.session ?? '');
+      // Bounded, and it does NOT wait out a human prompt.
+      //
+      // A session parked on a password will never go idle on its own, so
+      // blocking on it burns the whole timeout and then reports a timeout —
+      // hiding the one fact the caller needed. Report the prompt immediately
+      // instead; that is a handoff, not a delay.
+      const limit = Math.min(Math.max(Number(args.timeout_seconds ?? 60), 1), 300);
+      const deadline = Date.now() + limit * 1000;
+      for (;;) {
+        const s = await get(session).catch(() => undefined);
+        if (!s) return json({ session, outcome: 'session_gone' });
+        if (s.state === 'needs-input') {
+          return json({
+            session,
+            outcome: 'needs_human',
+            last_command: s.lastCommand,
+            what_to_do:
+              'This is parked at a prompt only a person can answer, so waiting will not clear ' +
+              'it. A request has already been filed. Tell the user which session is waiting and ' +
+              'what for, then stop — or use `await_human` to block until they answer.',
+          });
+        }
+        if (s.state === 'idle' || s.paneDead) {
+          return json({
+            session,
+            outcome: 'idle',
+            last_command: s.lastCommand,
+            last_exit_code: s.lastExitCode,
+          });
+        }
+        if (Date.now() >= deadline) {
+          return json({
+            session,
+            outcome: 'still_running',
+            last_command: s.lastCommand,
+            note: `Still busy after ${limit}s. Call again, or poll with the handle from \`start\`.`,
+          });
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+
+    case 'width': {
+      const session = String(args.session ?? '');
+      const applied = await setWidth(session, Number(args.columns));
+      const s = await get(session).catch(() => undefined);
+      return json({
+        session,
+        pane_width: applied,
+        note:
+          'Re-asserted, not fixed: `window-size latest` means the next client to attach sets it ' +
+          'again. Check `pane_width` in `list` if a later result looks cut differently.',
+        ...(s?.remote ? { remote: s.remote } : {}),
+      });
+    }
+
+    case 'purge': {
+      const session = String(args.session ?? '');
+      // Exposed over MCP after two agents reported the same thing: told to
+      // leave nothing behind, they could not, because the one command that
+      // erases the transcript existed only on the CLI. Withholding it was a
+      // deliberate call — discarding a record is a human's decision — but an
+      // agent that has been INSTRUCTED to clean up is carrying out the human's
+      // decision, not substituting its own. It still cannot reach anyone
+      // else's data: one named session, transcript only.
+      const { bytes, survives } = await purgeLog(session);
+      return json({
+        session,
+        bytes_discarded: bytes,
+        cleared: 'the session transcript only',
+        still_on_disk: survives.map((a) => ({ path: `~/.ath/${a.name}`, holds: a.holds })),
+        note: 'Run the `doctor` tool for the complete list, including what nothing removes.',
+      });
+    }
+
+    case 'doctor': {
+      const rows = [];
+      for (const a of ATH_ARTIFACTS) {
+        rows.push({
+          path: `~/.ath/${a.name}`,
+          holds: a.holds,
+          removed_by_purge: a.purged,
+          bounded: a.bounded,
+        });
+      }
+      return json({
+        root: ATH_HOME,
+        artifacts: rows,
+        note: '`purge` clears only the entry marked removed_by_purge, and only for one session.',
+      });
+    }
+
+    case 'unpin': {
+      const session = String(args.session ?? '');
+      await setPinned(session, false);
+      return json({
+        session,
+        pinned: false,
+        note: `"${session}" can now be killed. Re-pin from the CLI with \`ath pin ${session}\`.`,
+      });
+    }
+
     case 'kill': {
       const session = String(args.session ?? '');
       // Deliberately never forced. A pin is how the human sharing this
@@ -551,11 +776,85 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         .catch(() => 0);
       await kill(session);
       const note = attachedClientsNote(attached);
-      return text(`Session "${session}" destroyed.${note ? ` ${note}` : ''}`);
+      // "Destroyed" is not the whole truth while the transcript is still there.
+      // An agent told only that is entitled to report the session cleaned up,
+      // and it has just left a file holding every byte the session printed.
+      const kept = await logSize(session);
+      const keptNote = kept
+        ? ` The transcript remains at ${logPath(session)} (${kept}); a human can remove it with \`ath purge ${session}\`.`
+        : '';
+      return text(`Session "${session}" destroyed.${note ? ` ${note}` : ''}${keptNote}`);
     }
 
     default:
       return text(`Unknown tool: ${name}`, true);
+  }
+}
+
+/**
+ * The transcript's size, human-readable, or empty when there is none.
+ *
+ * Reported rather than merely mentioned: "a log exists" is easy to skim past,
+ * "4.2 MB" is not, and an agent relaying this to its human should be able to
+ * convey how much was recorded.
+ */
+/**
+ * What the caller can use for concurrent work, right now.
+ *
+ * Returns names, not advice: "create another session" is guessable, whereas
+ * "hk2 is idle" is a fact the caller cannot obtain without a second call it
+ * has no reason to make. Failure is non-fatal — this is a convenience on a
+ * successful dispatch, and must never turn one into an error.
+ */
+async function parallelHint(current: string): Promise<string> {
+  try {
+    // A session with an OPEN REQUEST is never offered, whatever its state says.
+    //
+    // Filtering on `state === 'idle'` alone was not enough. Classification
+    // reads the pane, and the pane lags: a session that has just been sent
+    // `sudo -v` still reads idle until the prompt renders. A cold agent was
+    // told a session parked at a password prompt was "idle and usable right
+    // now" and said, correctly, that acting on it would have meant typing into
+    // the human's password field.
+    //
+    // An open request is durable state on disk, written the moment a command
+    // parks, so it does not race the pane. (`run` and `start` both refuse a
+    // live credential prompt anyway, so the worst case was a refusal rather
+    // than a leaked keystroke — but a suggestion that has to be rescued by a
+    // downstream guard should not be made.)
+    const asked = new Set((await listRequests().catch(() => [])).map((r) => r.session));
+    const free = (await list())
+      .filter(
+        (s) => s.name !== current && s.state === 'idle' && !s.paneDead && !asked.has(s.name),
+      )
+      .map((s) => s.name);
+    if (free.length === 0) {
+      return `No other session is free. To run something ALONGSIDE this, create one first (\`new\`) — reusing "${current}" will be refused until this finishes.`;
+    }
+    return (
+      `Idle as of this call, for work alongside this: ${free.slice(0, 4).join(', ')}` +
+      `${free.length > 4 ? `, +${free.length - 4} more` : ''}. ` +
+      `A session can park on a prompt between now and your next call; that is refused, not typed into.`
+    );
+  } catch {
+    return 'To run something alongside this, use a different session — this one is occupied until it finishes.';
+  }
+}
+
+async function logSize(session: string): Promise<string> {
+  try {
+    const { size } = await fsp.stat(logPath(session));
+    if (size <= 0) return '';
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    let v = size;
+    while (v >= 1024 && i < u.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+  } catch {
+    return '';
   }
 }
 
