@@ -186,8 +186,10 @@ export const TOOL_DEFINITIONS = [
     description:
       'List what the hub is waiting on a human for, and what has since been answered. Each entry ' +
       'says which session is blocked, what was asked, and — once resolved — the exit code, so you ' +
-      'can collect the outcome. Use it to check the state of a handoff. You do NOT need it to ' +
-      'discover that a request exists: whatever filed one told you so at the time.',
+      'can collect the outcome. Check the state of a handoff with it ONCE — do not poll it in a ' +
+      'loop waiting for an answer: it is a pull-only view, and looping burns your turn learning ' +
+      'nothing. To be TOLD when the human answers, use `await_human`. You also do not need this ' +
+      'to discover that a request exists — whatever filed one told you so at the time.',
     inputSchema: {
       type: 'object',
       properties: {

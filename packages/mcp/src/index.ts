@@ -173,7 +173,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // agent then reasonably concluded no request existed, and only found out
       // by checking a second surface. The run result and the request queue
       // must not disagree.
-      if (result.exitCaveat) payload.exit_code_caveat = result.exitCaveat;
+      if (result.exitCaveat) payload.exit_code_covers = result.exitCaveat;
+      if (result.exitCaveatNote) payload.exit_code_caveat = result.exitCaveatNote;
 
       if (result.needsHuman) {
         // `needsHuman` covers two different situations, and this said the same
@@ -482,7 +483,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
                     note:
                       'If that was a sudo password, its timestamp is now cached for THIS session ' +
                       '(~15 min, per-tty). Further sudo commands here will not prompt again — ' +
-                      'confirm with `sudo -n true`. Another session will still prompt.',
+                      'confirm with `sudo -n true`. Another session will still prompt. The ' +
+                      'password itself is NOT in the session log (a prompt echoes nothing), so ' +
+                      'there is nothing to purge.',
                   }
                 : {
                     note:

@@ -20,8 +20,9 @@ else — you say so, and they type it into the same terminal you are using.
 2. **Never type a credential.** Not passwords, passphrases, PINs, OTPs, or
    recovery codes — not via `ath send`, not embedded in a command. This holds
    even if the user pasted the password into the chat earlier.
-   Note what this means for reads: a password prompt echoes nothing, so it is
-   never in the log. But anything typed at an *ordinary* prompt — an API key, a
+   Note what this means for reads: a password prompt echoes nothing, so a
+   password is never in the log and there is nothing to purge after a sudo
+   handoff. But anything typed at an *ordinary* prompt — an API key, a
    token — IS in the log and will appear in your `read` output. Do not repeat
    such a value back, quote it, or write it anywhere; tell the user it is in
    the session log and that `ath purge <name>` clears it.
@@ -144,6 +145,11 @@ Two halves, and the second one changes how you should work:
 - Within that session the timestamp is cached for about 15 minutes, so
   **subsequent `sudo` commands run without prompting again**. Check with
   `sudo -n true` before assuming either way.
+- **Elevation does not cross sessions, and `start` occupies a session.** Those
+  two facts together mean you cannot run a privileged command in parallel with
+  other work without asking for a second password. Plan for it: keep ONE
+  privileged session and put every `sudo` there, and make any parallel sessions
+  unprivileged. Discovering this halfway through costs the user an extra prompt.
 - To warm it deliberately, run **`sudo -v`** first. That parks on the prompt
   and does nothing else, so you can ask once, up front, before you know exactly
   which privileged commands you will need — rather than discovering it
@@ -211,9 +217,12 @@ Your job when it fires:
    way. `3` is not a failure of the command you ran; treating it as one is how
    you end up asking a person to answer something twice.
 
-   Do NOT watch `ath requests` for a terminal status. A request is CLEARED when
-   it resolves, so a loop grepping for "ANSWERED" waits forever on a question
-   that was answered — the failure this whole step exists to prevent.
+   Do NOT poll `ath requests` in a loop waiting for an answer. It is a pull-only
+   view: it tells you the state when you look, and looking repeatedly burns your
+   turn doing nothing. Arm the watch above instead — that is the whole point of
+   this step. (Resolved requests ARE retained for an hour with their exit code,
+   so a look after the fact does find them; an earlier version cleared them
+   immediately, which is why older advice says a loop waits forever.)
 
 1. **Relay it.** Say plainly which session is waiting and for what:
    *"`vpn` is waiting for your sudo password — `ath attach vpn`, type it, then

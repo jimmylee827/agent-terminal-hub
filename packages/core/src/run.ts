@@ -1043,16 +1043,23 @@ async function runLocked(
     ...(needsHuman ? { needsHuman } : {}),
     // Only when no wall fired: if one did, the request exists and the warning
     // would be noise. The dangerous case is the SILENT one.
-    ...(!needsHuman && credentialBlindSpot(command) ? { warning: credentialBlindSpot(command) } : {}),
-    // Only when the code is 0, and only ONCE per session.
-    //
-    // Narrowing to exit 0 was not enough: an agent that pipes constantly still
-    // saw it on nearly every call and said so — "I stopped reading it. That's
-    // the warning-fatigue failure the docs describe for a different warning."
-    // A caveat that is always present carries no information. Said once, it
-    // teaches the rule; repeated forever, it trains the reader to skip it.
-    ...(exitCode === 0 && (await firstCaveatFor(clean)) && compoundExitCaveat(command)
-      ? { exitCaveat: compoundExitCaveat(command) }
+    ...(!needsHuman && (credentialBlindSpot(command) ?? traversalBlindSpot(command))
+      ? { warning: credentialBlindSpot(command) ?? traversalBlindSpot(command) }
+      : {}),
+    // ALWAYS marked, explained ONCE. See firstCaveatFor.
+    ...(compoundExitCaveat(command)
+      ? {
+          exitCaveat: compoundExitCaveat(command),
+          ...((await firstCaveatFor(clean))
+            ? {
+                exitCaveatNote:
+                  'The exit code above is the status of only the last part of this line — an ' +
+                  'earlier failure can be hidden by a later success, and a pipeline reports its ' +
+                  'last stage. Read the output rather than trusting the number. (Shown once per ' +
+                  'session; the short marker stays on every affected command.)',
+              }
+            : {}),
+        }
       : {}),
     timedOut: false,
     needsInput: state === 'needs-input',
@@ -1664,18 +1671,23 @@ function compoundExitCaveat(command: string): string | undefined {
   const hasSemicolon = /;/.test(bare);
   const hasPipe = /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
   if (!hasSemicolon && !hasPipe) return undefined;
-  // Kept short on purpose: this rides along on nearly every command an agent
-  // runs, and a forty-word paragraph repeated that often is a standing tax on a
-  // tool whose whole job is shuttling text.
-  return `exit code is from the last ${hasPipe && !hasSemicolon ? 'pipeline stage' : 'command on the line'}, not the whole line.`;
+  return hasPipe && !hasSemicolon ? 'last-pipeline-stage-only' : 'last-command-only';
 }
 
 /**
- * True the FIRST time a session would show the compound-exit caveat.
+ * True the FIRST time a session would show the LONG form of the caveat.
  *
- * Warning fatigue is a real failure mode, and this project has now caused it
- * twice: a note on every result is one the reader learns to skip, which costs
- * exactly the occasion it was written for.
+ * Two agents complained about this field in opposite directions, one round
+ * apart, and both were right about a different failure:
+ *
+ *   "I stopped reading it"       — a full sentence on nearly every result.
+ *   "it fired once and went      — shown once, then silent while the hazard
+ *    quiet while I kept running     stayed; lost entirely to a context summary
+ *    misleading pipelines"          or to an agent joining mid-session.
+ *
+ * Neither "always" nor "once" is right for the same text. So the marker is now
+ * always present and costs three words, and the explanation is shown once. The
+ * hazard is never silent, and the paragraph never repeats.
  */
 async function firstCaveatFor(session: string): Promise<boolean> {
   const flag = path.join(RC_DIR, `${session}.caveat`);
@@ -1703,6 +1715,36 @@ const PRIVILEGE_CMD_RE = /(^|[\s;|&(`$])(sudo|doas|su|ssh|scp|sftp|rsync|passwd|
 const NON_INTERACTIVE_RE = /(^|\s)(-n|--non-interactive|--batch|-o\s*BatchMode=yes|BatchMode=yes)(\s|$)/;
 
 const STDERR_DISCARDED_RE = /(^|[\s;|&(])(2\s*>\s*(?!&\s*1)\S+|&>\s*\S+|>&\s*\/dev\/null)/;
+
+/** Tools that walk a tree and skip what they cannot read. */
+const TRAVERSAL_CMD_RE = /(^|[\s;|&(])(du|find|grep|rsync|tar|cp|ls)\b/;
+
+/** Paths where an unprivileged walk WILL hit unreadable areas. */
+const SYSTEM_PATH_RE = /(^|\s)\/(?:$|\s)|(^|\s)\/(var|etc|root|home|usr|opt|srv|proc|sys)\b/;
+
+/**
+ * Warn when discarded stderr is hiding permission errors from a tree walk.
+ *
+ * An agent ran `du -xh -d2 / 2>/dev/null`, got `20G` against df's `70G`, and
+ * nearly filed it: the walk could not read /var/lib/docker, its own redirect
+ * ate the errors, and the exit code was 0. A 50 GB understatement that looked
+ * entirely plausible, caught only by cross-checking df.
+ *
+ * The credential blind-spot warning did not cover this and should not — the
+ * command was unprivileged. But the shape is the same one this tool keeps
+ * getting bitten by: stderr thrown away, a success reported, and a silently
+ * incomplete answer. Different cause, same class, worth its own warning.
+ */
+function traversalBlindSpot(command: string): string | undefined {
+  if (!TRAVERSAL_CMD_RE.test(command) || !STDERR_DISCARDED_RE.test(command)) return undefined;
+  if (!SYSTEM_PATH_RE.test(command)) return undefined;
+  return (
+    'This walks a system path with stderr discarded, so permission errors are being thrown ' +
+    'away — anything unreadable is silently omitted and the exit code will still be 0. A total ' +
+    'from this may be far short of the truth. Keep stderr (2>&1), or run it with the privilege ' +
+    'it needs, and cross-check totals against an independent source.'
+  );
+}
 
 /**
  * Warn when a command has switched off the very thing this hub is for.

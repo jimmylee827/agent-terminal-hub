@@ -1343,15 +1343,16 @@ cav() {
   $ATH kill "$n" --force >/dev/null 2>&1
   printf '%s' "$r"
 }
-check "a trailing echo hiding a failure is flagged" "flagged" "$(cav 'false; echo done')"
-# Only the misleading direction. A non-zero code from a compound line makes a
-# caller investigate anyway; exit 0 is the one that hides an earlier failure and
-# gets believed. Emitting on both put the note on nearly every command run.
-check "a pipeline that exits 0 while a stage failed is flagged" "flagged" "$(cav 'false | cat')"
-check "a self-evident non-zero is not flagged" "silent" "$(cav 'echo hi | grep -c nope')"
-check "a simple command is not flagged" "silent" "$(cav 'echo plain')"
+# The MARKER rides every affected command — an agent said a caveat shown once
+# "is simply gone while the hazard remains" for anyone joining mid-session or
+# after a context summary. It is three words, so always showing it costs
+# nothing; the paragraph is what gets shown once (checked separately below).
+check "a trailing echo hiding a failure is marked" "flagged" "$(cav 'false; echo done')"
+check "a pipeline that exits 0 while a stage failed is marked" "flagged" "$(cav 'false | cat')"
+check "a non-zero pipeline is marked too — the code is still partial" "flagged" "$(cav 'echo hi | grep -c nope')"
+check "a simple command is not marked" "silent" "$(cav 'echo plain')"
 check "a separator inside quotes is not a compound command" "silent" "$(cav 'echo "a;b"')"
-check "an && chain is not flagged — there the status is the answer" "silent" "$(cav 'true && echo ok')"
+check "an && chain is not marked — there the status is the answer" "silent" "$(cav 'true && echo ok')"
 $ATH kill xc --force >/dev/null 2>&1
 
 echo
@@ -1496,11 +1497,34 @@ echo "-- a caveat that appears every time teaches the reader to skip it"
 $ATH kill cv --force >/dev/null 2>&1
 $ATH new cv >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^cv ' && break; sleep 1; done
-cv() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"shown":"quiet")}catch(e){console.log("x")}})'; }
-check "the first compound command carries the caveat" "shown" "$(cv 'true; echo a')"
-check "the second does not" "quiet" "$(cv 'true; echo b')"
-check "nor does a later pipeline" "quiet" "$(cv 'echo c | cat')"
+# Marker every time, EXPLANATION once. Two agents complained in opposite
+# directions one round apart — "I stopped reading it" and "it fired once then
+# went quiet while the hazard remained" — and both were right about a different
+# failure. Neither always nor once is correct for the same text.
+cvm() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveat?"marked":"none")}catch(e){console.log("x")}})'; }
+cvn() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exitCaveatNote?"explained":"quiet")}catch(e){console.log("x")}})'; }
+check "the first compound command is explained" "explained" "$(cvn 'true; echo a')"
+check "the second is not explained again" "quiet" "$(cvn 'true; echo b')"
+check "but it is still marked" "marked" "$(cvm 'true; echo c')"
+check "and so is a later pipeline" "marked" "$(cvm 'echo d | cat')"
 $ATH kill cv --force >/dev/null 2>&1
+
+echo
+echo "-- a silent tree walk is flagged even without sudo"
+# An agent ran `du -xh -d2 / 2>/dev/null`, got 20G against df's 70G, and nearly
+# filed it: the walk could not read /var/lib/docker, its own redirect ate the
+# errors, and the exit code was 0. A 50 GB understatement that looked entirely
+# plausible. The credential warning did not cover it and should not — the
+# command was unprivileged — but the shape is the same: stderr discarded,
+# success reported, answer silently incomplete.
+$ATH kill tw --force >/dev/null 2>&1
+$ATH new tw >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^tw ' && break; sleep 1; done
+tw() { $ATH run tw --timeout 20 --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).warning?"warned":"quiet")}catch(e){console.log("x")}})'; }
+check "a system-path walk discarding stderr is warned about" "warned" "$(tw 'find /etc -maxdepth 0 2>/dev/null')"
+check "the same walk keeping stderr is not" "quiet" "$(tw 'find /etc -maxdepth 0 2>&1')"
+check "a walk of the current directory is not" "quiet" "$(tw 'find . -maxdepth 0 2>/dev/null')"
+$ATH kill tw --force >/dev/null 2>&1
 
 echo
 printf 'passed %d, failed %d\n' "$pass" "$fail"
