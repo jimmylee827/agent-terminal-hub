@@ -506,11 +506,36 @@ set -g default-terminal "screen-256color"
 /**
  * Create ~/.ath and refresh the generated assets. Safe to call repeatedly;
  * every entry point calls it before touching tmux.
+ *
+ * Every directory, from `ATH_ARTIFACTS` — not just the two this used to name.
+ * `mkdir` with `recursive: true` applies its mode only when it CREATES the
+ * directory, so whichever process got there first set the permissions, and the
+ * editor extension got there first with a bare `mkdir` that took the umask.
+ * On a stock macOS umask of 022 that left `requests/` world-readable — the one
+ * directory whose own artifact entry says its reason text quotes the command —
+ * while `election/`, created first by core on the same machine, was 0700. That
+ * split is the signature of the race, not a considered difference.
+ *
+ * The `chmod` is what repairs an install already in the wrong state: fixing
+ * the creating call alone would leave every existing `~/.ath` at 0755 forever,
+ * because `mkdir` on an existing directory does nothing at all.
  */
 export async function ensureLayout(): Promise<void> {
   await fs.mkdir(ATH_HOME, { recursive: true, mode: 0o700 });
-  await fs.mkdir(LOG_DIR, { recursive: true, mode: 0o700 });
-  await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 });
+  await fs.chmod(ATH_HOME, 0o700).catch(() => undefined);
+  for (const artifact of ATH_ARTIFACTS) {
+    if (!artifact.name.endsWith('/')) continue;
+    await fs.mkdir(artifact.absolute, { recursive: true, mode: 0o700 }).catch(() => undefined);
+    await fs.chmod(artifact.absolute, 0o700).catch(() => undefined);
+  }
+  // `notify.log` is created by `appendFile` in the editor extension, which
+  // likewise took the umask and left it 0644 — and unlike `requests/`, where
+  // the 0600 entries stayed private behind a readable directory, here the
+  // world-readable thing is the CONTENT. Only repaired when it exists; this
+  // must not create it.
+  await fs.chmod(NOTIFY_LOG, 0o600).catch(() => undefined);
+  // The rotated generation holds the same content and predates the fix.
+  await fs.chmod(`${NOTIFY_LOG}.1`, 0o600).catch(() => undefined);
   await writeIfChanged(HELPER_PATH, HELPER_SH);
   await writeIfChanged(TMUX_CONF, TMUX_CONF_BODY);
 }

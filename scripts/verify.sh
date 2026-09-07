@@ -358,6 +358,38 @@ chk "notify.log untouched under the cap" "yes" "$(printf '%s' "$RETEN" | grep -q
 chk "notify.log rotates over the cap"    "yes" "$(printf '%s' "$RETEN" | grep -q overRotates && echo yes || echo no)"
 chk "notify.log keeps ONE generation"    "yes" "$(printf '%s' "$RETEN" | grep -q oneGeneration && echo yes || echo no)"
 
+# ---- ~/.ath is private, and stays private ----------------------------------
+#
+# `requests/` was 0755 on a stock macOS umask because the editor extension
+# created it with a bare mkdir and won the race against core's 0700 one —
+# `mkdir` applies its mode only when it CREATES. Same umask left notify.log,
+# which is CONTENT rather than metadata, at 0644. The repair matters as much
+# as the fix: mkdir on an existing directory does nothing, so without a chmod
+# every install already out there stays loose forever.
+PERM="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), out=[];
+const mode=f=>fs.statSync(f).mode & 0o777;
+(async()=>{
+  await a.ensureLayout();
+  const dirs=a.ATH_ARTIFACTS.filter(x=>x.name.endsWith("/"));
+  const bad=dirs.filter(x=>mode(x.absolute)!==0o700).map(x=>x.name);
+  out.push(bad.length===0?"allDirs700":"LOOSE:"+bad.join(","));
+  out.push(dirs.length>=7?"coversAll":"MISSINGDIRS:"+dirs.length);
+  fs.chmodSync(dirs[0].absolute,0o755);
+  await a.ensureLayout();
+  out.push(mode(dirs[0].absolute)===0o700?"repairsDir":"NOREPAIR");
+  fs.writeFileSync(a.NOTIFY_LOG,"x"); fs.chmodSync(a.NOTIFY_LOG,0o644);
+  await a.ensureLayout();
+  out.push(mode(a.NOTIFY_LOG)===0o600?"repairsNotify":"NOTIFYLOOSE");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "every artifact dir is 0700"       "yes" "$(printf '%s' "$PERM" | grep -q allDirs700    && echo yes || echo no)"
+chk "layout covers every artifact dir" "yes" "$(printf '%s' "$PERM" | grep -q coversAll     && echo yes || echo no)"
+chk "a loosened dir is repaired"       "yes" "$(printf '%s' "$PERM" | grep -q repairsDir    && echo yes || echo no)"
+chk "a loosened notify.log is repaired" "yes" "$(printf '%s' "$PERM" | grep -q repairsNotify && echo yes || echo no)"
+
 # ---- await_human must not report "still waiting" at an answered prompt -----
 #
 # Found by a cold agent mid-run. It asked for a password, the human typed it,

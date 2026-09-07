@@ -1,6 +1,5 @@
 import { existsSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
-import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 
 import {
@@ -135,7 +134,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // ---- explicit agent requests ----------------------------------------
 
-  await fs.mkdir(REQUEST_DIR, { recursive: true }).catch(() => undefined);
+  // Through `ensureLayout`, never a bare mkdir.
+  //
+  // This line created `requests/` with no mode, so it took the umask — 0755 on
+  // a stock macOS — and because `mkdir` cannot change an existing directory,
+  // whichever process won the race set the permissions for good. The extension
+  // activates at editor startup, so it usually won, and the directory whose
+  // reason text quotes the command back ended up world-readable while core's
+  // own `mkdir` two modules away asked for 0700 and was ignored.
+  //
+  // One creator, one mode, and it repairs what the old one left behind.
+  await ensureLayout().catch(() => undefined);
   void drainRequests();
   try {
     let debounce: NodeJS.Timeout | undefined;
@@ -171,7 +180,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // its own poll has not come round yet. Poll intervals differ by design — 3s
   // when a panel is hidden, 0.8s when it is open — and without this the window
   // that merely looked first always won, whatever its rank.
-  await fs.mkdir(ELECTION_DIR, { recursive: true }).catch(() => undefined);
+  // Created by `ensureLayout` above, at 0700 — see the note there.
   try {
     electionWatcher = fsWatch(ELECTION_DIR, (_event, filename) => {
       if (!filename) return;

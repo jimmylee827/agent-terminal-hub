@@ -112,7 +112,11 @@ function log(line: string): void {
   // window and can only be read by a human looking at that window. Five rounds
   // of this were spent asking which window did what. All windows append here,
   // so the whole picture is one file read.
-  void appendFile(NOTIFY_LOG, `${entry}\n`).catch(() => undefined);
+  // 0600, because this file names sessions, working directories and request
+  // ids. `appendFile` applies the mode only when it CREATES the file, so this
+  // covers a fresh install and `ensureLayout` repairs an existing 0644 one —
+  // which is what the umask left behind everywhere this shipped.
+  void appendFile(NOTIFY_LOG, `${entry}\n`, { mode: 0o600 }).catch(() => undefined);
   maybeRotate();
 }
 
