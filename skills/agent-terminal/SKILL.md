@@ -90,7 +90,19 @@ ath poll web --handle <h> --since <n> --json
 
 Pass the previous `next_offset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
-polls to match the work — do not spin.
+polls to match the work — do not spin. Every `read` returns a `next_offset`,
+including one with no `--since`, so that is where your first one comes from.
+
+**A chatty job needs `read --tail N`, not `poll`.** `poll` returns every byte
+since the offset you handed it, which for a build printing megabytes is your
+whole context in one call — and you cannot know you needed something smaller
+until it has already arrived. `--tail` is bounded however much the command
+printed, so watch progress with it and use `poll` (or `wait`) for the finish:
+
+```sh
+ath read bigjob --tail 3        # bounded: progress, whatever the volume
+ath poll bigjob --handle <h> --since <n>   # unbounded: everything since <n>
+```
 
 **Keep the handle, and give it to `wait`.** A session running a shell SCRIPT
 looks idle: the pane reports its foreground process, and `brew install`,

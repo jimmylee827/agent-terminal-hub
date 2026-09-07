@@ -462,6 +462,48 @@ chk "layout covers every artifact dir" "yes" "$(printf '%s' "$PERM" | grep -q co
 chk "a loosened dir is repaired"       "yes" "$(printf '%s' "$PERM" | grep -q repairsDir    && echo yes || echo no)"
 chk "a loosened notify.log is repaired" "yes" "$(printf '%s' "$PERM" | grep -q repairsNotify && echo yes || echo no)"
 
+# ---- the follow loop must be startable from a standing start ---------------
+#
+# The documented way to follow a session is to pass `next_offset` back as
+# `since`. Only the `since` shape returned one, so an agent holding no offset
+# could not obtain its first — it had to invent a number or read the whole log
+# to find the end, which is the cost the offset exists to avoid. A cold agent
+# hit exactly this: "the documented round-trip can't be bootstrapped from
+# --tail". Asserted as a ROUND TRIP, because that is the claim: the offset a
+# tail read hands you must be usable as `since`.
+OFFS="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const home=process.env.ATH_HOME;
+fs.mkdirSync(path.join(home,"log"),{recursive:true});
+const log=path.join(home,"log","f.log");
+(async()=>{
+  fs.writeFileSync(log,"alpha\nbravo\ncharlie\n");
+  const t=await a.readTail("f",2);
+  out.push(typeof t.nextOffset==="number"?"tailHasOffset":"NOOFFSET");
+  out.push(t.nextOffset===fs.statSync(log).size?"offsetIsEnd":"OFFSETWRONG");
+  out.push(t.output.includes("charlie")?"tailHasOutput":"NOOUTPUT");
+  // Round trip: resuming from it returns nothing, because nothing is new.
+  const s1=await a.readSince("f",t.nextOffset);
+  out.push(s1.output.trim()===""?"resumeIsEmpty":"RESUMEDUP:"+JSON.stringify(s1.output));
+  // And picks up exactly what lands afterwards.
+  fs.appendFileSync(log,"delta\n");
+  const s2=await a.readSince("f",t.nextOffset);
+  out.push(s2.output.includes("delta")&&!s2.output.includes("alpha")
+    ?"resumeGetsNew":"RESUMEWRONG");
+  // The offset must never point PAST what was returned, or a command still
+  // printing loses whatever landed between the size read and the tail read.
+  out.push(t.nextOffset<=fs.statSync(log).size?"neverPastEnd":"OVERSHOT");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a tail read returns an offset"      "yes" "$(printf '%s' "$OFFS" | grep -q tailHasOffset && echo yes || echo no)"
+chk "that offset is the log end"         "yes" "$(printf '%s' "$OFFS" | grep -q offsetIsEnd   && echo yes || echo no)"
+chk "a tail read still returns output"   "yes" "$(printf '%s' "$OFFS" | grep -q tailHasOutput && echo yes || echo no)"
+chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q resumeIsEmpty && echo yes || echo no)"
+chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
+chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
+
 # ---- an idle-LOOKING pane is not a finished command ------------------------
 #
 # `pane_current_command` names the foreground PROCESS, so a shell script runs

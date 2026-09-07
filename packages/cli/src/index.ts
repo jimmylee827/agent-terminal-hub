@@ -407,11 +407,21 @@ async function main(): Promise<number> {
         }
         return 0;
       }
-      const text = await readTail(name, flagNumber(flags, 'tail', 200));
+      const tail = await readTail(name, flagNumber(flags, 'tail', 200));
       if (flagBool(flags, 'json')) {
-        console.log(JSON.stringify(toWire({ ...(await get(name)), output: text }), null, 2));
+        // `nextOffset` LAST, so it survives the spread rather than being
+        // overwritten by a session field — and so this shape matches the
+        // `--since` one, which is the whole point of returning it here.
+        console.log(
+          JSON.stringify(
+            toWire({ ...(await get(name)), output: tail.output, nextOffset: tail.nextOffset }),
+            null,
+            2,
+          ),
+        );
       } else {
-        console.log(text);
+        console.log(tail.output);
+        console.error(c.dim(`\n[ath] follow with --since ${tail.nextOffset}`));
       }
       return 0;
     }

@@ -301,7 +301,22 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           note: 'Pass next_offset as `since` on your next read to avoid re-reading this output.',
         });
       }
-      return text(await readTail(session, Number(args.lines ?? 200)));
+      // Output block PLUS metadata, like every other tool that returns both.
+      //
+      // This branch alone returned bare text, so it carried no `next_offset`
+      // and no `--- ath ---` trailer — an agent reported both, as one symptom
+      // ("the documented round-trip can't be bootstrapped") and one puzzle
+      // ("two results had no metadata block at all; I couldn't tell whether
+      // that was intentional"). It was not intentional.
+      const tail = await readTail(session, Number(args.lines ?? 200));
+      return jsonWithOutput(
+        {
+          session,
+          next_offset: tail.nextOffset,
+          note: 'Pass next_offset as `since` on your next read to get ONLY what is new.',
+        },
+        tail.output,
+      );
     }
 
     case 'start': {

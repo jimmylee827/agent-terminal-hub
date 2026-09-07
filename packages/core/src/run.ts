@@ -2247,12 +2247,33 @@ function encodeCommand(command: string): string {
 }
 
 /** Tail a session's output. Cost is bounded by the window, not the log size. */
-export async function readTail(name: string, lines = 200): Promise<string> {
+/**
+ * The last `lines` of a session, AND where to resume from.
+ *
+ * The offset is not decoration. The documented way to follow a session is to
+ * pass `nextOffset` back as `since` — but only the `since` shape returned one,
+ * so an agent with no offset yet had no way to obtain its first. It had to
+ * guess a number, or read the whole log to learn where the end was, which is
+ * the exact thing the offset exists to avoid. A cold agent hit this and said
+ * so: "the documented round-trip can't be bootstrapped from --tail".
+ *
+ * Both shapes carry it now, so either one starts the loop.
+ */
+export async function readTail(
+  name: string,
+  lines = 200,
+): Promise<{ output: string; nextOffset: number }> {
   const clean = validateName(name);
-  const raw = await readLogTailBytes(logPath(clean));
-  if (!raw) return capturePane(clean, lines);
+  const log = logPath(clean);
+  // Taken BEFORE the read, so the offset can never point past what was
+  // returned. A command still printing would otherwise let the file grow
+  // between the two calls, and resuming from the later offset would skip
+  // whatever landed in the gap — silent loss, which is worse than overlap.
+  const nextOffset = await fileSize(log);
+  const raw = await readLogTailBytes(log);
+  if (!raw) return { output: await capturePane(clean, lines), nextOffset };
   const all = trimBlankEdges(toLines(raw).filter((line) => !MARKER_LINE_RE.test(line)));
-  return all.slice(Math.max(0, all.length - lines)).join('\n');
+  return { output: all.slice(Math.max(0, all.length - lines)).join('\n'), nextOffset };
 }
 
 /** Incremental read for pollers: everything after `since`, plus where to resume. */

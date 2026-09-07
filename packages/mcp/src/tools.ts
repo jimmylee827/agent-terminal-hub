@@ -89,7 +89,18 @@ export const TOOL_DEFINITIONS = [
       'Read recent output from a session without running anything. Use this after a human has ' +
       'answered a prompt you reported, or to check on a long-running process. Pass `since` with ' +
       'the `next_offset` from your previous read to get ONLY what is new — do that when polling, ' +
-      'so you are not re-reading the same output into your context every time.',
+      'so you are not re-reading the same output into your context every time. EVERY read ' +
+      'returns a `next_offset`, including one with no `since`, so this call is how you get your ' +
+      'first one. ' +
+      // The bounded primitive, named where an agent decides how to watch a job.
+      // `poll` is the documented monitor and returns EVERYTHING since the
+      // offset — which for a chatty build is megabytes, arriving before the
+      // caller can know it needed something smaller. An agent watching a job
+      // that emitted 2.6 MB found `lines` on its own and reported that nothing
+      // had pointed it here.
+      'FOR A CHATTY JOB, WATCH IT WITH THIS AND A SMALL `lines`, NOT WITH `poll`: `poll` hands ' +
+      'back every byte since the offset you gave it, so a build printing megabytes floods your ' +
+      'context in one call. `lines` is bounded no matter how much the command printed.',
     inputSchema: {
       type: 'object',
       properties: {
