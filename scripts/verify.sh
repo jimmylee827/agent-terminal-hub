@@ -524,6 +524,43 @@ chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q 
 chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
 chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
 
+# ---- a start that did not start must not look like one ----------------------
+#
+# `start` could not fail. It sent the wrapper and returned a handle
+# unconditionally, so a shell without the hub's helper answered
+# "__ath: command not found" while the caller got a handle, an offset and a
+# cheerful note about polling — indistinguishable from success. The handle then
+# belonged to a command that had never run and could never finish. A cold agent
+# lost a job to this and had to invent its own `type __ath` pre-check, while the
+# docs promised a `fallback_shell` signal only `run` has ever set.
+#
+# Driven through a REAL unhooked shell, not a stub: `exec env -i bash --norc`
+# leaves a pane with neither the framing hooks nor the wrapper, which is exactly
+# what a reconnected remote looks like.
+LAUNCH="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athl$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+(async()=>{
+  await a.create({name:"lp",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("lp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  // A healthy shell must NOT be flagged, or the signal is worthless.
+  const good=await a.start("lp","sleep 1");
+  out.push(good.launched===undefined?"healthyNotFlagged":"FALSEALARM");
+  await new Promise(r=>setTimeout(r,2500));
+  // Now a shell with neither hooks nor wrapper.
+  await a.sendLine("lp","exec env -i PATH=/usr/bin:/bin bash --norc --noprofile");
+  await new Promise(r=>setTimeout(r,2500));
+  const bad=await a.start("lp","sleep 1");
+  out.push(bad.launched===false?"unlaunchedFlagged":"SILENTSUCCESS");
+  out.push(typeof bad.handle==="string"&&bad.handle.length===12?"handleStillGiven":"NOHANDLE");
+  await a.kill("lp").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyNotFlagged && echo yes || echo no)"
+chk "a start that did NOT start is"      "yes" "$(printf '%s' "$LAUNCH" | grep -q unlaunchedFlagged && echo yes || echo no)"
+chk "and the handle is still returned"   "yes" "$(printf '%s' "$LAUNCH" | grep -q handleStillGiven  && echo yes || echo no)"
+
 # ---- a dead remote command must stop reporting itself as running ------------
 #
 # `poll`'s only liveness check was `paneDead`, and a dropped ssh link does not

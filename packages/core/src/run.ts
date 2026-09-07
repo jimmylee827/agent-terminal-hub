@@ -1743,11 +1743,37 @@ export async function start(name: string, command: string): Promise<StartResult>
     // filesystem walk with stderr thrown away — was also the one nothing
     // checked.
     const startWarning = credentialBlindSpot(command) ?? traversalBlindSpot(command);
+
+    // Confirm the frame actually opened, because `start` could not fail.
+    //
+    // It sent the wrapper and returned a handle unconditionally — so a shell
+    // with no `__ath` produced `__ath: command not found`, and the caller got
+    // a handle, an offset and a cheerful note about polling that were
+    // indistinguishable from success. The handle then belonged to a command
+    // that had never run and could never finish, which is the same corpse
+    // `poll` used to count upwards forever. A cold agent lost a job to this
+    // and had to invent its own `type __ath` pre-check; the docs meanwhile
+    // promised a `fallback_shell` signal that only `run` has ever set.
+    //
+    // The start marker is ground truth: the frame prints it BEFORE the command
+    // runs, so it appears in milliseconds when things are working, whatever
+    // the command goes on to do.
+    const launched = await awaitStartMarker(clean, nonce, START_CONFIRM_MS);
     return {
       session: clean,
       command,
       handle: nonce,
       offset,
+      // Reported, not thrown. The command may be sitting in the tty buffer
+      // about to run — a session that merely LOOKS idle is exactly the case
+      // `lastCommandEvidence` documents — and turning a delayed start into an
+      // error would invite a retry that runs it twice. So the claim is
+      // narrowed to what is actually known: this was not confirmed.
+      // `launched` and `warning` stay separate: `warning` means "a hazard in
+      // the command you wrote" everywhere it appears, and folding a delivery
+      // failure into it would make one field mean two things. Each surface
+      // renders its own guidance for this, in its own idiom.
+      ...(launched ? {} : { launched: false }),
       ...(startWarning ? { warning: startWarning } : {}),
     };
   });
@@ -2110,6 +2136,28 @@ async function wrapperReady(name: string): Promise<boolean> {
   return await get(name)
     .then((s) => s.wrapperInstalled === true)
     .catch(() => false);
+}
+
+/** How long to wait for a frame to open before saying it was not confirmed. */
+const START_CONFIRM_MS = 2500;
+
+/**
+ * Wait for a command's frame to actually open.
+ *
+ * Ground truth for "did this start", and cheap: the frame prints its start
+ * marker BEFORE running the command, so it lands within milliseconds whenever
+ * things are working, whatever the command then goes on to do.
+ */
+async function awaitStartMarker(name: string, nonce: string, timeoutMs: number): Promise<boolean> {
+  const file = logPath(name);
+  const marker = `${SENTINEL}<ATHS:${nonce}>`;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const raw = await readLogTailBytes(file, MARKER_SCAN_BYTES).catch(() => '');
+    if (raw.includes(marker)) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(60);
+  }
 }
 
 /**

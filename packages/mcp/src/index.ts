@@ -378,6 +378,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // available here and never offered, so the caller had to fail first to
         // learn it. Computed live because a stale name is worse than none.
         parallel_work: await parallelHint(started.session),
+        // A start that could not be confirmed must not read as a start.
+        ...(started.launched === false
+          ? {
+              launched: false,
+              what_to_do:
+                'The command was sent but its frame never opened, so it may not be running. ' +
+                'Read the session (`read` with a small `lines`) to see what actually happened ' +
+                'before you poll — this handle may never complete. Do NOT just send it again: ' +
+                'if the session was only slow, the command is queued and re-sending runs it ' +
+                'twice.',
+            }
+          : {}),
         ...(started.warning ? { warning: started.warning } : {}),
       });
     }

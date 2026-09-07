@@ -88,6 +88,15 @@ ath poll web --handle <h> --since <n> --json
 # -> { done, exitCode, output, nextOffset }
 ```
 
+**Check that it started.** A shell without the hub's helper — a nested shell,
+a reconnected remote — answers the wrapper with `__ath: command not found`,
+and the command never runs. `start` used to hand back a handle anyway, so that
+looked exactly like success and the handle could never complete. It now
+reports `launched: false` (the CLI prints `sent … (unconfirmed)` instead of
+`started`). If you see it, read the session before polling — and do **not**
+just send it again: if the session was merely slow, the command is queued and
+re-sending runs it twice.
+
 Pass the previous `next_offset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin. Every `read` returns a `next_offset`,
@@ -117,15 +126,16 @@ and read the file.** Use the session to watch progress and get the exit code:
 
 ```sh
 ath start bulk -- 'big-job > /tmp/run.out 2>/tmp/run.err; echo done'
-ath read bulk --tail 3                      # progress, bounded
+ath read bulk --tail 3                      # progress, bounded, any volume
 ath wait bulk --handle <h> --timeout 60     # finish, exact
-ath run bulk -- 'wc -l /tmp/run.out; tail -20 /tmp/run.out'
+ath run bulk -- 'wc -l /tmp/run.out; tail -20 /tmp/run.out'   # the real output
 ```
 
+The other two ways to read, when the transcript is the right place:
+
 ```sh
-ath read bigjob --tail 3                    # cheapest progress glance
-ath poll bigjob --handle <h> --since <n>    # incremental slice + exit code
-ath poll bigjob --handle <h> --since <n> --max-bytes 0   # opt out of the cap
+ath poll bulk --handle <h> --since <n>                 # incremental + exit code
+ath poll bulk --handle <h> --since <n> --max-bytes 0   # opt out of the cap
 ```
 
 **Keep the handle, and give it to `wait`.** A session running a shell SCRIPT

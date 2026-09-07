@@ -170,6 +170,16 @@ export interface StartResult {
    * simply was not wired to this path.
    */
   warning?: string;
+  /**
+   * Present and false when the frame never confirmed it opened.
+   *
+   * `start` could not fail: it sent the wrapper and returned a handle
+   * unconditionally, so a shell without the hub's helper produced
+   * "__ath: command not found" while the caller got a handle, an offset and a
+   * note about polling that were indistinguishable from success. The handle
+   * then belonged to a command that had never run. Absent means confirmed.
+   */
+  launched?: boolean;
 }
 
 export interface PollResult {

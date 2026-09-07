@@ -344,9 +344,27 @@ async function main(): Promise<number> {
       if (flagBool(flags, 'json')) {
         console.log(JSON.stringify(toWire(started), null, 2));
       } else {
-        console.log(`${c.green('started')} ${c.bold(name)}  handle ${started.handle}`);
+        // "started" is a claim, so only make it when it was confirmed.
+        console.log(
+          started.launched === false
+            ? `${c.yellow('sent')} ${c.bold(name)}  handle ${started.handle} ${c.dim('(unconfirmed)')}`
+            : `${c.green('started')} ${c.bold(name)}  handle ${started.handle}`,
+        );
         console.log(c.dim(`poll with:  ath poll ${name} --handle ${started.handle} --since ${started.offset}`));
       }
+      if (started.launched === false) {
+        console.error(
+          c.red(
+            `[ath] NOT confirmed — the command's frame never opened, so it may not be running ` +
+              `at all. The usual cause is a shell without the hub's helper (a nested shell, or ` +
+              `a reconnected remote), where the wrapper fails with "__ath: command not found". ` +
+              `Check with "ath read ${name} --tail 5" BEFORE polling; this handle may never ` +
+              `complete. Do not simply re-send it — if the session was only slow, the command ` +
+              `is queued and sending again runs it twice.`,
+          ),
+        );
+      }
+      if (started.warning) console.error(c.yellow(`[ath] ${started.warning}`));
       return 0;
     }
 
