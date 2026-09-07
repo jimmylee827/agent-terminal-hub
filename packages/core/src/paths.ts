@@ -360,7 +360,7 @@ const HOOKS_BOTH =
   `__ath_pre() { case "$1" in "\u2193\u2193\u2193 AGENT INPUT ID: "*) ` +
   `__ath_pending="\${1#*AGENT INPUT ID: }"; __ath_pending="\${__ath_pending%% *}"; ` +
   // A nonce is 12 lowercase hex characters. Anything else is not one.
-  `case "$__ath_pending" in ""|*[!0-9a-f]*) __ath_pending="" ;; ` +
+  `case "$__ath_pending" in ""|*[^0-9a-f]*) __ath_pending="" ;; ` +
   `*) printf '\\036<ATHT:%s>\\036\\r\\033[K' "$__ath_pending" ;; esac; return ;; esac; ` +
   `if [ -n "$__ath_pending" ]; then __ath_n="$__ath_pending"; __ath_pending=""; ` +
   `else __ath_h=$((__ath_h+1)); __ath_n="h$__ath_h"; fi; ` +
@@ -447,7 +447,7 @@ const HOOKS_BOTH =
   '__ath_env="$(printf %s "$__ath_cmd" | base64 2>/dev/null | tr -d \'\\n\')"; fi; ' +
   `case "$__ath_last" in *"\u2193\u2193\u2193 AGENT INPUT ID: "*) ` +
   `__ath_pending="\${__ath_last#*AGENT INPUT ID: }"; __ath_pending="\${__ath_pending%% *}"; ` +
-  `case "$__ath_pending" in ""|*[!0-9a-f]*) __ath_pending="" ;; ` +
+  `case "$__ath_pending" in ""|*[^0-9a-f]*) __ath_pending="" ;; ` +
   `*) printf '\\036<ATHT:%s>\\036\\r\\033[K' "$__ath_pending" ;; esac ;; esac; ` +
   `if [ -n "$__ath_pending" ]; then __ath_n="$__ath_pending"; __ath_pending=""; ` +
   `else __ath_h=$((__ath_h+1)); __ath_n="h$__ath_h"; fi; ` +
@@ -460,7 +460,7 @@ const HOOKS_BOTH =
   `__ath_last="$(HISTTIMEFORMAT= history 1 2>/dev/null)"; ` +
   `case "$__ath_last" in *": \u2193\u2193\u2193 AGENT INPUT ID: "*) ` +
   `__ath_pending="\${__ath_last#*AGENT INPUT ID: }"; __ath_pending="\${__ath_pending%% *}"; ` +
-  `case "$__ath_pending" in ""|*[!0-9a-f]*) __ath_pending="" ;; ` +
+  `case "$__ath_pending" in ""|*[^0-9a-f]*) __ath_pending="" ;; ` +
   `*) printf '\\036<ATHT:%s>\\036\\r\\033[K' "$__ath_pending" ;; esac ;; esac; ` +
   `PROMPT_COMMAND="__ath_bpost\${PROMPT_COMMAND:+; $PROMPT_COMMAND}"; ` +
   // Hand the whole kit to child shells, functions included.
