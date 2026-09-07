@@ -437,6 +437,19 @@ interface ResolvedOffset {
   beyondEnd?: boolean;
 }
 
+/**
+ * The offset a caller may hand back later. Logical, always.
+ *
+ * Every number the hub gives out as an offset has to be in the same units, or
+ * the units become a trap: `run` reported `log_offset` as a physical file
+ * position while `read` and `poll` returned logical ones, so passing the first
+ * to the second landed in the wrong place — silently, and only after a trim,
+ * which is the hardest kind of wrong to find.
+ */
+async function logicalEnd(name: string): Promise<number> {
+  return (await discardedBytes(name)) + (await fileSize(logPath(name)));
+}
+
 async function resolveOffset(name: string, since: number): Promise<ResolvedOffset> {
   const discarded = await discardedBytes(name);
   const physSize = await fileSize(logPath(name));
@@ -1019,7 +1032,7 @@ async function runLocked(
           timedOut: false,
           needsInput: true,
           state: 'needs-input',
-          logOffset: await fileSize(logPath(clean)),
+          logOffset: await logicalEnd(clean),
           reconnecting: true,
         };
       }
@@ -1041,6 +1054,10 @@ async function runLocked(
   const log = logPath(clean);
   let nonce = randomNonce();
   let offset = await fileSize(log);
+  // Physical, because everything below reads the file with it. What is
+  // RETURNED gets `discarded` added, so callers only ever see logical offsets.
+  // Stable for this call: the lock is held and the trim above already ran.
+  const discarded = await discardedBytes(clean);
 
   const outerCommand = session.currentCommand;
   // Only measured when the pane is already sitting in a shell — the only case
@@ -1192,7 +1209,7 @@ async function runLocked(
       timedOut: false,
       needsInput: false,
       state: 'dead',
-      logOffset: offset,
+      logOffset: discarded + offset,
       shellExited: true,
     };
   }
@@ -1230,7 +1247,7 @@ async function runLocked(
       timedOut: completion.kind === 'timeout',
       needsInput: state === 'needs-input',
       state,
-      logOffset: offset,
+      logOffset: discarded + offset,
       handle: nonce,
       ...(parkedAsk ? { needsHuman: parkedAsk } : {}),
     };
@@ -1384,7 +1401,7 @@ async function runLocked(
     needsInput: state === 'needs-input',
     state,
     ...(widthChange ? { paneWidthChanged: widthChange } : {}),
-    logOffset: offset,
+    logOffset: discarded + offset,
     // Surfaced even on success. The directory and environment are restored,
     // but a reconnect still means the remote shell is a NEW process: anything
     // not captured in exported state — a background job, a shell function, an
@@ -1705,7 +1722,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     const nonce = randomNonce();
     // Logical, so `poll --since <this>` still resolves after a trim — a long
     // job is exactly the one that trims its own log out from under its handle.
-    const offset = (await discardedBytes(clean)) + (await fileSize(logPath(clean)));
+    const offset = await logicalEnd(clean);
     await markStarted(nonce, offset);
 
     // Show the HUMAN the command, not the plumbing.
@@ -2514,7 +2531,7 @@ export async function readTail(
   // whatever landed in the gap — silent loss, which is worse than overlap.
   // Logical, matching every other offset the hub hands out: a caller cannot
   // tell which shape it was given, so there must only be one shape.
-  const nextOffset = (await discardedBytes(clean)) + (await fileSize(log));
+  const nextOffset = await logicalEnd(clean);
   const raw = await readLogTailBytes(log);
   if (!raw) return { output: await capturePane(clean, lines), nextOffset };
   const all = trimBlankEdges(toLines(raw).filter((line) => !MARKER_LINE_RE.test(line)));

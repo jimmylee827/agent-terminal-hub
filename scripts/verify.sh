@@ -670,6 +670,42 @@ chk "trimmed-away bytes are REPORTED"      "yes" "$(printf '%s' "$TRIM" | grep -
 chk "and what survives is still returned"  "yes" "$(printf '%s' "$TRIM" | grep -q stillReturnsWhatSurvives && echo yes || echo no)"
 chk "an offset past the end is named"      "yes" "$(printf '%s' "$TRIM" | grep -q beyondEndFlagged         && echo yes || echo no)"
 
+# Every offset the hub hands out must be in the SAME units.
+#
+# `run` reported `log_offset` as a physical file position while `read` and
+# `poll` returned logical ones. Identical until the first trim, then silently
+# divergent — and the docs invite exactly the mix, listing `next_offset` and
+# `log_offset` side by side as things you pass back. Asserted across all three
+# producers on one trimmed session, because the bug is only visible after a
+# trim and only when they are compared.
+UNITS="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athu$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), out=[];
+(async()=>{
+  await a.create({name:"un",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("un").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  await a.run("un","printf \"pad-%s\\n\" $(seq 1 400)",{timeoutMs:20000});
+  await a.rotateIfNeeded("un", 2048);            // force a trim
+  const discarded=await a.discardedBytes("un");
+  out.push(discarded>0?"trimHappened":"NOTRIM");
+  const physical=fs.statSync(a.logPath("un")).size;
+  const r=await a.run("un","echo units",{timeoutMs:20000});
+  const t=await a.readTail("un",1);
+  const s=await a.start("un","true");
+  // Every one of them must exceed the physical file size, which is only true
+  // if each added the discard watermark.
+  out.push(r.logOffset>physical?"runIsLogical":"RUNPHYSICAL");
+  out.push(t.nextOffset>physical?"readIsLogical":"READPHYSICAL");
+  out.push(s.offset>physical?"startIsLogical":"STARTPHYSICAL");
+  await a.kill("un").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "the units test really trimmed"        "yes" "$(printf '%s' "$UNITS" | grep -q trimHappened   && echo yes || echo no)"
+chk "run's log_offset is logical"          "yes" "$(printf '%s' "$UNITS" | grep -q runIsLogical   && echo yes || echo no)"
+chk "read's next_offset is logical"        "yes" "$(printf '%s' "$UNITS" | grep -q readIsLogical  && echo yes || echo no)"
+chk "start's offset is logical"            "yes" "$(printf '%s' "$UNITS" | grep -q startIsLogical && echo yes || echo no)"
+
 # ---- a capped read must PAGINATE, never truncate ---------------------------
 #
 # An agent following a build that printed 2.6 MB got all 2.6 MB in one poll:
