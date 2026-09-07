@@ -114,12 +114,12 @@ ${c.bold('Driving a session')}
   ath run <name> -- <command>      blocking; prints output, exits with its code
        [--timeout SEC] [--wait] [--json]
   ath start <name> -- <command>    non-blocking; prints a handle for polling
-  ath poll <name> --handle H [--since N]
+  ath poll <name> --handle H [--since N] [--max-bytes N]
   ath send <name> -- <keys>        tmux key names (C-c, Up, y, Enter)
   ath requests [--clear]           what the hub needs a human for
   ath await <name> [--handle H]    BLOCK until the human answers (for callbacks)
        [--text]                    send literal text plus Enter instead
-  ath read <name> [--tail N] [--since N] [--json]
+  ath read <name> [--tail N] [--since N] [--max-bytes N] [--json]
   ath wait <name> [--timeout SEC] [--handle H]
 
 ${c.bold('Humans')}
@@ -354,7 +354,12 @@ async function main(): Promise<number> {
       const name = requireName(positional[0]);
       const handle = flagString(flags, 'handle');
       if (!handle) return fail('a --handle is required. get one from: ath start');
-      const result = await poll(name, handle, flagNumber(flags, 'since', 0));
+      const result = await poll(
+        name,
+        handle,
+        flagNumber(flags, 'since', 0),
+        flags['max-bytes'] === undefined ? undefined : flagNumber(flags, 'max-bytes', 0),
+      );
       if (flagBool(flags, 'json')) {
         console.log(JSON.stringify(toWire(result), null, 2));
         return 0;
@@ -399,10 +404,23 @@ async function main(): Promise<number> {
     case 'read': {
       const name = requireName(positional[0]);
       if (flags.since !== undefined) {
-        const result = await readSince(name, flagNumber(flags, 'since', 0));
+        const result = await readSince(
+          name,
+          flagNumber(flags, 'since', 0),
+          flags['max-bytes'] === undefined ? undefined : flagNumber(flags, 'max-bytes', 0),
+        );
         if (flagBool(flags, 'json')) console.log(JSON.stringify(toWire(result), null, 2));
         else {
           if (result.output) console.log(result.output);
+          if (result.omittedBytes !== undefined) {
+            console.error(
+              c.yellow(
+                `[ath] ${result.omittedBytes} bytes were left out of the middle. They are NOT ` +
+                  `lost — read them with --since ${result.omittedResumeFrom}, or re-run with ` +
+                  `--max-bytes 0 for everything.`,
+              ),
+            );
+          }
           console.error(c.dim(`\n[ath] resume with --since ${result.nextOffset}`));
         }
         return 0;

@@ -293,11 +293,25 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     case 'read': {
       const session = String(args.session ?? '');
       if (args.since !== undefined) {
-        const result = await readSince(session, Number(args.since));
+        const result = await readSince(
+          session,
+          Number(args.since),
+          args.max_bytes === undefined ? undefined : Number(args.max_bytes),
+        );
         return json({
           session,
           output: result.output,
           next_offset: result.nextOffset,
+          ...(result.omittedBytes === undefined
+            ? {}
+            : {
+                omitted_bytes: result.omittedBytes,
+                omitted_resume_from: result.omittedResumeFrom,
+                omitted_note:
+                  `${result.omittedBytes} bytes were left out of the middle to keep this ` +
+                  `readable. They are NOT lost — read them with since=${result.omittedResumeFrom}. ` +
+                  `Pass max_bytes: 0 if you want everything in one call.`,
+              }),
           note: 'Pass next_offset as `since` on your next read to avoid re-reading this output.',
         });
       }
@@ -358,7 +372,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
 
     case 'poll': {
       const session = String(args.session ?? '');
-      const result = await poll(session, String(args.handle ?? ''), Number(args.since ?? 0));
+      const result = await poll(
+        session,
+        String(args.handle ?? ''),
+        Number(args.since ?? 0),
+        args.max_bytes === undefined ? undefined : Number(args.max_bytes),
+      );
       const payload: Record<string, unknown> = {
         session: result.session,
         done: result.done,

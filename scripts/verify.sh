@@ -504,6 +504,68 @@ chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q 
 chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
 chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
 
+# ---- a capped read must PAGINATE, never truncate ---------------------------
+#
+# An agent following a build that printed 2.6 MB got all 2.6 MB in one poll:
+# MAX_SLICE_BYTES is 16 MB and guards MEMORY, not context, and nothing else
+# guarded context. The damage lands before the caller can see the size, so a
+# warning on the result cannot fix it and a smaller default can.
+#
+# The whole bet is that the omitted middle is RECOVERABLE. If the resume offset
+# does not actually return the omitted bytes, this is not pagination, it is
+# silent data loss with a reassuring note attached — so that is what is
+# asserted, byte for byte.
+CAPPED="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const home=process.env.ATH_HOME;
+fs.mkdirSync(path.join(home,"log"),{recursive:true});
+const log=path.join(home,"log","c.log");
+// 400 KB of numbered lines, well past the 64 KB default.
+const lines=[]; for(let i=0;i<20000;i++) lines.push(`line-${String(i).padStart(6,"0")}-xxxxxxxxxxxxxxx`);
+fs.writeFileSync(log,lines.join("\n")+"\n");
+const total=fs.statSync(log).size;
+(async()=>{
+  const r=await a.readSince("c",0);
+  out.push(r.output.length < total/2 ? "isCapped" : "UNCAPPED");
+  out.push(typeof r.omittedBytes==="number" ? "reportsOmission" : "SILENT");
+  out.push(r.output.includes("line-000000") ? "keepsHead" : "NOHEAD");
+  out.push(r.output.includes(`line-${String(19999).padStart(6,"0")}`) ? "keepsTail" : "NOTAIL");
+  out.push(r.nextOffset===total ? "endOffsetIntact" : "ENDWRONG");
+  // The marker names the same offset the field does — a caller reading either
+  // must land in the same place.
+  const m=/since=(\d+)/.exec(r.output);
+  out.push(m && Number(m[1])===r.omittedResumeFrom ? "markerAgrees" : "MARKERDISAGREES");
+  // THE claim: resuming from it returns the bytes that were left out.
+  const gap=await a.readSince("c",r.omittedResumeFrom,0);   // 0 = uncapped
+  const missing=[];
+  for(let i=0;i<20000;i++){
+    const tag=`line-${String(i).padStart(6,"0")}`;
+    if(!r.output.includes(tag) && !gap.output.includes(tag)) missing.push(tag);
+  }
+  out.push(missing.length===0 ? "gapIsRecoverable" : "LOST:"+missing.length);
+  // Opting out returns everything in one call.
+  const all=await a.readSince("c",0,0);
+  out.push(all.omittedBytes===undefined && all.output.includes("line-010000")
+    ? "optOutWorks" : "OPTOUTBAD");
+  // Under the cap, nothing is added and nothing is claimed.
+  fs.writeFileSync(path.join(home,"log","s.log"),"tiny\n");
+  const small=await a.readSince("s",0);
+  out.push(small.omittedBytes===undefined && !small.output.includes("omitted")
+    ? "smallUntouched" : "SMALLTOUCHED");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a large slice is capped"             "yes" "$(printf '%s' "$CAPPED" | grep -q isCapped         && echo yes || echo no)"
+chk "the omission is reported as a field" "yes" "$(printf '%s' "$CAPPED" | grep -q reportsOmission  && echo yes || echo no)"
+chk "the head is kept"                    "yes" "$(printf '%s' "$CAPPED" | grep -q keepsHead        && echo yes || echo no)"
+chk "the tail is kept"                    "yes" "$(printf '%s' "$CAPPED" | grep -q keepsTail        && echo yes || echo no)"
+chk "next_offset still points at the end" "yes" "$(printf '%s' "$CAPPED" | grep -q endOffsetIntact  && echo yes || echo no)"
+chk "the marker and the field agree"      "yes" "$(printf '%s' "$CAPPED" | grep -q markerAgrees     && echo yes || echo no)"
+chk "the omitted middle is recoverable"   "yes" "$(printf '%s' "$CAPPED" | grep -q gapIsRecoverable && echo yes || echo no)"
+chk "max_bytes 0 opts out of the cap"     "yes" "$(printf '%s' "$CAPPED" | grep -q optOutWorks      && echo yes || echo no)"
+chk "a small slice is left alone"         "yes" "$(printf '%s' "$CAPPED" | grep -q smallUntouched   && echo yes || echo no)"
+
 # ---- an idle-LOOKING pane is not a finished command ------------------------
 #
 # `pane_current_command` names the foreground PROCESS, so a shell script runs

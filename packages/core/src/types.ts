@@ -182,6 +182,18 @@ export interface PollResult {
   output: string;
   /** Pass as `since` on the next poll. */
   nextOffset: number;
+  /**
+   * Bytes dropped from the MIDDLE of `output` because it exceeded the cap.
+   *
+   * Present only when something was dropped. `omittedResumeFrom` is the
+   * `since` that returns them, so the gap is recoverable and this is
+   * pagination rather than truncation — reading it is a choice, not a
+   * consolation. `nextOffset` still points at the END, so an ordinary follow
+   * loop carries on live and does not have to detour.
+   */
+  omittedBytes?: number;
+  /** The `since` that returns what `omittedBytes` counts. */
+  omittedResumeFrom?: number;
   state: SessionState;
   needsInput: boolean;
   /**

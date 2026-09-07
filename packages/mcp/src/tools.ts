@@ -98,9 +98,9 @@ export const TOOL_DEFINITIONS = [
       // caller can know it needed something smaller. An agent watching a job
       // that emitted 2.6 MB found `lines` on its own and reported that nothing
       // had pointed it here.
-      'FOR A CHATTY JOB, WATCH IT WITH THIS AND A SMALL `lines`, NOT WITH `poll`: `poll` hands ' +
-      'back every byte since the offset you gave it, so a build printing megabytes floods your ' +
-      'context in one call. `lines` is bounded no matter how much the command printed.',
+      'For a quick progress glance at a chatty job, this with a small `lines` is the cheapest ' +
+      'thing you can do: it reads a fixed window off the end however much the command has ' +
+      'printed. Use `poll` when you want the incremental slice and the exit code.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -109,6 +109,13 @@ export const TOOL_DEFINITIONS = [
         since: {
           type: 'number',
           description: 'Byte offset from a previous read\'s next_offset. Returns only newer output.',
+        },
+        max_bytes: {
+          type: 'integer',
+          description:
+            'Cap on how much output comes back (default 65536). Anything left out is taken ' +
+            'from the MIDDLE and is recoverable: the result names the `since` that returns it. ' +
+            'Pass 0 for no cap when you genuinely want every byte in one call.',
         },
       },
       required: ['session'],
@@ -148,7 +155,7 @@ export const TOOL_DEFINITIONS = [
       'Check a command started by the `start` tool. Returns only output produced since the ' +
       'offset you pass, plus `done` and the exit code once it finishes. Pass the previous ' +
       'response\'s `next_offset` as `since` on each call. Do not poll in a tight loop — space ' +
-      'calls out sensibly for the work you are waiting on.',
+      'calls out sensibly for the work you are waiting on. Output is CAPPED (see max_bytes): a job printing megabytes would otherwise return all of them in one call, and you cannot know you wanted less until it has arrived. When the cap bites, `omitted_bytes` and `omitted_resume_from` say what was left out and which `since` returns it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -160,6 +167,13 @@ export const TOOL_DEFINITIONS = [
             'Offset from `start` or the last poll. Offsets are per SESSION, not per handle: ' +
             'they keep climbing across jobs, so always pass back what you were last given ' +
             'rather than assuming a new job starts at zero.',
+        },
+        max_bytes: {
+          type: 'integer',
+          description:
+            'Cap on how much output comes back (default 65536). Anything left out is taken ' +
+            'from the MIDDLE and is recoverable: the result names the `since` that returns it. ' +
+            'Pass 0 for no cap when you genuinely want every byte in one call.',
         },
       },
       required: ['session', 'handle'],

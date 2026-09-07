@@ -93,15 +93,18 @@ new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin. Every `read` returns a `next_offset`,
 including one with no `--since`, so that is where your first one comes from.
 
-**A chatty job needs `read --tail N`, not `poll`.** `poll` returns every byte
-since the offset you handed it, which for a build printing megabytes is your
-whole context in one call — and you cannot know you needed something smaller
-until it has already arrived. `--tail` is bounded however much the command
-printed, so watch progress with it and use `poll` (or `wait`) for the finish:
+**Output is capped, and the cap paginates.** A job printing megabytes would
+otherwise hand you all of them in one call, and you cannot know you wanted
+less until it has arrived. `poll` and `read --since` return at most 64 KB by
+default: a head, then a marker, then the tail. Nothing is lost — the marker
+and the `omitted_resume_from` field both name the `since` that returns the
+gap, so you fetch it only if you want it. `next_offset` still points at the
+end, so an ordinary follow loop just carries on.
 
 ```sh
-ath read bigjob --tail 3        # bounded: progress, whatever the volume
-ath poll bigjob --handle <h> --since <n>   # unbounded: everything since <n>
+ath read bigjob --tail 3                    # cheapest progress glance
+ath poll bigjob --handle <h> --since <n>    # incremental slice + exit code
+ath poll bigjob --handle <h> --since <n> --max-bytes 0   # opt out of the cap
 ```
 
 **Keep the handle, and give it to `wait`.** A session running a shell SCRIPT

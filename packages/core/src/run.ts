@@ -60,6 +60,32 @@ const PROMPT_CHECK_MS = 500;
 /** Never buffer more than this from a single command; protects against a runaway process. */
 const MAX_SLICE_BYTES = 16 * 1024 * 1024;
 
+/**
+ * How much output one `poll` or incremental `read` hands back by default.
+ *
+ * MAX_SLICE_BYTES is a MEMORY guard — 16 MB, sized to stop a runaway process
+ * exhausting the process, and it does that job. It is not a context guard, and
+ * nothing else was one: an agent following a build that printed 2.6 MB got all
+ * 2.6 MB in a single poll. The damage is done by the time it can see the size,
+ * which is why a warning on the result cannot fix this and a smaller default
+ * can.
+ *
+ * The skipped bytes are RECOVERABLE — the result says exactly which `since`
+ * returns them — so this is pagination, not truncation. Pass `maxBytes: 0` to
+ * opt out and get everything, for a caller that genuinely wants the lot.
+ */
+const MAX_RETURN_BYTES = 64 * 1024;
+
+/**
+ * How much of a capped slice is taken from the START of the new output.
+ *
+ * The rest comes from the end. Both halves earn their place: the tail holds
+ * the error and the exit, and the head continues from exactly where the last
+ * poll stopped — dropping it would break the continuity the offset exists to
+ * provide. Weighted towards the tail because that is where a job goes wrong.
+ */
+const CAP_HEAD_FRACTION = 0.25;
+
 /** How much of a log `readTail` looks at. Bounded so cost is independent of log size. */
 const TAIL_WINDOW_BYTES = 256 * 1024;
 
@@ -364,6 +390,88 @@ export async function readLogFrom(file: string, offset: number): Promise<string>
   } finally {
     await handle.close();
   }
+}
+
+/** Read an exact byte range. Offsets are exact because the log is append-only. */
+async function readLogRange(file: string, start: number, length: number): Promise<Buffer> {
+  if (length <= 0) return Buffer.alloc(0);
+  let handle;
+  try {
+    handle = await fs.open(file, 'r');
+  } catch {
+    return Buffer.alloc(0);
+  }
+  try {
+    const buf = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buf, 0, length, start);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+export interface CappedSlice {
+  raw: string;
+  /** Bytes dropped from the middle, and the `since` that returns them. */
+  omitted?: { bytes: number; resumeFrom: number };
+}
+
+/**
+ * Everything after `since`, bounded, with the gap made RECOVERABLE.
+ *
+ * The cut is made on RAW BYTES, before any text processing, because that is
+ * the only place an offset means anything. Cutting the cleaned string and then
+ * reporting a byte offset would hand back a number that does not address what
+ * was dropped — worse than offering none, because a caller would trust it.
+ *
+ * The marker goes in on its own line as plain text, so it survives
+ * `cleanSlice` and `trimToCommandWindow` rather than being filtered out as
+ * plumbing. The command's own markers survive the cut too: a start marker is
+ * at the beginning of its output, so it lands in the head, and an end marker
+ * is the last thing it writes, so it lands in the tail.
+ */
+async function readLogCapped(
+  file: string,
+  since: number,
+  size: number,
+  maxBytes = MAX_RETURN_BYTES,
+): Promise<CappedSlice> {
+  const start = Math.max(0, Math.min(since, size));
+  const available = size - start;
+  if (maxBytes <= 0 || available <= maxBytes) {
+    return { raw: await readLogFrom(file, start) };
+  }
+  const headLen = Math.max(1, Math.floor(maxBytes * CAP_HEAD_FRACTION));
+  const tailLen = maxBytes - headLen;
+
+  // Both cuts land on a LINE boundary, and the offsets follow the cut rather
+  // than the requested length.
+  //
+  // Cutting at an arbitrary byte splits whichever line straddles it: half
+  // lands in the head, half begins the omitted region, and the line exists
+  // WHOLE in neither what you were handed nor what you fetch back. The suite
+  // caught exactly that — one line of twenty thousand, invisible to both — and
+  // a gap that cannot return every line it swallowed is not pagination, it is
+  // loss with a reassuring note attached. It also spliced half a line onto the
+  // marker, which reads as corrupted output.
+  const headBuf = await readLogRange(file, start, headLen);
+  const lastNewline = headBuf.lastIndexOf(0x0a);
+  const headBytes = lastNewline >= 0 ? lastNewline + 1 : headBuf.length;
+  const resumeFrom = start + headBytes;
+
+  const tailBuf = await readLogRange(file, size - tailLen, tailLen);
+  const firstNewline = tailBuf.indexOf(0x0a);
+  const tailSkip = firstNewline >= 0 ? firstNewline + 1 : 0;
+  const tailFrom = size - tailLen + tailSkip;
+
+  // Alignment ate the whole gap; there is nothing to omit, so do not pretend.
+  if (tailFrom <= resumeFrom) return { raw: await readLogFrom(file, start) };
+
+  const head = headBuf.subarray(0, headBytes).toString('utf8');
+  const tail = tailBuf.subarray(tailSkip).toString('utf8');
+  const bytes = tailFrom - resumeFrom;
+  const note = `[ath: ${bytes} bytes omitted here — read them with since=${resumeFrom}]`;
+  return { raw: `${head}${note}\n${tail}`, omitted: { bytes, resumeFrom } };
 }
 
 /**
@@ -1773,12 +1881,18 @@ export async function lastCommandEvidence(
  * `since` should be the previous call's `nextOffset` (or `start`'s `offset`),
  * so a caller polling a long job does not re-read the same output every time.
  */
-export async function poll(name: string, handle: string, since = 0): Promise<PollResult> {
+export async function poll(
+  name: string,
+  handle: string,
+  since = 0,
+  maxBytes = MAX_RETURN_BYTES,
+): Promise<PollResult> {
   const clean = validateName(name);
   const log = logPath(clean);
 
   const size = await fileSize(log);
-  const output = trimToCommandWindow(await readLogFrom(log, Math.min(since, size)), handle);
+  const slice = await readLogCapped(log, since, size, maxBytes);
+  const output = trimToCommandWindow(slice.raw, handle);
 
   let exitCode: number | null = null;
   let done = false;
@@ -1860,6 +1974,15 @@ export async function poll(name: string, handle: string, since = 0): Promise<Pol
     nextOffset: size,
     state: session.state,
     needsInput: session.state === 'needs-input',
+    // Surfaced as FIELDS, not only as the note inside the text. A caller
+    // deciding whether to go back for the gap should not have to parse prose
+    // out of the command's own output to find out there is one.
+    ...(slice.omitted === undefined
+      ? {}
+      : {
+          omittedBytes: slice.omitted.bytes,
+          omittedResumeFrom: slice.omitted.resumeFrom,
+        }),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
@@ -2280,12 +2403,27 @@ export async function readTail(
 export async function readSince(
   name: string,
   since: number,
-): Promise<{ output: string; nextOffset: number }> {
+  maxBytes = MAX_RETURN_BYTES,
+): Promise<{
+  output: string;
+  nextOffset: number;
+  omittedBytes?: number;
+  omittedResumeFrom?: number;
+}> {
   const clean = validateName(name);
   const log = logPath(clean);
   const size = await fileSize(log);
-  const output = cleanSlice(await readLogFrom(log, Math.min(since, size)));
-  return { output, nextOffset: size };
+  // Capped for the same reason `poll` is, and it must be BOTH: this is the
+  // other half of the documented follow loop, so bounding one and leaving the
+  // other just moves the flood to whichever the caller happened to pick.
+  const slice = await readLogCapped(log, since, size, maxBytes);
+  return {
+    output: cleanSlice(slice.raw),
+    nextOffset: size,
+    ...(slice.omitted === undefined
+      ? {}
+      : { omittedBytes: slice.omitted.bytes, omittedResumeFrom: slice.omitted.resumeFrom }),
+  };
 }
 
 export { stripAnsi };
