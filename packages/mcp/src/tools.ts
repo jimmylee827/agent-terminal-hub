@@ -37,9 +37,22 @@ export const TOOL_DEFINITIONS = [
         width: {
           type: 'integer',
           description:
-            'Pane columns (default 200). tmux TRUNCATES output to the pane width, so a wide ' +
-            'value protects anything you intend to parse by column. Not a guarantee: a human ' +
-            'attaching resizes the pane. For parsing, prefer --json/--format/-o instead.',
+            // This said "tmux TRUNCATES output to the pane width". It does not,
+            // and a cold agent disproved it in one command: 400 characters into
+            // a 156-column pane came back as 400. `run` reads the pipe-pane log
+            // between markers, which is a real capture, not a screen scrape.
+            //
+            // Worse than merely wrong — it pointed at the wrong defence. What
+            // actually loses data is a program formatting ITSELF to $COLUMNS
+            // (ps, lsblk, vmstat, docker ps): the bytes were never written, so
+            // no capture can recover them. A wide pane helps that; it is not
+            // protecting you from tmux.
+            'Pane columns (default 200). Command output is NOT truncated — it is read from the ' +
+            'session log, so it comes back whole however long the lines are. Width still ' +
+            'matters because many programs format THEMSELVES to the terminal width (ps, ' +
+            'lsblk, docker ps), and those columns are lost before anything can capture them. ' +
+            'A human attaching resizes the pane, so width is never a guarantee: for anything ' +
+            'you intend to parse, prefer --json/--format/-o over column layout.',
         },
         remote: { type: 'string', description: 'Host to ssh into immediately, e.g. "myserver".' },
         pin: { type: 'boolean', description: 'Protect from automatic cleanup.' },
