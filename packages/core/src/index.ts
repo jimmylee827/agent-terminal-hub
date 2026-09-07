@@ -66,9 +66,11 @@ export {
   waitForShell,
 } from './session';
 export {
+  commandFinished,
   endMarker,
   envAssignments,
   extractBetweenMarkers,
+  lastCommandEvidence,
   latestHandle,
   notePrompts,
   reapResolvedRequests,
@@ -108,6 +110,7 @@ export {
 export { agentPrompt, effectiveCwd, locationLabel, summarize } from './prompt';
 export {
   REQUEST_DIR,
+  clearAllRequests,
   clearRequest,
   deleteRequest,
   listAllRequests,

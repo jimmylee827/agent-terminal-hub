@@ -5,9 +5,11 @@ import {
   assertRemoteConnected,
   attachedClientsNote,
   AthError,
+  commandFinished,
   create,
   get,
   kill,
+  lastCommandEvidence,
   latestHandle,
   list,
   listAllRequests,
@@ -672,6 +674,26 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // instead; that is a handoff, not a delay.
       const limit = Math.min(Math.max(Number(args.timeout_seconds ?? 60), 1), 300);
       const deadline = Date.now() + limit * 1000;
+      // An idle-LOOKING pane is not proof the command finished.
+      //
+      // `pane_current_command` names the foreground process, and a shell script
+      // runs as `bash`, which classifies as an idle shell. This returned `idle`
+      // twice during a `brew install` — Homebrew's `brew` being a `#!/bin/bash`
+      // script — while `poll`, which reads the exit marker, correctly said busy.
+      // An agent that trusts the first answer acts on a half-finished install.
+      //
+      // With a handle the marker settles it outright. Without one the answer
+      // can be `unknown` — a chatty command outruns the scan window — and that
+      // is reported rather than rounded to idle, because rounding it is how
+      // this bug looked fixed while a 93 KB build still answered `idle` with
+      // half a minute to run. See `lastCommandEvidence`.
+      const handle = typeof args.handle === 'string' && args.handle ? args.handle : undefined;
+      const evidence = async (): Promise<'running' | 'finished' | 'unknown'> => {
+        if (handle === undefined) return lastCommandEvidence(session).catch(() => 'unknown');
+        return (await commandFinished(session, handle).catch(() => true))
+          ? 'finished'
+          : 'running';
+      };
       for (;;) {
         const s = await get(session).catch(() => undefined);
         if (!s) return json({ session, outcome: 'session_gone' });
@@ -686,20 +708,53 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               'what for, then stop — or use `await_human` to block until they answer.',
           });
         }
-        if (s.state === 'idle' || s.paneDead) {
+        // A dead pane runs nothing, whatever the markers say.
+        if (s.paneDead) {
           return json({
             session,
             outcome: 'idle',
+            verified: true,
             last_command: s.lastCommand,
             last_exit_code: s.lastExitCode,
           });
+        }
+        if (s.state === 'idle') {
+          const seen = await evidence();
+          if (seen !== 'running') {
+            return json({
+              session,
+              outcome: 'idle',
+              // Say WHICH of the two idles this is. `false` means the pane
+              // looked idle and nothing could confirm it — the exact answer
+              // that sent an agent off to act on a half-finished install.
+              verified: seen === 'finished',
+              last_command: s.lastCommand,
+              last_exit_code: s.lastExitCode,
+              ...(seen === 'unknown'
+                ? {
+                    unverified_because:
+                      'No exit marker for this session was in the scan window — a command that ' +
+                      'prints a lot pushes its own marker out of it. This is the pane\'s answer, ' +
+                      'not the command\'s. If you started this with `start`, call again passing ' +
+                      'its `handle` for a definitive one.',
+                  }
+                : {}),
+            });
+          }
         }
         if (Date.now() >= deadline) {
           return json({
             session,
             outcome: 'still_running',
             last_command: s.lastCommand,
-            note: `Still busy after ${limit}s. Call again, or poll with the handle from \`start\`.`,
+            // `state` is reported because it can legitimately read `idle` here:
+            // a foreground shell script looks like a shell at a prompt, and the
+            // exit marker is what kept this loop going. A caller comparing this
+            // against `ls` would otherwise think one of them was lying.
+            state: s.state,
+            note:
+              `Still running after ${limit}s. Call again, or poll with the handle from ` +
+              `\`start\`.`,
           });
         }
         await new Promise((r) => setTimeout(r, 400));

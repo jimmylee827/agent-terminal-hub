@@ -263,11 +263,21 @@ export const TOOL_DEFINITIONS = [
       '`start` instead of calling `poll` in a loop — an agent without it polled a 20-second job ' +
       'at 19 seconds and was effectively blind for the whole run. Returns as soon as the session ' +
       'is idle; if it is waiting on a human instead, that is reported rather than waited out, ' +
-      'because no amount of waiting will clear a password prompt.',
+      'because no amount of waiting will clear a password prompt. PASS THE HANDLE from `start` ' +
+      'whenever you have one: a foreground shell script (`brew install`, `./configure`, `rustup`) ' +
+      'makes the pane look idle while it runs, and the handle is what settles the question for ' +
+      'certain however much the command prints.',
     inputSchema: {
       type: 'object',
       properties: {
         session: { type: 'string', description: 'Session to wait on.' },
+        handle: {
+          type: 'string',
+          description:
+            'The handle from `start`. Given one, this waits for THAT command to write its exit ' +
+            'marker instead of judging by the look of the pane — which cannot tell a shell ' +
+            'sitting at a prompt from a shell script running as `bash`.',
+        },
         timeout_seconds: {
           type: 'integer',
           description: 'Give up after this long (default 60, max 300). Returns still_running.',

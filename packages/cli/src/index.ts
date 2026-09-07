@@ -15,14 +15,15 @@ import {
   TMUX_CONF,
   Watcher,
   agentPrompt,
+  commandFinished,
   create,
   doctor,
   gc,
   get,
   kill,
+  lastCommandEvidence,
   list,
-  clearRequest,
-  deleteRequest,
+  clearAllRequests,
   listAllRequests,
   formatDuration,
   latestHandle,
@@ -119,7 +120,7 @@ ${c.bold('Driving a session')}
   ath await <name> [--handle H]    BLOCK until the human answers (for callbacks)
        [--text]                    send literal text plus Enter instead
   ath read <name> [--tail N] [--since N] [--json]
-  ath wait <name> [--timeout SEC]
+  ath wait <name> [--timeout SEC] [--handle H]
 
 ${c.bold('Humans')}
   ath attach <name>                enter the terminal the agent is using
@@ -418,11 +419,36 @@ async function main(): Promise<number> {
     case 'wait': {
       const name = requireName(positional[0]);
       const deadline = Date.now() + flagNumber(flags, 'timeout', 300) * 1000;
+      // The pane looking idle is not proof the command finished — a foreground
+      // shell script runs as `bash` and classifies as a shell at its prompt.
+      // `--handle` settles it outright; without one the answer can be
+      // `unknown`, which is SAID rather than rounded to idle. See
+      // `lastCommandEvidence`.
+      const handle = flagString(flags, 'handle');
+      const evidence = async (): Promise<'running' | 'finished' | 'unknown'> => {
+        if (handle === undefined) return lastCommandEvidence(name).catch(() => 'unknown');
+        return (await commandFinished(name, handle).catch(() => true)) ? 'finished' : 'running';
+      };
       for (;;) {
         const session = await get(name);
-        if (session.state === 'idle' || session.state === 'dead') {
+        if (session.state === 'dead') {
           console.log(session.state);
           return 0;
+        }
+        if (session.state === 'idle') {
+          const seen = await evidence();
+          if (seen !== 'running') {
+            console.log(session.state);
+            if (seen === 'unknown') {
+              console.error(
+                c.dim(
+                  '[ath] unverified: no exit marker in the scan window, so this is the pane\'s ' +
+                    'answer, not the command\'s. Re-run with --handle for a definitive one.',
+                ),
+              );
+            }
+            return 0;
+          }
         }
         if (session.state === 'needs-input') {
           console.error(c.yellow(`[ath] "${name}" needs input — attach: ath attach ${name}`));
@@ -806,13 +832,12 @@ async function main(): Promise<number> {
         // outcome. Used here it removed nothing — on an already-resolved
         // request it merely refreshed `resolvedAt` — while still printing
         // "cleared N request(s)". Report what was actually removed.
-        let gone = 0;
-        for (const r of open) if (await deleteRequest(r.id)) gone++;
-        console.log(
-          gone === open.length
-            ? `cleared ${gone} request(s)`
-            : `cleared ${gone} of ${open.length} request(s) — ${open.length - gone} could not be removed`,
-        );
+        //
+        // Sweeps the DIRECTORY rather than the parsed list, because a file the
+        // reader cannot parse is invisible to `listAllRequests` and would
+        // otherwise be unreachable by any command at all.
+        const gone = await clearAllRequests();
+        console.log(gone === 0 ? 'no request files to clear' : `cleared ${gone} request file(s)`);
         return 0;
       }
       if (open.length === 0) {

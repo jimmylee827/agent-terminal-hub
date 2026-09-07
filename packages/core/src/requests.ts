@@ -37,6 +37,34 @@ export interface HumanRequest {
 }
 
 /**
+ * Replace a request file in one step, so no reader can ever see it half-written.
+ *
+ * `writeFile` truncates before it writes, and NOTHING here takes a lock:
+ * `pruneRequests` runs on every watcher tick in EVERY open editor window, and
+ * `reapResolvedRequests` from four more call sites across the MCP server and
+ * the CLI. A reader landing inside that window parses an empty file — and the
+ * `catch` in `clearRequest` used to answer a parse failure by DELETING the
+ * record, so two processes doing routine housekeeping could between them
+ * destroy the very thing this directory exists to preserve. A human answered a
+ * sudo prompt, and fifteen minutes later `ath requests` had no trace that they
+ * had ever been asked.
+ *
+ * Same lesson `rotateNotifyLog` already learned about a file several windows
+ * append to: `rename` is atomic, a truncate-then-write is a window. The temp
+ * name carries its own nonce so two writers cannot collide on it either.
+ */
+async function writeRequestFile(file: string, request: HumanRequest): Promise<void> {
+  const tmp = `${file}.${randomNonce(4)}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(request, null, 2), { mode: 0o600 });
+  try {
+    await fs.rename(tmp, file);
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
  * Ask a human to come to a terminal.
  *
  * A small file rather than a socket: the agent, the CLI and the editor are
@@ -61,11 +89,7 @@ export async function requestHuman(
     ...(handle ? { handle } : {}),
     ...(parked ? { parked: true } : {}),
   };
-  await fs.writeFile(
-    path.join(REQUEST_DIR, `${request.id}.json`),
-    JSON.stringify(request, null, 2),
-    { mode: 0o600 },
-  );
+  await writeRequestFile(path.join(REQUEST_DIR, `${request.id}.json`), request);
   return request;
 }
 
@@ -110,18 +134,26 @@ const RESOLVED_TTL_MS = 60 * 60 * 1000;
  */
 export async function clearRequest(id: string): Promise<void> {
   const file = path.join(REQUEST_DIR, `${id}.json`);
+  let request: HumanRequest;
   try {
-    const request = JSON.parse(await fs.readFile(file, 'utf8')) as HumanRequest;
-    if (request.resolvedAt && Date.now() - request.resolvedAt > RESOLVED_TTL_MS) {
-      await fs.unlink(file).catch(() => undefined);
-      return;
-    }
-    await fs.writeFile(file, JSON.stringify({ ...request, resolvedAt: Date.now() }), {
-      mode: 0o600,
-    });
+    request = JSON.parse(await fs.readFile(file, 'utf8')) as HumanRequest;
   } catch {
-    await fs.unlink(file).catch(() => undefined);
+    // A read or parse failure is NOT permission to delete.
+    //
+    // This branch used to unlink, which made every transient failure —
+    // a concurrent writer, a full disk, a slow network home directory —
+    // silently destroy a human's answer. Writes go through `writeRequestFile`
+    // now, so a torn read should not happen at all; if one somehow does, the
+    // record is left alone. An unparseable file is inert rather than harmful:
+    // `listRequests` already skips it, and `ath requests --clear` removes it
+    // when a human decides to.
+    return;
   }
+  if (request.resolvedAt && Date.now() - request.resolvedAt > RESOLVED_TTL_MS) {
+    await fs.unlink(file).catch(() => undefined);
+    return;
+  }
+  await writeRequestFile(file, { ...request, resolvedAt: Date.now() }).catch(() => undefined);
 }
 
 /**
@@ -144,6 +176,39 @@ export async function deleteRequest(id: string): Promise<boolean> {
   }
 }
 
+/**
+ * Remove every request file, readable or not.
+ *
+ * `--clear` is a person saying "get rid of it", and it worked off
+ * `listAllRequests` — which silently skips anything it cannot parse. That was
+ * survivable while `clearRequest` deleted on a parse failure; now that it does
+ * not (it was destroying good records to do it), an unparseable file would
+ * otherwise have no route off the disk at all. This is that route, and it is
+ * deliberately the only one, reached only when a human asks.
+ *
+ * Returns how many files it actually removed, because the count this command
+ * prints has been wrong before.
+ */
+export async function clearAllRequests(): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(REQUEST_DIR);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.endsWith('.json') && !entry.endsWith('.tmp')) continue;
+    try {
+      await fs.unlink(path.join(REQUEST_DIR, entry));
+      removed++;
+    } catch {
+      /* already gone */
+    }
+  }
+  return removed;
+}
+
 /** Every request, resolved ones included. `listRequests` returns only open. */
 export async function listAllRequests(): Promise<HumanRequest[]> {
   return listRequests({ includeResolved: true });
@@ -160,9 +225,55 @@ export async function pruneRequests(
   maxAgeMs = 60 * 60 * 1000,
 ): Promise<void> {
   const now = Date.now();
-  for (const request of await listRequests()) {
+  // `listAllRequests`, not `listRequests`, and that is the fix.
+  //
+  // The TTL branch inside `clearRequest` — the one that finally deletes a
+  // resolved record — could never run. Every caller of `clearRequest` reaches
+  // it through `listRequests`, which returns OPEN requests only, so the moment
+  // a record was marked resolved nothing ever looked at it again. Resolved
+  // requests therefore accumulated forever, while `ATH_ARTIFACTS` told readers
+  // this directory was "bounded: resolved requests expire".
+  //
+  // Worth stating plainly because it also settles a bug report: within this
+  // code a resolved request can only be RETAINED. A `requests/` that empties
+  // itself minutes after a handoff is not something the hub can do to itself.
+  for (const request of await listAllRequests()) {
+    if (request.resolvedAt !== undefined) {
+      if (now - request.resolvedAt > RESOLVED_TTL_MS) await deleteRequest(request.id);
+      continue;
+    }
     if (!liveSessions.has(request.session) || now - request.createdAt > maxAgeMs) {
       await clearRequest(request.id);
+    }
+  }
+  await reapRequestTemps(maxAgeMs);
+}
+
+/**
+ * Remove `.tmp` files a crash left between the write and the rename.
+ *
+ * The atomic write in `writeRequestFile` trades one failure mode for a smaller
+ * one: a process killed at exactly the wrong instant leaves a temp file nobody
+ * will ever rename. They are invisible to every reader (`listRequests` takes
+ * only `.json`), so this is about not leaking, not about correctness — and the
+ * age bound matters, because a temp file belonging to a write happening RIGHT
+ * NOW must not be swept out from under it.
+ */
+async function reapRequestTemps(maxAgeMs: number): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(REQUEST_DIR);
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - Math.max(maxAgeMs, 60 * 1000);
+  for (const entry of entries) {
+    if (!entry.endsWith('.tmp')) continue;
+    const file = path.join(REQUEST_DIR, entry);
+    try {
+      if ((await fs.stat(file)).mtimeMs < cutoff) await fs.unlink(file);
+    } catch {
+      /* raced another reaper, or vanished on its own */
     }
   }
 }

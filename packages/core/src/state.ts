@@ -295,6 +295,22 @@ export function classify({
 }: ClassifyInput): SessionState {
   if (paneDead) return 'dead';
   if (looksLikePrompt(paneTail, paneWidth) && couldBePrompting(currentCommand)) return 'needs-input';
+  // `idle` here means "the foreground process is a shell", NOT "this shell is at
+  // a prompt", and the two differ for every shell SCRIPT: `pane_current_command`
+  // reports `bash` while `brew install` (a `#!/bin/bash` script), `./configure`
+  // or `rustup` runs, so a busy pane classifies as idle. `wait` returned `idle`
+  // mid-install because of this line, while `poll` — reading the exit marker —
+  // correctly said busy.
+  //
+  // Deliberately NOT corroborated with `looksLikeShellPrompt` the way the nested
+  // case below is. That regex ends in `[$#%>]`, and a starship or pure prompt
+  // ends in `❯`; requiring it would mark those users' sessions busy forever,
+  // trading a bounded wrong answer for an unbounded one.
+  //
+  // So this is a floor, not an oracle. Anything deciding whether a COMMAND has
+  // finished must ask `lastCommandSettled`/`commandFinished` instead — the exit
+  // marker is the hub's answer to that question, and `run`, `wait` and `poll`
+  // all use it.
   if (isShell(currentCommand)) return 'idle';
   // A nested shell (ssh, docker exec, sudo -i) sitting at its own prompt.
   //

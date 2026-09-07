@@ -41,7 +41,8 @@ else — you say so, and they type it into the same terminal you are using.
 
 **If the `agent_terminal` MCP tools are in your tool list, use them.** Same
 semantics, typed arguments, no shell quoting: `list`, `new`, `run`, `start`,
-`poll`, `read`, `send`, `request_human`, `requests`, `await_human`, `kill`.
+`poll`, `read`, `send`, `wait`, `request_human`, `requests`, `await_human`,
+`kill`.
 Reach for the `ath` CLI only when MCP is not registered, or for `attach`,
 `purge`, `doctor` and `watch`, which have no MCP equivalent by design.
 
@@ -90,6 +91,32 @@ ath poll web --handle <h> --since <n> --json
 Pass the previous `next_offset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin.
+
+**Keep the handle, and give it to `wait`.** A session running a shell SCRIPT
+looks idle: the pane reports its foreground process, and `brew install`,
+`./configure`, `rustup` and `nvm` all run as `bash`. So `ath ls` will say
+`idle` in the middle of a build, and that is not a bug you can fix by looking
+harder at the pane. `wait` and `poll` settle it from the command's own exit
+marker instead — but only `poll`, and `wait --handle`, are given the handle
+that makes the answer exact:
+
+```sh
+ath wait web --handle <h> --timeout 60    # exact: waits for THIS command
+ath wait web --timeout 60                 # best-effort, no handle to check
+```
+
+**Without the handle, treat an `idle` from `wait` as a guess.** The check
+scans the tail of the log for the command's markers, and a command that prints
+a lot pushes its own start marker out of that window — so the answer falls
+back to the pane, which is the thing that was wrong to begin with. Installers
+and builds are exactly the chatty case, so this is the norm for them, not a
+corner. When that happens `wait` says so: the MCP result carries
+`verified: false` with an `unverified_because`, and the CLI prints an
+`unverified` note. **Do not treat an unverified `idle` as "the build finished"
+— re-run with the handle.**
+
+Exit **76** (MCP `still_running`) means still running. It is not a failure, and
+calling again is the right response.
 
 **`start` is non-blocking for YOU, not concurrent for the session.** The
 session is busy until that command finishes, and anything else you send there

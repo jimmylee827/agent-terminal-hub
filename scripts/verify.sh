@@ -358,6 +358,78 @@ chk "notify.log untouched under the cap" "yes" "$(printf '%s' "$RETEN" | grep -q
 chk "notify.log rotates over the cap"    "yes" "$(printf '%s' "$RETEN" | grep -q overRotates && echo yes || echo no)"
 chk "notify.log keeps ONE generation"    "yes" "$(printf '%s' "$RETEN" | grep -q oneGeneration && echo yes || echo no)"
 
+# ---- housekeeping must never destroy a human's answer ----------------------
+#
+# Found by a cold agent: it filed two sudo requests, the human answered them,
+# and fifteen minutes later ~/.ath/requests was EMPTY — no record it had ever
+# asked. `clearRequest` wrote with a plain truncate-then-write and answered a
+# parse failure by unlinking, while `pruneRequests` runs on every watcher tick
+# in every open editor window and `reapResolvedRequests` from four more call
+# sites. Two routine passes racing were enough to delete the record between
+# them. "Silence is the one answer that means nothing" is the whole point of
+# keeping resolved requests, so this is exercised, not read.
+REQ="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const home=process.env.ATH_HOME;
+(async()=>{
+  const r=await a.requestHuman("t","need password","agent","c5206908f3d2",true);
+  const file=path.join(home,"requests",`${r.id}.json`);
+  // Twenty housekeeping passes at once, as several editor windows would.
+  await Promise.all(Array.from({length:20},()=>a.clearRequest(r.id)));
+  out.push(fs.existsSync(file)?"survivesConcurrent":"DESTROYED");
+  try { JSON.parse(fs.readFileSync(file,"utf8")); out.push("staysParseable"); }
+  catch { out.push("CORRUPT"); }
+  out.push((await a.listAllRequests()).some(x=>x.id===r.id)?"stillReadable":"VANISHED");
+  // A read that fails is not permission to delete. Deterministic where the
+  // race above is not: the old catch-all unlinked on any parse error.
+  const junk=path.join(home,"requests","dead0000.json");
+  fs.writeFileSync(junk,"{ truncated");
+  await a.clearRequest("dead0000");
+  out.push(fs.existsSync(junk)?"keepsUnparseable":"ATEUNPARSEABLE");
+  // The temp files the atomic write introduces must not leak. Backdated,
+  // because a temp file belonging to a write happening RIGHT NOW must survive
+  // — the reaper floors its cutoff at a minute for exactly that reason.
+  const tmp=path.join(home,"requests","x.json.abcd.tmp");
+  fs.writeFileSync(tmp,"x");
+  const old=new Date(Date.now()-24*3600*1000);
+  fs.utimesSync(tmp,old,old);
+  await a.pruneRequests(new Set(["t"]),0);
+  out.push(fs.readdirSync(path.join(home,"requests")).filter(f=>f.endsWith(".tmp")).length===0
+    ?"reapsTemps":"TEMPLEAK");
+  // `--clear` is the ONE route off the disk for a file the reader cannot
+  // parse, now that a failed read no longer deletes. It sweeps the directory
+  // rather than the parsed list, so the junk above must go with the rest.
+  // A resolved record is kept for the TTL and then actually goes. The delete
+  // inside clearRequest was unreachable — every caller iterated OPEN requests
+  // only — so resolved ones accumulated forever behind a docs claim that they
+  // expire. Both halves are asserted: fresh survives, stale goes.
+  const r2=await a.requestHuman("t","another ask","agent","dd44dd44dd44",true);
+  const f2=path.join(home,"requests",`${r2.id}.json`);
+  await a.clearRequest(r2.id);
+  await a.pruneRequests(new Set(["t"]));
+  out.push(fs.existsSync(f2)?"freshResolvedKept":"ATEFRESH");
+  const rec=JSON.parse(fs.readFileSync(f2,"utf8"));
+  rec.resolvedAt=Date.now()-2*60*60*1000;            // older than the 1h TTL
+  fs.writeFileSync(f2,JSON.stringify(rec));
+  await a.pruneRequests(new Set(["t"]));
+  out.push(!fs.existsSync(f2)?"staleResolvedExpires":"LEAKSFOREVER");
+  const swept=await a.clearAllRequests();
+  const rest=fs.readdirSync(path.join(home,"requests"))
+    .filter(f=>f.endsWith(".json")||f.endsWith(".tmp"));
+  out.push(swept>=2&&rest.length===0?"clearReachesJunk":"CLEARMISSED:"+swept+"/"+rest.length);
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "concurrent clears keep the record"   "yes" "$(printf '%s' "$REQ" | grep -q survivesConcurrent && echo yes || echo no)"
+chk "concurrent clears keep it parseable" "yes" "$(printf '%s' "$REQ" | grep -q staysParseable     && echo yes || echo no)"
+chk "a resolved request stays readable"   "yes" "$(printf '%s' "$REQ" | grep -q stillReadable      && echo yes || echo no)"
+chk "a failed read does NOT delete"       "yes" "$(printf '%s' "$REQ" | grep -q keepsUnparseable   && echo yes || echo no)"
+chk "atomic-write temp files are reaped"  "yes" "$(printf '%s' "$REQ" | grep -q reapsTemps         && echo yes || echo no)"
+chk "--clear reaches an unparseable file" "yes" "$(printf '%s' "$REQ" | grep -q clearReachesJunk     && echo yes || echo no)"
+chk "a just-answered request is kept"     "yes" "$(printf '%s' "$REQ" | grep -q freshResolvedKept    && echo yes || echo no)"
+chk "a resolved request finally expires"  "yes" "$(printf '%s' "$REQ" | grep -q staleResolvedExpires && echo yes || echo no)"
+
 # ---- ~/.ath is private, and stays private ----------------------------------
 #
 # `requests/` was 0755 on a stock macOS umask because the editor extension
@@ -389,6 +461,48 @@ chk "every artifact dir is 0700"       "yes" "$(printf '%s' "$PERM" | grep -q al
 chk "layout covers every artifact dir" "yes" "$(printf '%s' "$PERM" | grep -q coversAll     && echo yes || echo no)"
 chk "a loosened dir is repaired"       "yes" "$(printf '%s' "$PERM" | grep -q repairsDir    && echo yes || echo no)"
 chk "a loosened notify.log is repaired" "yes" "$(printf '%s' "$PERM" | grep -q repairsNotify && echo yes || echo no)"
+
+# ---- an idle-LOOKING pane is not a finished command ------------------------
+#
+# `pane_current_command` names the foreground PROCESS, so a shell script runs
+# as `bash` and classifies as a shell at its prompt. A cold agent's `wait`
+# returned `idle` twice during `brew install` — Homebrew's `brew` is a
+# `#!/bin/bash` script — while `poll`, reading the exit marker, said busy. It
+# only noticed because it polled anyway; trusting `wait` means acting on a
+# half-finished install. The marker is the tiebreak.
+SETTLED="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const home=process.env.ATH_HOME, S="\x1e";
+fs.mkdirSync(path.join(home,"log"),{recursive:true});
+const log=path.join(home,"log","r.log");
+(async()=>{
+  // Started, printing, no end marker: provably still running.
+  fs.writeFileSync(log,`${S}<ATHS:aaaaaaaaaaaa>${S}\nunpacking\n`);
+  out.push((await a.lastCommandEvidence("r"))==="running"?"runningNotIdle":"FALSEIDLE");
+  fs.appendFileSync(log,`${S}<ATHE:aaaaaaaaaaaa:0:Lw==:>${S}\n`);
+  out.push((await a.lastCommandEvidence("r"))==="finished"?"finishedIsIdle":"STUCKBUSY");
+  out.push((await a.commandFinished("r","aaaaaaaaaaaa"))===true?"handleFinished":"HANDLEBAD");
+  // No framed agent command at all. Must be `unknown`, NOT `finished`:
+  // collapsing the two is what let a chatty build — whose own start marker
+  // scrolled out of the scan window — answer `idle` with half a minute to run.
+  fs.writeFileSync(path.join(home,"log","q.log"),"just output\n");
+  out.push((await a.lastCommandEvidence("q"))==="unknown"?"unknownIsUnknown":"ROUNDEDTOIDLE");
+  // The real shape of it: a start marker pushed out by the command'"'"'s own
+  // output. The handle still answers exactly; the scan alone cannot.
+  const big=path.join(home,"log","big.log");
+  fs.writeFileSync(big,`${S}<ATHS:bbbbbbbbbbbb>${S}\n`+"x".repeat(64*1024)+"\n");
+  out.push((await a.lastCommandEvidence("big"))==="unknown"?"chattyIsUnknown":"CHATTYWRONG");
+  out.push((await a.commandFinished("big","bbbbbbbbbbbb"))===false?"handleStillExact":"HANDLELOST");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a running command is not idle"      "yes" "$(printf '%s' "$SETTLED" | grep -q runningNotIdle      && echo yes || echo no)"
+chk "a finished command reads idle"      "yes" "$(printf '%s' "$SETTLED" | grep -q finishedIsIdle      && echo yes || echo no)"
+chk "the handle settles it outright"     "yes" "$(printf '%s' "$SETTLED" | grep -q handleFinished      && echo yes || echo no)"
+chk "no marker reports unknown, not idle" "yes" "$(printf '%s' "$SETTLED" | grep -q unknownIsUnknown  && echo yes || echo no)"
+chk "a chatty command reads unknown"      "yes" "$(printf '%s' "$SETTLED" | grep -q chattyIsUnknown   && echo yes || echo no)"
+chk "the handle stays exact when chatty"  "yes" "$(printf '%s' "$SETTLED" | grep -q handleStillExact  && echo yes || echo no)"
 
 # ---- await_human must not report "still waiting" at an answered prompt -----
 #

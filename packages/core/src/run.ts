@@ -785,6 +785,19 @@ async function runLocked(
   }
   // The lock stops other ath callers; this catches a command started with
   // `start()` or typed directly by the human, neither of which holds it.
+  //
+  // Judged by `state` alone, knowingly. `state` cannot tell a shell at its
+  // prompt from a shell SCRIPT running as `bash` (see `lastCommandSettled`),
+  // so this does wave through a command that then sits in the tty buffer as
+  // type-ahead until the script finishes. Corroborating with the exit marker
+  // was tried and reverted: a command whose shell died mid-frame — a killed
+  // pane, a nested `exit` — never writes an end marker, so the dangling start
+  // marker is permanent and every later `run` throws `session_busy` on a
+  // perfectly usable session. The suite caught it as five wedged sessions.
+  //
+  // A veto needs a signal that clears itself. The marker only settles the
+  // question for a caller holding the HANDLE, which `run` never does for
+  // someone else's command; `wait` and `poll`, which can be handed one, use it.
   if (session.state === 'busy') {
     if (!options.waitForIdle) {
       throw new SessionBusy(clean, busyDetail(session));
@@ -1699,6 +1712,59 @@ export async function latestHandle(name: string): Promise<string | undefined> {
   let found: string | undefined;
   for (let m = re.exec(tail); m !== null; m = re.exec(tail)) found = m[1];
   return found;
+}
+
+/**
+ * Whether the command framed by `handle` has finished.
+ *
+ * The exit marker, never the pane. Robust however much the command printed:
+ * a finished command's marker is by definition the last thing it emitted, so
+ * it is in the tail; a running command has not written one anywhere.
+ */
+export async function commandFinished(name: string, handle: string): Promise<boolean> {
+  const clean = validateName(name);
+  return (await findExitCode(logPath(clean), handle).catch(() => undefined)) !== undefined;
+}
+
+/**
+ * Whether a session that LOOKS idle has actually finished what it was running.
+ *
+ * `pane_current_command` names the foreground PROCESS, and a shell script runs
+ * as `bash` — so `classify` reads `brew install` (Homebrew's `brew` is a
+ * `#!/bin/bash` script), `./configure`, `rustup`, `nvm` or any other script as
+ * an idle shell sitting at a prompt. `wait` told an agent its install was
+ * `idle` while Homebrew was still unpacking; only polling anyway, with the
+ * handle, showed it was still going.
+ *
+ * THREE answers, not two, because the third is the one that bites. Collapsing
+ * `unknown` into `finished` is what made this look fixed when it was not: a
+ * chatty command pushes its own start marker out of the scan window, so the
+ * check finds nothing, and "nothing to contradict the pane" silently became
+ * "the pane is right". A 93 KB build measured exactly that — `wait` answered
+ * `idle` instantly while the job had twenty-five seconds left. Installers are
+ * chatty by nature, so this is the common case, not the corner.
+ *
+ * - `running`  — a framed command has no end marker. Proof it is still going.
+ * - `finished` — the newest framed command has one. Proof it is not.
+ * - `unknown`  — no framed command in the window. Says nothing either way,
+ *                and callers MUST surface that rather than round it to idle.
+ *
+ * `running` is not a veto either. It covers a command whose shell died
+ * mid-frame — a killed pane, a nested `exit` — which never writes an end
+ * marker, so its start marker dangles forever. Anything that REFUSES on it
+ * refuses forever: putting this in `run`'s busy guard wedged five sessions in
+ * the suite, each perfectly usable. Use it only where the caller gives up on
+ * its own, as `wait` does at its deadline.
+ *
+ * For an answer with none of these caveats, hold the handle and use
+ * `commandFinished`.
+ */
+export async function lastCommandEvidence(
+  name: string,
+): Promise<'running' | 'finished' | 'unknown'> {
+  const handle = await latestHandle(name).catch(() => undefined);
+  if (handle === undefined) return 'unknown';
+  return (await commandFinished(name, handle).catch(() => true)) ? 'finished' : 'running';
 }
 
 /**
