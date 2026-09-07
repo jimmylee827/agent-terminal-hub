@@ -1069,7 +1069,15 @@ async function main(): Promise<number> {
 
 function fmtBytes(n: number): string {
   if (n <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
+  // Binary units, labelled as binary units.
+  //
+  // These divide by 1024 but were labelled KB/MB/GB, which name powers of
+  // 1000 — so the figure was right and its name was not. An agent compared
+  // `doctor`'s 47 MB against `du`'s 52M and could not account for the gap.
+  // (Most of that gap is a different thing: this sums apparent file sizes,
+  // `du` reports blocks actually allocated, which rounds up per file. Across
+  // hundreds of logs that is several percent on its own.)
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
   let i = 0;
   let v = n;
   while (v >= 1024 && i < units.length - 1) {

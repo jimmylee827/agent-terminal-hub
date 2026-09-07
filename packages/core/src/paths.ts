@@ -76,7 +76,7 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     holds: 'one <session>.log per session — every command run, and every byte it printed',
     purged: true,
     sensitive: true,
-    bounded: `trimmed to the last ${LOG_KEEP_BYTES / 1024 / 1024} MB above ${LOG_MAX_BYTES / 1024 / 1024} MB`,
+    bounded: `trimmed to the last ${LOG_KEEP_BYTES / 1024 / 1024} MiB above ${LOG_MAX_BYTES / 1024 / 1024} MiB`,
   },
   {
     name: 'rc/',
@@ -132,7 +132,7 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     holds: 'UI notification diagnostics — session names and request ids',
     purged: false,
     sensitive: true,
-    bounded: 'rotated at 1 MB, one generation kept as notify.log.1',
+    bounded: 'rotated at 1 MiB, one generation kept as notify.log.1',
   },
   {
     name: 'helper.sh',
@@ -587,6 +587,19 @@ export async function ensureLayout(): Promise<void> {
   await fs.chmod(NOTIFY_LOG, 0o600).catch(() => undefined);
   // The rotated generation holds the same content and predates the fix.
   await fs.chmod(`${NOTIFY_LOG}.1`, 0o600).catch(() => undefined);
+  // Enforce the bound `ATH_ARTIFACTS` advertises, rather than merely hoping.
+  //
+  // Rotation was only ever triggered by the editor extension writing a line,
+  // so a file that crossed the cap and then went quiet stayed over it forever.
+  // `doctor --artifacts` reported "rotated at 1 MB" beside a 2.3 MB file with
+  // no rotated generation — the one command the skill tells an agent to trust
+  // instead of guessing, wrong about the tool's own housekeeping. An agent
+  // reported it, and by the time it was looked at the file had reached 3 MB.
+  //
+  // Here because every entry point calls this, so the bound is now enforced by
+  // using ath at all rather than by an editor happening to be open. Costs one
+  // stat; `rotateNotifyLog` returns immediately when the file is under the cap.
+  await rotateNotifyLog().catch(() => undefined);
   await writeIfChanged(HELPER_PATH, HELPER_SH);
   await writeIfChanged(TMUX_CONF, TMUX_CONF_BODY);
 }
