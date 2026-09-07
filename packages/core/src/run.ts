@@ -480,6 +480,35 @@ async function resolveOffset(name: string, since: number): Promise<ResolvedOffse
  * at the beginning of its output, so it lands in the head, and an end marker
  * is the last thing it writes, so it lands in the tail.
  */
+/**
+ * Drop a marker cut in half by the caller's offset.
+ *
+ * A `since` is an arbitrary byte position, so it can land inside a marker.
+ * The opening `\x1e<ATHE:` stays behind and the remainder — something like
+ * `275d2:0:L3RtcC9hdWRpdA==:0>` — arrives at the head of the slice. It matches
+ * no marker pattern, because the pattern requires the whole thing, so every
+ * filter waves it through and an agent sees plumbing dressed as output. One
+ * reported it and had to decode the base64 to convince itself it was not part
+ * of its own job's results.
+ *
+ * A whole marker is SENTINEL-delimited on both sides. So a slice whose first
+ * SENTINEL arrives before any `<ATH` opened inside this slice is holding the
+ * tail of one that began before the offset — and everything up to and
+ * including that SENTINEL belongs to it.
+ */
+function dropLeadingMarkerFragment(raw: string): string {
+  const firstSentinel = raw.indexOf(SENTINEL);
+  if (firstSentinel < 0) return raw;
+  const head = raw.slice(0, firstSentinel);
+  // An opening `<ATH` in the head means this SENTINEL closes a marker that
+  // started here, which is a whole marker and the ordinary filters handle it.
+  if (head.includes('<ATH')) return raw;
+  // Only a marker's INSIDES look like this. Real output reaching a SENTINEL
+  // without one is not something the hub writes.
+  if (!/^[A-Za-z0-9+/=:_-]*>?$/.test(head)) return raw;
+  return raw.slice(firstSentinel + SENTINEL.length);
+}
+
 async function readLogCapped(
   file: string,
   since: number,
@@ -489,7 +518,7 @@ async function readLogCapped(
   const start = Math.max(0, Math.min(since, size));
   const available = size - start;
   if (maxBytes <= 0 || available <= maxBytes) {
-    return { raw: await readLogFrom(file, start) };
+    return { raw: dropLeadingMarkerFragment(await readLogFrom(file, start)) };
   }
   const headLen = Math.max(1, Math.floor(maxBytes * CAP_HEAD_FRACTION));
   const tailLen = maxBytes - headLen;
@@ -521,7 +550,10 @@ async function readLogCapped(
   const tail = tailBuf.subarray(tailSkip).toString('utf8');
   const bytes = tailFrom - resumeFrom;
   const note = `[ath: ${bytes} bytes omitted here — read them with since=${resumeFrom}]`;
-  return { raw: `${head}${note}\n${tail}`, omitted: { bytes, resumeFrom } };
+  return {
+    raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
+    omitted: { bytes, resumeFrom },
+  };
 }
 
 /**
