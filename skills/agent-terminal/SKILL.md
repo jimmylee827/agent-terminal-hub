@@ -154,6 +154,16 @@ corner. When that happens `wait` says so: the MCP result carries
 Exit **76** (MCP `still_running`) means still running. It is not a failure, and
 calling again is the right response.
 
+**A dropped ssh link ends the command.** For a `--remote` session, losing the
+connection does not kill the pane — it falls back to the LOCAL shell — so the
+command is gone but nothing looks dead. `poll` reports `remote_disconnected`
+with `done: true` and a **null** exit code, because the command's outcome is
+genuinely unknowable. Do not keep polling that handle; it can never complete.
+Reconnect by running any command, then check on the host whether the work
+actually finished before re-running it. (This used to report `done: false`
+with the elapsed time climbing indefinitely — an agent watched it call a job
+that had died eight minutes earlier "running for 516 seconds".)
+
 **`start` is non-blocking for YOU, not concurrent for the session.** The
 session is busy until that command finishes, and anything else you send there
 fails with `session_busy`. To do other work meanwhile, **create a second

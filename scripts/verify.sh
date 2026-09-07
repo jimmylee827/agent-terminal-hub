@@ -524,6 +524,53 @@ chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q 
 chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
 chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
 
+# ---- a dead remote command must stop reporting itself as running ------------
+#
+# `poll`'s only liveness check was `paneDead`, and a dropped ssh link does not
+# kill the pane — it falls back to the LOCAL shell, which is very much alive.
+# So no end marker ever arrived, nothing looked dead, and `done: false` came
+# back forever with `running_for_seconds` climbing. An agent watched that
+# report a corpse as running for 516 seconds, eight minutes after the job died,
+# and correctly called the field unfalsifiable.
+#
+# Driven WITHOUT a real remote host: the condition is "session says remote, and
+# the pane is no longer in a nested shell", so a local session tagged remote
+# reproduces it exactly. Both directions are asserted — a local session with
+# the same dangling marker must NOT be flagged, or every long job would be
+# declared dead.
+DROP="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athd$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const S="\x1e";
+(async()=>{
+  await a.create({name:"rem",cwd:"/tmp"});
+  await a.create({name:"loc",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("rem").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  // A command that started and never wrote an end marker: the exact residue a
+  // dropped link leaves behind.
+  for (const n of ["rem","loc"]) fs.appendFileSync(a.logPath(n),`${S}<ATHS:ccccccccccc1>${S}\nworking\n`);
+  const before=await a.poll("rem","ccccccccccc1",0);
+  out.push(before.done===false?"liveNotFlagged":"FALSEDEAD");
+  // Now it is a remote session whose pane sits in a plain local shell.
+  await a.setMeta("rem","remote","fakehost");
+  const after=await a.poll("rem","ccccccccccc1",0);
+  out.push(after.done===true?"dropIsDone":"STILLRUNNING");
+  out.push(after.remoteDisconnected===true?"dropIsFlagged":"NOFLAG");
+  out.push(after.exitCode===null?"outcomeUnknown":"FAKEEXITCODE:"+after.exitCode);
+  // A LOCAL session with the identical dangling marker must be untouched.
+  const local=await a.poll("loc","ccccccccccc1",0);
+  out.push(local.done===false&&local.remoteDisconnected===undefined
+    ?"localUnaffected":"LOCALBROKEN");
+  await a.kill("rem").catch(()=>{}); await a.kill("loc").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a live command is not called dead"    "yes" "$(printf '%s' "$DROP" | grep -q liveNotFlagged  && echo yes || echo no)"
+chk "a dropped remote stops counting up"   "yes" "$(printf '%s' "$DROP" | grep -q dropIsDone      && echo yes || echo no)"
+chk "and the drop is named, not implied"   "yes" "$(printf '%s' "$DROP" | grep -q dropIsFlagged   && echo yes || echo no)"
+chk "its outcome is admitted as unknown"   "yes" "$(printf '%s' "$DROP" | grep -q outcomeUnknown  && echo yes || echo no)"
+chk "a local session is unaffected"        "yes" "$(printf '%s' "$DROP" | grep -q localUnaffected && echo yes || echo no)"
+
 # ---- a trimmed log must not silently swallow an offset ----------------------
 #
 # The log is rewritten to its last 8 MB once it passes 32 MB, which invalidates

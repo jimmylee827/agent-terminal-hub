@@ -413,6 +413,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           `this chatty should write to a file on the host and be read from there — the ` +
           `transcript is not durable storage.`;
       }
+      // A dropped remote link, said plainly instead of counted forever.
+      if (result.remoteDisconnected) {
+        payload.remote_disconnected = true;
+        payload.what_to_do =
+          'The ssh connection for this remote session dropped while the command was running, ' +
+          'so the command is gone and its outcome cannot be recovered — that is why exit_code ' +
+          'is null rather than a number. Do NOT keep polling; this handle can never complete. ' +
+          'Run any command on the session to reconnect it, then check on the host whether the ' +
+          'work actually finished before re-running it.';
+      }
       if (result.offsetBeyondEnd) {
         payload.offset_beyond_end = true;
         payload.offset_note =

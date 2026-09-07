@@ -206,6 +206,15 @@ export interface PollResult {
   lostBytes?: number;
   /** The `since` was past the end — a stale handle, or another incarnation. */
   offsetBeyondEnd?: boolean;
+  /**
+   * The remote session's ssh link dropped while this command was running.
+   *
+   * `done` is true and `exitCode` null: the command is gone and its outcome is
+   * unknowable. Reported because the alternative was reporting it as still
+   * running forever — a dropped link does not kill the pane, it falls back to
+   * the local shell, so nothing looked dead and no end marker ever came.
+   */
+  remoteDisconnected?: boolean;
   state: SessionState;
   needsInput: boolean;
   /**

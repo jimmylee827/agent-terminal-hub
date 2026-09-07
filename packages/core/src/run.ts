@@ -1937,6 +1937,8 @@ export async function poll(
 
   let exitCode: number | null = null;
   let done = false;
+  /** The ssh link for a remote session dropped while this command was running. */
+  let remoteLost = false;
 
   // Use the FULL end marker, not just the code: it also carries the directory
   // the command finished in.
@@ -1964,6 +1966,29 @@ export async function poll(
     if (dead) {
       done = true;
       exitCode = status;
+    } else {
+      // A remote command whose ssh link dropped is NOT still running.
+      //
+      // The only liveness check here was `paneDead`, and a dropped connection
+      // does not kill the pane — it falls back to the LOCAL shell, which is
+      // very much alive. So no end marker ever arrives, nothing is dead, and
+      // `done: false` is returned forever with `running_for_seconds` counting
+      // up. An agent watched that report a corpse as running for 516 seconds,
+      // eight minutes after the job died, and reasonably called the field
+      // unfalsifiable: absent a marker the hub simply assumed "still running".
+      //
+      // `assertRemoteConnected` has always known how to spot this — a remote
+      // session whose pane is no longer in a nested shell. Poll never asked.
+      //
+      // `done` with a null exit code is exactly the documented shape for "it
+      // ended without a recoverable status", which is the honest answer: the
+      // command is gone, and what it did is unknowable.
+      const sess = await get(clean).catch(() => undefined);
+      if (sess?.remote && !isNesting(sess.currentCommand)) {
+        done = true;
+        exitCode = null;
+        remoteLost = true;
+      }
     }
   }
 
@@ -2029,6 +2054,7 @@ export async function poll(
     // which is all the hub used to say, and says nothing at all.
     ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
     ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
+    ...(remoteLost ? { remoteDisconnected: true } : {}),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),

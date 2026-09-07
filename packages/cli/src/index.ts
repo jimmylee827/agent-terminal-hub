@@ -360,6 +360,16 @@ async function main(): Promise<number> {
         flagNumber(flags, 'since', 0),
         flags['max-bytes'] === undefined ? undefined : flagNumber(flags, 'max-bytes', 0),
       );
+      if (result.remoteDisconnected) {
+        console.error(
+          c.red(
+            `[ath] the ssh connection dropped while this command was running, so it is gone ` +
+              `and its outcome cannot be recovered. Do not keep polling — this handle can ` +
+              `never complete. Reconnect by running any command, then check on the host ` +
+              `whether the work finished before re-running it.`,
+          ),
+        );
+      }
       if (flagBool(flags, 'json')) {
         console.log(JSON.stringify(toWire(result), null, 2));
         return 0;
