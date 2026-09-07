@@ -35,7 +35,14 @@ else — you say so, and they type it into the same terminal you are using.
    and exits 1, so it never looks like 130), and the command simply failing.
    The hub reports the code and refuses to interpret it — do the same, and
    confirm elevation with `sudo -n true` before relying on it.
-4. **Do not kill sessions you did not create**, unless asked.
+4. **Plan the session layout before your first command.** Two facts combine
+   into one rule, and discovering it halfway through costs the user an extra
+   password prompt: elevation does not cross sessions (the sudo timestamp is
+   per-tty), and `start` occupies a session for as long as its command runs.
+   So: **one session for everything privileged, plus one more per long job you
+   want to run alongside it.** A typical audit is two — `work` and `bulk`.
+   Create them up front. Deciding later means a second prompt for the human.
+5. **Do not kill sessions you did not create**, unless asked.
 
 ## Which surface to use
 

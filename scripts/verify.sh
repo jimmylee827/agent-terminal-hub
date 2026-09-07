@@ -647,6 +647,56 @@ chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -
 chk "a start that did NOT start is"      "yes" "$(printf '%s' "$LAUNCH" | grep -q unlaunchedFlagged && echo yes || echo no)"
 chk "and the handle is still returned"   "yes" "$(printf '%s' "$LAUNCH" | grep -q handleStillGiven  && echo yes || echo no)"
 
+# ---- a half-eaten marker must not reach the caller ---------------------------
+#
+# A `since` is an arbitrary byte position and can land inside a marker. The
+# opening `<ATHE:` stays behind and the tail arrives at the head of the slice,
+# matching no marker pattern — so every filter passes it through as output. An
+# agent saw `275d2:0:L3RtcC9qbWF4aS1hdWRpdA==:0>` in its results and had to
+# decode the base64 to satisfy itself it was not part of its own job.
+FRAG="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const home=process.env.ATH_HOME, S="\x1e";
+fs.mkdirSync(path.join(home,"log"),{recursive:true});
+const log=path.join(home,"log","m.log");
+fs.writeFileSync(log,"before\n"+S+"<ATHE:275d2abc0000:0:L3RtcC9hdWRpdA==:0>"+S+"\nreal output line\n");
+(async()=>{
+  const inside=Buffer.from("before\n"+S+"<ATHE:2").length;
+  const r=await a.readSince("m",inside,0);
+  out.push(/:0>|L3RtcC9hdWRpdA==/.test(r.output)?"FRAGMENTLEAKED":"noFragment");
+  out.push(r.output.includes("real output line")?"keptRealOutput":"ATEREALOUTPUT");
+  // An offset on a clean boundary must be untouched.
+  const whole=await a.readSince("m",0,0);
+  out.push(whole.output.includes("before")?"keepsHead":"ATEHEAD");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a split marker does not leak"        "yes" "$(printf '%s' "$FRAG" | grep -q noFragment     && echo yes || echo no)"
+chk "and real output survives the fix"    "yes" "$(printf '%s' "$FRAG" | grep -q keptRealOutput && echo yes || echo no)"
+chk "a clean offset is left alone"        "yes" "$(printf '%s' "$FRAG" | grep -q keepsHead      && echo yes || echo no)"
+
+# The advertised bound must be one the tool actually enforces. `doctor` said
+# "rotated at 1 MiB" beside a 2.3 MB file with no rotated generation — the one
+# command the skill tells an agent to trust, wrong about its own housekeeping.
+BOUND="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), out=[];
+(async()=>{
+  await a.ensureLayout();
+  fs.writeFileSync(a.NOTIFY_LOG,"x".repeat(a.NOTIFY_MAX_BYTES+5000));
+  await a.ensureLayout();                     // any ath entry point
+  // Rotation RENAMES the file, so "gone" is the correct post-rotation state —
+  // the next append recreates it. Either absent or under the cap counts.
+  const live=fs.existsSync(a.NOTIFY_LOG)?fs.statSync(a.NOTIFY_LOG).size:0;
+  out.push(live<=a.NOTIFY_MAX_BYTES?"boundEnforced":"OVERCAP:"+live);
+  out.push(fs.existsSync(a.NOTIFY_LOG+".1")?"generationKept":"NOGENERATION");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "the notify.log bound is enforced"    "yes" "$(printf '%s' "$BOUND" | grep -q boundEnforced  && echo yes || echo no)"
+chk "and one generation is kept"          "yes" "$(printf '%s' "$BOUND" | grep -q generationKept && echo yes || echo no)"
+
 # ---- `wait` must answer with the command's OWN result ------------------------
 #
 # It answered "is it done?" and then handed back the SESSION's last exit code —
