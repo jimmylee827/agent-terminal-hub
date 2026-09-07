@@ -137,8 +137,10 @@ ${c.bold('Exit codes for run')}
 ${c.bold('Three things that are not obvious')}
   ${c.dim('start')} occupies the session   ${c.dim('non-blocking for you, but the session is BUSY;')}
                               ${c.dim('parallel work needs a SECOND session, not --wait')}
-  ${c.dim('sudo')} does not cross sessions ${c.dim('the timestamp is per-tty (~15 min). Keep all')}
-                              ${c.dim('privileged work in ONE session or they type twice')}
+  ${c.dim('sudo')} does not cross sessions ${c.dim('per-tty, and it expires on a schedule only')}
+                              ${c.dim('that machine knows (timestamp_timeout varies).')}
+                              ${c.dim('Keep privileged work in ONE session, and confirm')}
+                              ${c.dim('with `sudo -n true` — never count minutes')}
   offsets are per SESSION     ${c.dim('not per handle — a new job does not start at 0.')}
                               ${c.dim('Pass back whatever you were last given')}
 

@@ -149,7 +149,11 @@ This is the part that makes the rest worth having.
 3. You attach, type the password, and detach. It is a normal terminal; nothing
    about it is special.
 4. The agent collects the output and carries on. The `sudo` timestamp stays warm
-   for about 15 minutes, so it can keep working without asking again.
+   for that session, so it can keep working without asking again — for however
+   long *this machine's* `sudoers` allows, which varies (`timestamp_timeout`
+   is commonly 5 or 15 minutes, and can be 0). Nothing the agent reads names a
+   duration, deliberately: it is told to re-check with `sudo -n true` rather
+   than assume one.
 
 **The agent never sees, types, or handles your password.** The skill and every
 tool description say so explicitly, and the design makes handing off to you

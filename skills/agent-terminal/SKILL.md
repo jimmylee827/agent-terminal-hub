@@ -244,9 +244,21 @@ Two halves, and the second one changes how you should work:
 - Separate sessions are separate TTYs (`tty_tickets` is on by default), so a
   password typed in one session does NOT cover another. Keep privileged work in
   one session rather than making the human type it twice.
-- Within that session the timestamp is cached for about 15 minutes, so
-  **subsequent `sudo` commands run without prompting again**. Check with
-  `sudo -n true` before assuming either way.
+- Within that session the timestamp is cached, so subsequent `sudo` commands
+  usually run without prompting again. **You cannot know for how long, and you
+  must not plan around it.** The lifetime is a local `sudoers` setting
+  (`timestamp_timeout`) that differs from machine to machine — the two hosts
+  this tool was developed against are set to 5 and 15 minutes — and a site can
+  set `0`, meaning every command prompts.
+
+  This file used to name a single figure as though it were a property of the
+  hub. An agent read it, laid out its whole session plan around it, confirmed
+  elevation with `sudo -n true`, and had the very next privileged command ask
+  for a password anyway — an extra interruption for its human, bought with a
+  number this tool was never in a position to promise.
+
+  So: confirm with **`sudo -n true` immediately before** each privileged
+  command you rely on. Never infer elevation from elapsed time.
 - **Elevation does not cross sessions, and `start` occupies a session.** Those
   two facts together mean you cannot run a privileged command in parallel with
   other work without asking for a second password. Plan for it: keep ONE

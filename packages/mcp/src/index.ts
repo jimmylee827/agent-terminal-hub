@@ -717,18 +717,27 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
                   }
                 : {}),
               next_offset: res.nextOffset,
-              // Say that the credential is now cached, rather than leaving it to
-              // be guessed. An agent guessed "the usual 15 minutes" and said it
-              // was gambling — a wrong guess costs the human a second
-              // interruption for nothing.
+              // Say that the credential is now cached, rather than leaving it
+              // to be guessed — but do NOT name a duration.
+              //
+              // This said "~15 min" for a long time. The exact figure was never
+              // the point: `timestamp_timeout` is a per-machine sudoers setting
+              // — the two hosts this was developed against are 5 and 15 — so
+              // ANY number stated here is a guess wearing the clothes of a
+              // fact. An agent laid out its session plan around the 15,
+              // confirmed elevation with `sudo -n true`, and had the very next
+              // privileged command prompt anyway. Saying nothing about the
+              // duration is strictly better than saying something plannable.
               ...(answered
                 ? {
                     note:
-                      'If that was a sudo password, its timestamp is now cached for THIS session ' +
-                      '(~15 min, per-tty). Further sudo commands here will not prompt again — ' +
-                      'confirm with `sudo -n true`. Another session will still prompt. The ' +
-                      'password itself is NOT in the session log (a prompt echoes nothing), so ' +
-                      'there is nothing to purge.',
+                      'If that was a sudo password, its timestamp is now cached for THIS ' +
+                      'session, per-tty — another session will still prompt. You cannot know ' +
+                      'how long it lasts and must not plan around it: timestamp_timeout is a ' +
+                      'local sudoers setting that differs between machines and may be 0. ' +
+                      'Confirm with `sudo -n true` immediately before each privileged command ' +
+                      'you rely on, never from elapsed time. The password itself is NOT in ' +
+                      'the session log (a prompt echoes nothing), so there is nothing to purge.',
                   }
                 : {
                     note:

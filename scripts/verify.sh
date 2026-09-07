@@ -524,6 +524,43 @@ chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q 
 chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
 chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
 
+# ---- no surface may promise a sudo timeout it cannot know --------------------
+#
+# Five places said the timestamp lasts "~15 min". `man sudoers` says the
+# default is FIVE, and it is a per-machine setting that can be anything,
+# including 0 for "always prompt". A cold agent planned its whole session
+# layout around the 15, confirmed elevation with `sudo -n true`, and had the
+# very next privileged command prompt again — a second interruption for its
+# human, bought with a number this tool invented.
+#
+# The hub cannot read sudoers, so it cannot know the answer; a guess stated as
+# a fact is worse than saying nothing. Checked as a CONTRACT because the number
+# is the kind of friendly detail that gets helpfully added back.
+# The VALUE is not what is checked, because the value was never the problem.
+# Two of the machines this was developed against are set to 5 and 15, both
+# stock — so a correct-looking figure is just a guess that happens to hold on
+# one of them. What is banned is a duration stated in a form an agent can
+# budget against, whatever the number.
+SUDO_CLAIM=0
+for f in "$RP"/packages/cli/src/index.ts "$RP"/packages/mcp/src/index.ts \
+         "$RP"/packages/mcp/src/tools.ts "$SK"; do
+  # Any "N minutes" within a sentence about the timestamp being cached or warm.
+  # Lines that RECOUNT the old mistake, or say the value varies, are the point
+  # and are allowed to name figures.
+  if grep -nE "(cached|warm|lasts|good)[^.]{0,60}[0-9]+ ?(min|minute)" "$f" 2>/dev/null \
+       | grep -viE "used to|this said|were developed|developed against|differs|varies|cannot know|never the point" \
+       | grep -q .; then
+    SUDO_CLAIM=1
+    echo "  states a budgetable sudo duration: $f"
+  fi
+done
+chk "no surface promises a sudo timeout" "0" "$SUDO_CLAIM"
+# And the honest guidance is actually present where an agent reads it.
+chk "the skill says to re-check, not to count" "yes" \
+    "$(grep -qi 'infer elevation from elapsed time' "$SK" && echo yes || echo no)"
+chk "the skill names timestamp_timeout"        "yes" \
+    "$(grep -q 'timestamp_timeout' "$SK" && echo yes || echo no)"
+
 # ---- a start that did not start must not look like one ----------------------
 #
 # `start` could not fail. It sent the wrapper and returned a handle
