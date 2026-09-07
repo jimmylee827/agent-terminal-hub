@@ -1076,13 +1076,35 @@ function shortenPath(p: string): string {
   return home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
+/**
+ * Exit only once stdout has actually reached the OS.
+ *
+ * `process.exit` discards whatever is still buffered, and writes to a PIPE are
+ * buffered — so `ath read big --json | jq` returned exactly 65536 bytes, one
+ * pipe buffer, of a 3.3 MB document. Valid-looking JSON, cut mid-string, with
+ * a zero exit code. The same command redirected to a file was complete, which
+ * is the worst possible shape for a bug: it works while you are testing it by
+ * eye and truncates the moment anything consumes it.
+ *
+ * The empty write's callback fires when everything queued before it has been
+ * flushed, because writes are ordered. Bounded so a wedged consumer cannot
+ * hang the process forever.
+ */
+async function exitAfterFlush(code: number): Promise<never> {
+  await Promise.race([
+    new Promise<void>((resolve) => process.stdout.write('', () => resolve())),
+    new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+  ]);
+  process.exit(code);
+}
+
 main()
-  .then((code) => process.exit(code))
+  .then((code) => exitAfterFlush(code))
   .catch((err: unknown) => {
     if (err instanceof AthError) {
       console.error(c.red(`[${err.code}] ${err.message}`));
-      process.exit(1);
+      return exitAfterFlush(1);
     }
     console.error(c.red(String(err instanceof Error ? err.message : err)));
-    process.exit(1);
+    return exitAfterFlush(1);
   });

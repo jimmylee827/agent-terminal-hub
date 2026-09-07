@@ -206,6 +206,26 @@ echo "═══ CONTRACT ═══"
 $ATH_BIN new "$C" --cwd /tmp >/dev/null 2>&1
 for _ in 1 2 3 4 5 6 7 8; do $ATH_BIN ls 2>/dev/null | grep -q "^$C .*idle" && break; sleep 1; done
 
+# ---- large stdout must survive a PIPE ---------------------------------------
+#
+# `process.exit` discards buffered stdout, and a write to a pipe is buffered.
+# `ath read big --json | jq` therefore returned exactly 65536 bytes — one pipe
+# buffer — of a 3.3 MB document: valid-looking JSON, cut mid-string, exit 0.
+# Redirected to a file the same command was complete, which is the worst shape
+# a bug can take: correct while you check it by eye, truncated the instant
+# anything consumes it.
+#
+# Compared against a REDIRECT rather than a fixed number, so this measures the
+# discrepancy itself and not a size that will drift.
+$ATH_BIN run "$C" -- 'for i in $(seq 1 4000); do echo "pipe-check-$i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; done' >/dev/null 2>&1
+$ATH_BIN read "$C" --since 0 --max-bytes 0 --json >"/tmp/athpipe$$.json" 2>/dev/null
+PIPED_LEN="$($ATH_BIN read "$C" --since 0 --max-bytes 0 --json 2>/dev/null | wc -c | tr -d ' ')"
+FILE_LEN="$(wc -c < "/tmp/athpipe$$.json" | tr -d ' ')"
+rm -f "/tmp/athpipe$$.json"
+chk "large stdout is not truncated by a pipe" "$FILE_LEN" "$PIPED_LEN"
+chk "and it is well past one pipe buffer"     "yes" \
+    "$([ "${FILE_LEN:-0}" -gt 65536 ] && echo yes || echo no)"
+
 J="$($ATH_BIN run "$C" --json -- 'true' 2>/dev/null)"
 for f in exit_code timed_out needs_input log_offset; do
   chk "run --json emits $f" "yes" "$(printf '%s' "$J" | grep -q "\"$f\"" && echo yes || echo no)"
