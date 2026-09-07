@@ -145,6 +145,26 @@ function configFile(): string {
     const [key, ...rest] = option.split('=');
     lines.push(`  ${key} ${rest.join('=')}`);
   }
+  // The system config goes LAST, completing the ladder the note above starts.
+  //
+  // `-F` makes ssh ignore /etc/ssh/ssh_config entirely, so everything the OS
+  // or the site puts there vanished for every remote session — and on macOS
+  // that includes `SendEnv LANG LC_*`, which is the ONLY way a Mac gets a
+  // locale over ssh (it has no /etc/default/locale; Linux does, which is why
+  // this was invisible against Linux hosts for so long). Without it the remote
+  // shell ran as US-ASCII, the hooks' multi-byte tag name was mangled beyond
+  // recognition, the hooks never installed, and every command fell back to the
+  // wrapper — a warning per command and `__ath …` lines shown to the human
+  // instead of plain ones. `verify.sh --remote <a mac>` failed 44 checks on it.
+  //
+  // Last, because ssh takes the FIRST value it obtains: user, then ours, then
+  // the system as the final fallback — exactly plain ssh's own order. Moved
+  // any earlier and the system would start overriding our defaults, which a
+  // test asserts. Guarded like the user config: ssh treats a missing include
+  // as an error, and would then be unable to connect at all.
+  const systemConfig = '/etc/ssh/ssh_config';
+  if (existsSync(systemConfig)) lines.push('', `Include ${systemConfig}`);
+
   mkdirSync(SSH_CONTROL_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o600 });
   return file;

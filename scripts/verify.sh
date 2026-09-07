@@ -171,6 +171,11 @@ hyg() { # name pattern
 hyg "no missing-helper errors"      '__ath: command not found'
 hyg "no missing-hook errors"        '__ath_bpost: command not found'
 hyg "no missing-tag errors"         '↓↓↓: command not found'
+# `[!0-9a-f]` inside the hooks is a glob negation to sh, but interactive zsh
+# reads `!0` as history expansion and answers "event not found: 0" — once per
+# command, in a console a human is watching. `[^...]` means the same to both
+# shells and triggers nothing.
+hyg "no history expansion"          'event not found'
 hyg "no wrapper definition dumped"  '__ath() { __ath_n='
 hyg "no handshake probes"           "printf '<ATHR:"
 hyg "no shell-probe lines"          'ZSH_VERSION:+zsh'
@@ -523,6 +528,50 @@ chk "a tail read still returns output"   "yes" "$(printf '%s' "$OFFS" | grep -q 
 chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q resumeIsEmpty && echo yes || echo no)"
 chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
 chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
+
+# ---- the generated ssh config must not discard the system's -------------------
+#
+# `ssh -F` makes ssh IGNORE /etc/ssh/ssh_config entirely, and the generated file
+# replaced it with only our own options. On macOS that file carries
+# `SendEnv LANG LC_*`, which is the ONLY way a Mac gets a locale over ssh — it
+# has no /etc/default/locale the way Linux does. Without it the remote shell ran
+# as US-ASCII, the hooks' multi-byte tag name was mangled, the hooks never
+# installed, and EVERY command fell back to the wrapper. Not cosmetic:
+# `verify.sh --remote <a mac>` failed 44 checks on it, and passed 70 after.
+#
+# Invisible against Linux remotes, which supply their own locale — which is why
+# it survived so long. Asserted here with `ssh -G`, which resolves precedence
+# without connecting to anything.
+SSHCFG="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), os=require("os"), path=require("path"), out=[];
+// `sshLaunchLine` is the path that uses `-F` and therefore suppresses the
+// system config; it writes the file as a side effect. `sshCommandLine` passes
+// `-o` flags instead and never suppresses anything, so it is not the risk.
+a.sshLaunchLine("examplehost","payload","/tmp/none.boot");
+const cfg=path.join(process.env.ATH_HOME,"ssh","config");
+const text=fs.readFileSync(cfg,"utf8");
+out.push(/Include \/etc\/ssh\/ssh_config/.test(text)?"includesSystem":"NOSYSTEM");
+// It must come LAST: ssh takes the first value it obtains, so anywhere earlier
+// and the system would start overriding our own defaults.
+const iSys=text.indexOf("Include /etc/ssh/ssh_config");
+const iHost=text.indexOf("Host *");
+out.push(iSys>iHost?"systemIsLast":"SYSTEMTOOEARLY");
+process.stdout.write(out.join(" "));
+' 2>/dev/null)"
+chk "generated ssh config includes the system's" "yes" \
+    "$(printf '%s' "$SSHCFG" | grep -q includesSystem && echo yes || echo no)"
+chk "and it comes LAST, so ours still win"       "yes" \
+    "$(printf '%s' "$SSHCFG" | grep -q systemIsLast  && echo yes || echo no)"
+# Precedence proven against ssh itself, not just by reading the file.
+if command -v ssh >/dev/null 2>&1; then
+  TCFG="$(mktemp)"; TSYS="$(mktemp)"
+  printf 'Host *\n  ConnectTimeout 999\n' > "$TSYS"
+  printf 'Host *\n  ConnectTimeout 7\n\nInclude %s\n' "$TSYS" > "$TCFG"
+  chk "ours beat an included system value" "7" \
+      "$(ssh -G -F "$TCFG" examplehost 2>/dev/null | awk '/^connecttimeout /{print $2}')"
+  rm -f "$TCFG" "$TSYS"
+fi
 
 # ---- no surface may promise a sudo timeout it cannot know --------------------
 #
