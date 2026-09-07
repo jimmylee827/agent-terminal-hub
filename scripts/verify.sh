@@ -524,6 +524,68 @@ chk "resuming from it repeats nothing"   "yes" "$(printf '%s' "$OFFS" | grep -q 
 chk "resuming from it gets what is new"  "yes" "$(printf '%s' "$OFFS" | grep -q resumeGetsNew && echo yes || echo no)"
 chk "the offset never points past output" "yes" "$(printf '%s' "$OFFS" | grep -q neverPastEnd && echo yes || echo no)"
 
+# ---- a trimmed log must not silently swallow an offset ----------------------
+#
+# The log is rewritten to its last 8 MB once it passes 32 MB, which invalidates
+# every offset issued before it — and did so in two silent ways. An offset PAST
+# the new end read nothing, which is indistinguishable from "no new output"; an
+# offset BEFORE it read real bytes belonging to some other part of the session.
+#
+# A cold agent following a 46 MB job hit the first. It polled at the exact
+# offset the hub had told it to use, got empty output and a `next_offset`
+# SMALLER than the `since` it passed, and no warning — while the skill file
+# promised in as many words that nothing would be lost. ~38 MB of its results
+# were gone. Silent loss under an affirmative promise of no loss.
+#
+# Offsets are LOGICAL now — bytes since the session began — so they survive a
+# trim instead of breaking on one, and what genuinely cannot be returned is
+# named. Both halves are asserted.
+TRIM="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+const home=process.env.ATH_HOME;
+fs.mkdirSync(path.join(home,"log"),{recursive:true});
+const log=path.join(home,"log","t.log");
+const line=(i)=>`entry-${String(i).padStart(7,"0")}-`+"y".repeat(40);
+(async()=>{
+  const rows=[]; for(let i=0;i<12000;i++) rows.push(line(i));
+  fs.writeFileSync(log,rows.join("\n")+"\n");
+  const beforeSize=fs.statSync(log).size;
+  // An offset handed out BEFORE the trim, exactly as `start` would.
+  const mid=await a.readSince("t",0,0);
+  out.push(mid.nextOffset===beforeSize?"offsetIsLogical":"OFFSETWRONG");
+  // Trim to a fraction, as rotateIfNeeded does past the cap.
+  const r=await a.rotateIfNeeded("t", 40*1024);
+  out.push(r.rotated?"trimmed":"NOTRIM");
+  const discarded=await a.discardedBytes("t");
+  out.push(discarded>0?"watermarkRecorded":"NOWATERMARK");
+  // THE bug: resume from the offset the hub itself issued.
+  const after=await a.readSince("t",mid.nextOffset,0);
+  out.push(after.nextOffset>=mid.nextOffset?"offsetsStayMonotonic":"WENTBACKWARDS");
+  out.push(after.lostBytes===undefined&&!after.offsetBeyondEnd?"noFalseAlarm":"FALSEALARM");
+  // New output after the trim is still reachable from that same offset.
+  fs.appendFileSync(log,line(999999)+"\n");
+  const tailRead=await a.readSince("t",mid.nextOffset,0);
+  out.push(tailRead.output.includes("entry-0999999")?"newOutputReachable":"NEWOUTPUTLOST");
+  // An offset whose bytes really were discarded must SAY so, not return empty.
+  const old=await a.readSince("t",0,0);
+  out.push(old.lostBytes>0?"lossIsReported":"LOSSSILENT");
+  out.push(old.output.length>0?"stillReturnsWhatSurvives":"RETURNSNOTHING");
+  // And an offset past the end is named rather than answered with silence.
+  const future=await a.readSince("t",old.nextOffset+50000,0);
+  out.push(future.offsetBeyondEnd===true?"beyondEndFlagged":"BEYONDSILENT");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "an issued offset is logical"          "yes" "$(printf '%s' "$TRIM" | grep -q offsetIsLogical          && echo yes || echo no)"
+chk "a trim records its watermark"         "yes" "$(printf '%s' "$TRIM" | grep -q watermarkRecorded        && echo yes || echo no)"
+chk "offsets never go backwards"           "yes" "$(printf '%s' "$TRIM" | grep -q offsetsStayMonotonic     && echo yes || echo no)"
+chk "a surviving offset raises no alarm"   "yes" "$(printf '%s' "$TRIM" | grep -q noFalseAlarm             && echo yes || echo no)"
+chk "output after a trim is still reachable" "yes" "$(printf '%s' "$TRIM" | grep -q newOutputReachable     && echo yes || echo no)"
+chk "trimmed-away bytes are REPORTED"      "yes" "$(printf '%s' "$TRIM" | grep -q lossIsReported           && echo yes || echo no)"
+chk "and what survives is still returned"  "yes" "$(printf '%s' "$TRIM" | grep -q stillReturnsWhatSurvives && echo yes || echo no)"
+chk "an offset past the end is named"      "yes" "$(printf '%s' "$TRIM" | grep -q beyondEndFlagged         && echo yes || echo no)"
+
 # ---- a capped read must PAGINATE, never truncate ---------------------------
 #
 # An agent following a build that printed 2.6 MB got all 2.6 MB in one poll:

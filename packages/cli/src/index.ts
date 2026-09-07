@@ -412,6 +412,24 @@ async function main(): Promise<number> {
         if (flagBool(flags, 'json')) console.log(JSON.stringify(toWire(result), null, 2));
         else {
           if (result.output) console.log(result.output);
+          if (result.lostBytes !== undefined) {
+            console.error(
+              c.red(
+                `[ath] ${result.lostBytes} bytes before this point were TRIMMED AWAY and are ` +
+                  `gone — the log is rewritten to its last 8 MB above 32 MB, which invalidates ` +
+                  `older offsets. Output resumes from the earliest byte that survives. For a ` +
+                  `job this size, write it to a file and read that instead.`,
+              ),
+            );
+          }
+          if (result.offsetBeyondEnd) {
+            console.error(
+              c.red(
+                `[ath] --since is past the end of this log; nothing was returned. The session ` +
+                  `was recreated or purged. Re-read without --since for a fresh offset.`,
+              ),
+            );
+          }
           if (result.omittedBytes !== undefined) {
             console.error(
               c.yellow(

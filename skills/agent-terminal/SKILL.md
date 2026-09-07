@@ -96,10 +96,31 @@ including one with no `--since`, so that is where your first one comes from.
 **Output is capped, and the cap paginates.** A job printing megabytes would
 otherwise hand you all of them in one call, and you cannot know you wanted
 less until it has arrived. `poll` and `read --since` return at most 64 KB by
-default: a head, then a marker, then the tail. Nothing is lost — the marker
-and the `omitted_resume_from` field both name the `since` that returns the
-gap, so you fetch it only if you want it. `next_offset` still points at the
-end, so an ordinary follow loop just carries on.
+default: a head, then a marker, then the tail. What the *cap* leaves out is
+still on disk — the marker and the `omitted_resume_from` field both name the
+`since` that returns it. `next_offset` still points at the end, so an ordinary
+follow loop just carries on.
+
+**But the transcript is not durable storage, and above 32 MB it really does
+lose data.** The session log is rewritten to its last 8 MB once it passes
+32 MB. Anything older is gone for good — no offset brings it back. This
+paragraph used to say "nothing is lost" without that qualification, and an
+agent following a 46 MB job believed it: it polled at the offset the hub had
+given it, and ~38 MB of its results no longer existed.
+
+You are told when it happens now — `lost_bytes` with a note, or a red line
+from the CLI — and offsets survive a trim rather than breaking on one, so the
+follow loop keeps working. That is damage reporting, not a fix.
+
+**So for a job whose output you actually need, write it to a file on the host
+and read the file.** Use the session to watch progress and get the exit code:
+
+```sh
+ath start bulk -- 'big-job > /tmp/run.out 2>/tmp/run.err; echo done'
+ath read bulk --tail 3                      # progress, bounded
+ath wait bulk --handle <h> --timeout 60     # finish, exact
+ath run bulk -- 'wc -l /tmp/run.out; tail -20 /tmp/run.out'
+```
 
 ```sh
 ath read bigjob --tail 3                    # cheapest progress glance

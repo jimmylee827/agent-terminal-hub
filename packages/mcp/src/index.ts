@@ -302,6 +302,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           session,
           output: result.output,
           next_offset: result.nextOffset,
+          ...(result.lostBytes === undefined
+            ? {}
+            : {
+                lost_bytes: result.lostBytes,
+                lost_note:
+                  `${result.lostBytes} bytes before this point were TRIMMED AWAY and cannot be ` +
+                  `recovered — a session log is rewritten to its last 8 MB once it passes 32 MB, ` +
+                  `which invalidates offsets issued before that. The output below resumes from ` +
+                  `the earliest byte that still exists. For a job this size, write it to a file ` +
+                  `on the host and read that instead of relying on the transcript.`,
+              }),
+          ...(result.offsetBeyondEnd ? { offset_beyond_end: true } : {}),
           ...(result.omittedBytes === undefined
             ? {}
             : {
@@ -384,6 +396,30 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         next_offset: result.nextOffset,
         state: result.state,
       };
+      // Output that is GONE, said out loud.
+      //
+      // A session log is rewritten to its last 8 MB once it passes 32 MB,
+      // which invalidates every offset issued before that. The only signal
+      // used to be an empty `output` and a `next_offset` SMALLER than the
+      // `since` that was passed — an agent following a 46 MB job read that as
+      // "no new output", and ~38 MB of its results were gone under a
+      // documented promise that nothing would be.
+      if (result.lostBytes !== undefined) {
+        payload.lost_bytes = result.lostBytes;
+        payload.lost_note =
+          `${result.lostBytes} bytes of this command's output were TRIMMED AWAY before this ` +
+          `call and cannot be recovered: the log is rewritten to its last 8 MB once it passes ` +
+          `32 MB. The output below resumes from the earliest byte that still exists. A job ` +
+          `this chatty should write to a file on the host and be read from there — the ` +
+          `transcript is not durable storage.`;
+      }
+      if (result.offsetBeyondEnd) {
+        payload.offset_beyond_end = true;
+        payload.offset_note =
+          'The `since` you passed is past the end of this log, so nothing could be returned. ' +
+          'The session was recreated, purged, or this handle belongs to an earlier incarnation. ' +
+          'Read with no `since` to get a fresh offset.';
+      }
       // Say what is known, in the terms it is known in.
       //
       // The previous version withheld a number whenever the bracket was wide,

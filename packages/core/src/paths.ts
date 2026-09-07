@@ -156,6 +156,57 @@ export function logPath(name: string): string {
   return path.join(LOG_DIR, `${name}.log`);
 }
 
+/** Where the discard watermark for a session lives, beside its log. */
+export function trimMarkPath(name: string): string {
+  return path.join(LOG_DIR, `${name}.trim`);
+}
+
+/**
+ * How many bytes have ever been discarded from the head of this session's log.
+ *
+ * The number that makes a byte offset mean something for longer than one trim.
+ *
+ * `rotateIfNeeded` rewrites the log in place keeping the tail, so every offset
+ * issued before it becomes a lie — and silently, in two different ways. An
+ * offset PAST the new end reads nothing, which looks like "no new output"; an
+ * offset BEFORE it reads real bytes that are now some entirely different part
+ * of the session. An agent following a 46 MB job hit the first: it polled at
+ * the exact offset the hub had told it to use, got empty output and a
+ * `next_offset` SMALLER than the `since` it passed, and no warning of any
+ * kind. Roughly 38 MB of its output was unrecoverable, under a documented
+ * promise that nothing would be lost.
+ *
+ * Counting what was thrown away turns physical positions into LOGICAL ones —
+ * bytes since this incarnation of the session began. Those survive a trim, so
+ * the follow loop keeps working across one instead of breaking; and when the
+ * bytes really are gone, `since < discarded` says so exactly rather than
+ * leaving the caller to infer it from a smaller number.
+ *
+ * Zero when the file is missing, which is every session that predates this and
+ * every session that has never been trimmed — so offsets are unchanged for all
+ * of them.
+ */
+export async function discardedBytes(name: string): Promise<number> {
+  try {
+    const value = Number((await fs.readFile(trimMarkPath(name), 'utf8')).trim());
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Record that `bytes` more were discarded. Callers hold the session lock. */
+async function addDiscardedBytes(name: string, bytes: number): Promise<void> {
+  if (bytes <= 0) return;
+  const total = (await discardedBytes(name)) + bytes;
+  await fs.writeFile(trimMarkPath(name), String(total), { mode: 0o600 }).catch(() => undefined);
+}
+
+/** Start this session's offsets from zero again. For a fresh incarnation only. */
+export async function resetDiscardedBytes(name: string): Promise<void> {
+  await fs.rm(trimMarkPath(name), { force: true }).catch(() => undefined);
+}
+
 export function rcPath(nonce: string): string {
   return path.join(RC_DIR, `${nonce}.rc`);
 }
@@ -591,6 +642,9 @@ export async function rotateIfNeeded(
   // (held open by pipe-pane) continues to point at this same inode.
   await fs.truncate(file, 0);
   await fs.writeFile(file, tail, { flag: 'r+' });
+  // Count what was thrown away BEFORE returning, so no offset issued after
+  // this point can be interpreted against the old file. See `discardedBytes`.
+  await addDiscardedBytes(name, size - keep);
   return { rotated: true, from: size, to: keep };
 }
 
@@ -622,6 +676,10 @@ export async function purgeLog(name: string): Promise<PurgeResult> {
     /* never written */
   }
   await fs.truncate(file, 0).catch(() => undefined);
+  // A purge discards every byte, so offsets must keep climbing past them
+  // rather than restarting — an offset a caller is still holding refers to
+  // content that is now gone, and must be reported as gone, not as valid.
+  await addDiscardedBytes(name, bytes);
   return { bytes, survives: ATH_ARTIFACTS.filter((a) => !a.purged && a.sensitive) };
 }
 

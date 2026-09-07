@@ -9,6 +9,7 @@ import {
   agentTagLine,
   ensureLayout,
   frameHooksFor,
+  discardedBytes,
   logPath,
   durationMarkerRe,
   rcPath,
@@ -414,6 +415,42 @@ export interface CappedSlice {
   raw: string;
   /** Bytes dropped from the middle, and the `since` that returns them. */
   omitted?: { bytes: number; resumeFrom: number };
+}
+
+/**
+ * What an offset means, once the log has been trimmed under it.
+ *
+ * Offsets handed to callers are LOGICAL — bytes since this incarnation of the
+ * session began — while the file only ever holds the tail. `discarded` is the
+ * distance between the two. Everything that reads by offset resolves it here,
+ * so the three ways an offset can be wrong are answered in one place instead
+ * of each caller silently doing `min(since, size)` and returning nothing.
+ */
+interface ResolvedOffset {
+  /** Where to actually read from in the file. */
+  physical: number;
+  /** Logical position of the end of the file. */
+  logicalEnd: number;
+  /** Requested bytes that have been trimmed away and cannot be returned. */
+  lostBytes?: number;
+  /** The offset was past the end — a stale handle, or another incarnation. */
+  beyondEnd?: boolean;
+}
+
+async function resolveOffset(name: string, since: number): Promise<ResolvedOffset> {
+  const discarded = await discardedBytes(name);
+  const physSize = await fileSize(logPath(name));
+  const logicalEnd = discarded + physSize;
+  if (since < discarded) {
+    // The bytes asked for are gone. Read from the earliest that survives and
+    // SAY how much was lost, rather than quietly returning a later slice as
+    // though it were the one requested.
+    return { physical: 0, logicalEnd, lostBytes: discarded - since };
+  }
+  if (since > logicalEnd) {
+    return { physical: physSize, logicalEnd, beyondEnd: true };
+  }
+  return { physical: since - discarded, logicalEnd };
 }
 
 /**
@@ -1666,7 +1703,9 @@ export async function start(name: string, command: string): Promise<StartResult>
     await rotateIfNeeded(clean).catch(() => undefined);
 
     const nonce = randomNonce();
-    const offset = await fileSize(logPath(clean));
+    // Logical, so `poll --since <this>` still resolves after a trim — a long
+    // job is exactly the one that trims its own log out from under its handle.
+    const offset = (await discardedBytes(clean)) + (await fileSize(logPath(clean)));
     await markStarted(nonce, offset);
 
     // Show the HUMAN the command, not the plumbing.
@@ -1891,7 +1930,9 @@ export async function poll(
   const log = logPath(clean);
 
   const size = await fileSize(log);
-  const slice = await readLogCapped(log, since, size, maxBytes);
+  const at = await resolveOffset(clean, since);
+  const discarded = at.logicalEnd - size;
+  const slice = await readLogCapped(log, at.physical, size, maxBytes);
   const output = trimToCommandWindow(slice.raw, handle);
 
   let exitCode: number | null = null;
@@ -1971,7 +2012,7 @@ export async function poll(
     done,
     exitCode,
     output,
-    nextOffset: size,
+    nextOffset: at.logicalEnd,
     state: session.state,
     needsInput: session.state === 'needs-input',
     // Surfaced as FIELDS, not only as the note inside the text. A caller
@@ -1981,8 +2022,13 @@ export async function poll(
       ? {}
       : {
           omittedBytes: slice.omitted.bytes,
-          omittedResumeFrom: slice.omitted.resumeFrom,
+          omittedResumeFrom: discarded + slice.omitted.resumeFrom,
         }),
+    // Trimmed out from under the caller. Reported rather than left to be
+    // inferred from a `next_offset` smaller than the `since` that was passed —
+    // which is all the hub used to say, and says nothing at all.
+    ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
+    ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
@@ -2392,7 +2438,9 @@ export async function readTail(
   // returned. A command still printing would otherwise let the file grow
   // between the two calls, and resuming from the later offset would skip
   // whatever landed in the gap — silent loss, which is worse than overlap.
-  const nextOffset = await fileSize(log);
+  // Logical, matching every other offset the hub hands out: a caller cannot
+  // tell which shape it was given, so there must only be one shape.
+  const nextOffset = (await discardedBytes(clean)) + (await fileSize(log));
   const raw = await readLogTailBytes(log);
   if (!raw) return { output: await capturePane(clean, lines), nextOffset };
   const all = trimBlankEdges(toLines(raw).filter((line) => !MARKER_LINE_RE.test(line)));
@@ -2409,20 +2457,33 @@ export async function readSince(
   nextOffset: number;
   omittedBytes?: number;
   omittedResumeFrom?: number;
+  /** Requested bytes trimmed away before this call. Output starts later. */
+  lostBytes?: number;
+  /** The offset was past the end of the log. */
+  offsetBeyondEnd?: boolean;
 }> {
   const clean = validateName(name);
   const log = logPath(clean);
   const size = await fileSize(log);
+  const at = await resolveOffset(clean, since);
   // Capped for the same reason `poll` is, and it must be BOTH: this is the
   // other half of the documented follow loop, so bounding one and leaving the
   // other just moves the flood to whichever the caller happened to pick.
-  const slice = await readLogCapped(log, since, size, maxBytes);
+  const slice = await readLogCapped(log, at.physical, size, maxBytes);
+  const discarded = at.logicalEnd - size;
   return {
     output: cleanSlice(slice.raw),
-    nextOffset: size,
+    nextOffset: at.logicalEnd,
     ...(slice.omitted === undefined
       ? {}
-      : { omittedBytes: slice.omitted.bytes, omittedResumeFrom: slice.omitted.resumeFrom }),
+      : {
+          omittedBytes: slice.omitted.bytes,
+          // Back to LOGICAL before it leaves, or the caller resumes at a
+          // physical position that means something else after the next trim.
+          omittedResumeFrom: discarded + slice.omitted.resumeFrom,
+        }),
+    ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
+    ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
   };
 }
 

@@ -12,6 +12,8 @@ import {
   RC_DIR,
   ensureLayout,
   logPath,
+  resetDiscardedBytes,
+  trimMarkPath,
   logicalName,
   tmuxName,
 } from './paths';
@@ -339,6 +341,11 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
 
   // Truncate the log so byte offsets always refer to this incarnation.
   await fs.writeFile(logPath(name), '', { mode: 0o600 });
+  // And restart the discard watermark with it. A new incarnation counts from
+  // zero; carrying the old total forward would make this session's first
+  // offsets start at some large number inherited from a session that no longer
+  // exists. See `discardedBytes`.
+  await resetDiscardedBytes(name);
 
   // Clear one-shot notices for this NAME, for the same reason.
   //
@@ -764,6 +771,10 @@ export async function rename(from: string, to: string): Promise<void> {
   if (await exists(b)) throw new SessionExists(b);
   await tmux(['rename-session', '-t', tmuxName(a), tmuxName(b)]);
   await fs.rename(logPath(a), logPath(b)).catch(() => undefined);
+  // The watermark travels with the log it describes. Left behind, the renamed
+  // session reads zero and every offset it hands out is wrong by whatever had
+  // already been trimmed.
+  await fs.rename(trimMarkPath(a), trimMarkPath(b)).catch(() => undefined);
   // The pipe still points at the old path; re-point it at the renamed log.
   await attachPipe(b).catch(() => undefined);
 }

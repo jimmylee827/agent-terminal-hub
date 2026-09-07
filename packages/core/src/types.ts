@@ -194,6 +194,18 @@ export interface PollResult {
   omittedBytes?: number;
   /** The `since` that returns what `omittedBytes` counts. */
   omittedResumeFrom?: number;
+  /**
+   * Output that was TRIMMED AWAY before this call and cannot be returned.
+   *
+   * A session log is rewritten to its last 8 MB once it passes 32 MB, which
+   * invalidates every offset issued before that. Silence here used to be the
+   * only signal: the caller got empty output and a `nextOffset` smaller than
+   * the `since` it passed, and was left to work out that ~38 MB of its job had
+   * gone. `output` resumes from the earliest byte that survives.
+   */
+  lostBytes?: number;
+  /** The `since` was past the end — a stale handle, or another incarnation. */
+  offsetBeyondEnd?: boolean;
   state: SessionState;
   needsInput: boolean;
   /**

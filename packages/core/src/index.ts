@@ -11,6 +11,7 @@ export {
   PREFIX,
   ATH_ARTIFACTS,
   ensureLayout,
+  discardedBytes,
   logPath,
   logicalName,
   rcPath,
