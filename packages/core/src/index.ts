@@ -68,6 +68,7 @@ export {
 } from './session';
 export {
   commandFinished,
+  commandOutcome,
   endMarker,
   envAssignments,
   extractBetweenMarkers,
@@ -119,6 +120,7 @@ export {
   pruneRequests,
   requestHuman,
 } from './requests';
+export type { CommandOutcome } from './run';
 export type { HumanRequest } from './requests';
 export { Watcher } from './watch';
 export type { WatcherOptions } from './watch';

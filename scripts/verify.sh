@@ -647,6 +647,43 @@ chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -
 chk "a start that did NOT start is"      "yes" "$(printf '%s' "$LAUNCH" | grep -q unlaunchedFlagged && echo yes || echo no)"
 chk "and the handle is still returned"   "yes" "$(printf '%s' "$LAUNCH" | grep -q handleStillGiven  && echo yes || echo no)"
 
+# ---- `wait` must answer with the command's OWN result ------------------------
+#
+# It answered "is it done?" and then handed back the SESSION's last exit code —
+# a different question. That value is written when something polls, so for a
+# command nobody polled it is stale or absent. A cold agent waited on a
+# 188-second job, got `verified: true` and nothing usable, and had to spend a
+# second call on `poll` to learn the outcome of the thing it had just been told
+# was finished.
+#
+# The end marker carries the code AND the shell's own duration. Asked by handle,
+# both come back in the call that reports completion.
+WOUT="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athw$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+(async()=>{
+  await a.create({name:"wq",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("wq").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  // A subshell exit: non-zero WITHOUT killing the session shell, which would
+  // take the paneDead path and prove nothing about the marker.
+  const st=await a.start("wq","sleep 2; (exit 7)");
+  await new Promise(r=>setTimeout(r,5000));
+  const o=await a.commandOutcome("wq",st.handle);
+  out.push(o.finished===true?"finished":"NOTFINISHED");
+  out.push(o.exitCode===7?"ownExitCode":"WRONGCODE:"+o.exitCode);
+  out.push(typeof o.seconds==="number"?"hasDuration":"NODURATION");
+  // An unknown handle must not invent an answer.
+  const u=await a.commandOutcome("wq","ffffffffffff");
+  out.push(u.finished===false&&u.exitCode===undefined?"unknownIsHonest":"UNKNOWNBAD");
+  await a.kill("wq").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "wait knows the command finished"      "yes" "$(printf '%s' "$WOUT" | grep -q finished       && echo yes || echo no)"
+chk "and reports ITS exit code, not the session's" "yes" "$(printf '%s' "$WOUT" | grep -q ownExitCode  && echo yes || echo no)"
+chk "and its duration, in the same call"   "yes" "$(printf '%s' "$WOUT" | grep -q hasDuration    && echo yes || echo no)"
+chk "an unknown handle invents nothing"    "yes" "$(printf '%s' "$WOUT" | grep -q unknownIsHonest && echo yes || echo no)"
+
 # ---- a dead remote command must stop reporting itself as running ------------
 #
 # `poll`'s only liveness check was `paneDead`, and a dropped ssh link does not

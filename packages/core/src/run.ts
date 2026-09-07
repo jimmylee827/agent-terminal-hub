@@ -1912,8 +1912,42 @@ export async function latestHandle(name: string): Promise<string | undefined> {
  * it is in the tail; a running command has not written one anywhere.
  */
 export async function commandFinished(name: string, handle: string): Promise<boolean> {
+  return (await commandOutcome(name, handle)).finished;
+}
+
+export interface CommandOutcome {
+  finished: boolean;
+  /** The command's OWN exit code, from its end marker. */
+  exitCode?: number;
+  /** Seconds, as measured by the shell that ran it. */
+  seconds?: number;
+}
+
+/**
+ * What a specific command did, from its own end marker.
+ *
+ * `wait` used to answer "is it done?" and then hand back the SESSION's last
+ * recorded exit code — a different question. That value comes from metadata
+ * written when something last polled, so for a command nobody polled it is
+ * stale or simply absent. An agent that waited on a three-minute job got
+ * `verified: true` and no usable code, and had to spend a second call on
+ * `poll` to learn what it had just been told was finished.
+ *
+ * The end marker already carries both the code and the shell's own duration,
+ * and reading it costs one tail scan. Asking the handle rather than the
+ * session makes the answer belong to the command the caller asked about.
+ */
+export async function commandOutcome(name: string, handle: string): Promise<CommandOutcome> {
   const clean = validateName(name);
-  return (await findExitCode(logPath(clean), handle).catch(() => undefined)) !== undefined;
+  const end = await findCommandEnd(logPath(clean), handle).catch(() => undefined);
+  if (end === undefined) return { finished: false };
+  return {
+    finished: true,
+    ...(Number.isFinite(end.code) ? { exitCode: end.code } : {}),
+    ...(end.measuredSeconds !== undefined && Number.isFinite(end.measuredSeconds)
+      ? { seconds: end.measuredSeconds }
+      : {}),
+  };
 }
 
 /**

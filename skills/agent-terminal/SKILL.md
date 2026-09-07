@@ -151,6 +151,11 @@ ath wait web --handle <h> --timeout 60    # exact: waits for THIS command
 ath wait web --timeout 60                 # best-effort, no handle to check
 ```
 
+Given the handle, `wait` also returns that command's **own** `exit_code` and
+`took_seconds` when it reports `idle` — so the usual "did it work, and how
+long?" needs no follow-up `poll`. Without a handle you get `last_exit_code`,
+which is the SESSION's last recorded code and may belong to something else.
+
 **Without the handle, treat an `idle` from `wait` as a guess.** The check
 scans the tail of the log for the command's markers, and a command that prints
 a lot pushes its own start marker out of that window — so the answer falls

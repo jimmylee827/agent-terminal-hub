@@ -5,7 +5,8 @@ import {
   assertRemoteConnected,
   attachedClientsNote,
   AthError,
-  commandFinished,
+  commandOutcome,
+  type CommandOutcome,
   create,
   get,
   kill,
@@ -789,11 +790,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // this bug looked fixed while a 93 KB build still answered `idle` with
       // half a minute to run. See `lastCommandEvidence`.
       const handle = typeof args.handle === 'string' && args.handle ? args.handle : undefined;
+      // Keep the command's OWN result, not just whether it is over.
+      //
+      // `wait` answered "is it done?" and then returned the SESSION's last
+      // exit code — a different question, and stale or absent for a command
+      // nobody polled. An agent that waited on a 188-second job got
+      // `verified: true` and nothing usable, then had to call `poll` to learn
+      // the outcome of the thing it had just been told was finished. The end
+      // marker carries the code and the shell's own duration; read them here.
+      let outcome: CommandOutcome | undefined;
       const evidence = async (): Promise<'running' | 'finished' | 'unknown'> => {
         if (handle === undefined) return lastCommandEvidence(session).catch(() => 'unknown');
-        return (await commandFinished(session, handle).catch(() => true))
-          ? 'finished'
-          : 'running';
+        outcome = await commandOutcome(session, handle).catch(() => undefined);
+        return outcome?.finished ? 'finished' : 'running';
       };
       for (;;) {
         const s = await get(session).catch(() => undefined);
@@ -825,11 +834,17 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             return json({
               session,
               outcome: 'idle',
+              // From the handle's own marker when we have one, so the caller
+              // does not need a second call to learn what it just waited for.
+              ...(outcome?.exitCode === undefined ? {} : { exit_code: outcome.exitCode }),
+              ...(outcome?.seconds === undefined ? {} : { took_seconds: outcome.seconds }),
               // Say WHICH of the two idles this is. `false` means the pane
               // looked idle and nothing could confirm it — the exact answer
               // that sent an agent off to act on a half-finished install.
               verified: seen === 'finished',
               last_command: s.lastCommand,
+              // The SESSION's last recorded code — not necessarily the command
+              // you waited on. `exit_code` above, when present, is that one.
               last_exit_code: s.lastExitCode,
               ...(seen === 'unknown'
                 ? {
