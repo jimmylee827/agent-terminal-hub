@@ -55,6 +55,41 @@ function json(value: unknown): ToolResult {
  * concluded it should use the CLI whenever output was large, which defeats the
  * point of the typed tools.
  */
+/**
+ * How a resize is told, in one place, so `run` and `poll` cannot drift.
+ *
+ * `from === to` is not a no-op: it means the pane moved and moved back between
+ * observations, and `seen` is the only surviving evidence that anything written
+ * in between was formatted to a different width.
+ *
+ * The long paragraph rides on `explain`, which is true only the first time for
+ * a session. Two agents complained about the exit-code caveat in opposite
+ * directions — one stopped reading a sentence repeated on every result, the
+ * other missed a hazard announced once and then never again. The resolution
+ * there applies here: the marker is always present and costs nothing, and the
+ * explanation is given once.
+ */
+function widthNote(w: { from: number; to: number; seen?: number[]; explain?: boolean }): string {
+  const moved =
+    w.from === w.to
+      ? `The pane was resized and put back (${(w.seen ?? []).join(' → ')}) while this was running`
+      : `The pane was resized from ${w.from} to ${w.to} columns`;
+  if (!w.explain) {
+    return `${moved}. Column layouts measured earlier may no longer hold.`;
+  }
+  return (
+    `${moved} — a human attaching does that, usually to answer a prompt. ` +
+    `Width-aware tools (ps, docker ps, lsblk, vmstat) format themselves to the pane, so a ` +
+    `layout you calibrated earlier may not hold for output written after the change. If you ` +
+    `are parsing by column, re-read rather than trusting it, or switch to width-independent ` +
+    `output (--json/--format/-o). ` +
+    (w.from === w.to
+      ? `Note the width ended where it started: comparing before and after would show no ` +
+        `change at all, which is why the full sequence is reported.`
+      : '')
+  );
+}
+
 function jsonWithOutput(value: Record<string, unknown>, output: string): ToolResult {
   // Output FIRST. An agent reported that "the thing I care about is never at
   // the top" — metadata is the smaller, more predictable half, so it reads
@@ -223,12 +258,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // differently from here on. Two agents hit it; neither was told.
       if (result.paneWidthChanged) {
         payload.pane_width_changed = result.paneWidthChanged;
-        payload.what_to_do =
-          `The pane was resized from ${result.paneWidthChanged.from} to ` +
-          `${result.paneWidthChanged.to} columns since your last command here — a human ` +
-          `attaching does that. Width-aware tools (ps, docker ps, lsblk, vmstat) will format ` +
-          `differently from now on. If you are parsing by column, re-read rather than trusting ` +
-          `a layout you calibrated earlier, or switch to width-independent output.`;
+        payload.what_to_do = widthNote(result.paneWidthChanged);
       }
 
       // A request was filed on the caller's behalf — SAY SO.
@@ -427,6 +457,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           `transcript is not durable storage.`;
       }
       // A dropped remote link, said plainly instead of counted forever.
+      // Reported on every poll while it differs, because an agent parsing
+      // columns mid-job needs it then, not in a summary after the fact.
+      if (result.paneWidthChanged) {
+        payload.pane_width_changed = result.paneWidthChanged;
+        payload.width_note = widthNote(result.paneWidthChanged);
+      }
       if (result.remoteDisconnected) {
         payload.remote_disconnected = true;
         payload.what_to_do =

@@ -176,6 +176,19 @@ corner. When that happens `wait` says so: the MCP result carries
 Exit **76** (MCP `still_running`) means still running. It is not a failure, and
 calling again is the right response.
 
+**A resize is reported to `poll` too, not just `run`.** A human attaching sets
+the pane size — usually to answer the prompt your job raised — and width-aware
+tools (`ps`, `docker ps`, `lsblk`) format themselves to it. `pane_width_changed`
+now arrives on every poll while it differs, so you learn mid-job rather than
+after. The long explanation is given once per session; the short marker keeps
+coming.
+
+Watch for `from` equal to `to` with a `seen` list. That means the pane moved
+**and moved back** between looks: comparing before and after shows no change,
+but output written in between was formatted to a different width. It is the one
+case a width check cannot catch by sampling, and the reason the full sequence
+is reported at all.
+
 **A dropped ssh link ends the command.** For a `--remote` session, losing the
 connection does not kill the pane — it falls back to the LOCAL shell — so the
 command is gone but nothing looks dead. `poll` reports `remote_disconnected`

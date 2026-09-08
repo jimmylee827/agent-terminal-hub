@@ -280,9 +280,14 @@ async function main(): Promise<number> {
       if (result.paneWidthChanged) {
         console.error(
           c.yellow(
-            `[ath] pane resized ${result.paneWidthChanged.from} → ${result.paneWidthChanged.to} ` +
-              `columns since the last command here. Column-aligned output (ps, docker ps, ` +
-              `lsblk) will format differently from now on.`,
+            result.paneWidthChanged.from === result.paneWidthChanged.to
+              ? `[ath] pane was resized and put back (` +
+                `${(result.paneWidthChanged.seen ?? []).join(' → ')}) while this ran. ` +
+                `Before-and-after would show no change, so column layouts measured earlier ` +
+                `may still be wrong for output written in between.`
+              : `[ath] pane resized ${result.paneWidthChanged.from} → ` +
+                `${result.paneWidthChanged.to} columns since the last command here. ` +
+                `Column-aligned output (ps, docker ps, lsblk) will format differently.`,
           ),
         );
       }

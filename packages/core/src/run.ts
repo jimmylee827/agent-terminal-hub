@@ -11,6 +11,8 @@ import {
   frameHooksFor,
   discardedBytes,
   logPath,
+  widthLogPath,
+  widthNoteFlagPath,
   durationMarkerRe,
   rcPath,
   rotateIfNeeded,
@@ -1351,9 +1353,12 @@ async function runLocked(
   // The pane can be resized by a human attaching — most often to answer the
   // very password prompt this command raised. Checked here, once per command,
   // so the change surfaces on the first result after it happens.
-  const widthChange = await noteWidthChange(
+  // `run` always consumes: a discrete result a caller reads once. It also now
+  // sees the transitions tmux recorded between glances, not just the endpoints.
+  const widthChange = await observeWidth(
     clean,
     (await get(clean).catch(() => undefined))?.paneWidth,
+    true,
   ).catch(() => undefined);
 
   return {
@@ -1671,30 +1676,111 @@ function busyDetail(session: Session): string {
   return `"${session.currentCommand || 'something'}"`;
 }
 
+/** Never read more than this from a resize log; a burst is ~4 bytes per event. */
+const WIDTH_LOG_SCAN_BYTES = 64 * 1024;
+
 /**
- * Notice that the pane was resized between two commands.
+ * Every pane width tmux RECORDED since the last consumed observation.
  *
- * `window-size latest` means a human attaching sets the size — which is
- * correct for a shared terminal, and is exactly what happens when they attach
- * to answer a password prompt. The consequence is that output shape can change
- * in the middle of a survey, and until now nothing said so at the time: the
+ * Sampling the width at command boundaries answers a narrower question than it
+ * looks: it compares two glances. A pane that goes 200 → 156 → 200 between them
+ * reads as unchanged, while everything written in the middle was formatted to
+ * 156 — which is exactly the corruption the warning exists to prevent, and
+ * exactly what a human attaching to answer a password and then detaching does.
+ *
+ * The `window-resized` hook writes every transition as it happens, so this sees
+ * what no sample could. Bounded by construction — drained whenever an
+ * observation is consumed — and a full window drag measured 231 bytes.
+ */
+async function recordedWidths(name: string): Promise<number[]> {
+  const raw = await readLogTailBytes(widthLogPath(name), WIDTH_LOG_SCAN_BYTES).catch(() => '');
+  if (!raw) return [];
+  const out: number[] = [];
+  for (const line of raw.split('\n')) {
+    const n = Number(line.trim());
+    // A clipped tail can leave a partial first line. A bad parse is simply not
+    // a width, and dropping it is the whole handling required.
+    if (Number.isFinite(n) && n > 0) out.push(n);
+  }
+  return out;
+}
+
+/** True the FIRST time a session shows the LONG width-change explanation. */
+async function firstWidthNoteFor(name: string): Promise<boolean> {
+  const flag = widthNoteFlagPath(name);
+  try {
+    await fs.access(flag);
+    return false;
+  } catch {
+    await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
+    await fs.writeFile(flag, '1', { mode: 0o600 }).catch(() => undefined);
+    return true;
+  }
+}
+
+export interface WidthObservation {
+  from: number;
+  to: number;
+  /** Every distinct width seen, when tmux recorded more than the endpoints. */
+  seen?: number[];
+  /** False once the long explanation has been given for this session. */
+  explain: boolean;
+}
+
+/**
+ * What the pane has done since anyone last looked.
+ *
+ * `window-size latest` means a human attaching sets the size, which is correct
+ * for a shared terminal and is exactly what happens when they attach to answer
+ * a password prompt. Output shape can therefore change mid-survey, and the
  * width was visible in `list` if you thought to look, documented if you had
  * read that far, and announced never.
  *
- * Comparing against the last value costs one string read, so the only silent
- * corruption path in the tool now announces itself on the first command after
- * it happens.
+ * `consume` is the rest of the design. `run` consumes: it is a discrete result
+ * read once. `poll` does NOT while a job is still going, because it is called
+ * in a loop and would take the notice within milliseconds — leaving a later
+ * `run` to find nothing and never learn the width moved. It consumes on the
+ * poll that reports `done`, which is when the caller turns to the results.
+ *
+ * Unconsumed is not lost: the baseline stays put, so the next observer still
+ * sees it. The failure mode is a repeated marker, never a missing one.
  */
-async function noteWidthChange(
+async function observeWidth(
   name: string,
   now: number | undefined,
-): Promise<{ from: number; to: number } | undefined> {
+  consume: boolean,
+): Promise<WidthObservation | undefined> {
   if (!now || now <= 0) return undefined;
-  const previous = Number(await readMeta(name, 'pw').catch(() => '')) || 0;
-  await setMeta(name, 'pw', String(now)).catch(() => undefined);
+  const baseline = Number(await readMeta(name, 'pw').catch(() => '')) || 0;
+  const recorded = await recordedWidths(name);
+
+  const settle = async (): Promise<void> => {
+    if (!consume) return;
+    await setMeta(name, 'pw', String(now)).catch(() => undefined);
+    await fs.writeFile(widthLogPath(name), '', { mode: 0o600 }).catch(() => undefined);
+  };
+
   // A first command has nothing to compare against, and is not a change.
-  if (!previous || previous === now) return undefined;
-  return { from: previous, to: now };
+  if (!baseline) {
+    await settle();
+    return undefined;
+  }
+  const everyWidth = [...recorded, now];
+  if (!everyWidth.some((w) => w !== baseline)) {
+    await settle();
+    return undefined;
+  }
+  const distinct = [...new Set([baseline, ...everyWidth])];
+  const explain = await firstWidthNoteFor(name);
+  await settle();
+  return {
+    from: baseline,
+    to: now,
+    // Only when it says something the endpoints do not: a pane that moved and
+    // moved back reports from === to, and this list is the only evidence left.
+    ...(distinct.length > 2 || baseline === now ? { seen: distinct } : {}),
+    explain,
+  };
 }
 
 async function recordLast(name: string, command: string, code: number | null): Promise<void> {
@@ -2134,6 +2220,12 @@ export async function poll(
     }
   }
 
+  // A resize during a long job reached nobody: this lived only in `run`, and a
+  // job driven by start/poll is exactly when a human attaches — usually to
+  // answer the password prompt that job raised. Consumed only on the poll that
+  // reports `done`, so a polling loop cannot swallow it before a later `run`.
+  const widthChange = await observeWidth(clean, session.paneWidth, done).catch(() => undefined);
+
   const timing = await timingFor(handle, done, end?.measuredSeconds);
   // Offsets are per SESSION, so `since` from an earlier job is silently valid
   // and silently wrong: it re-reads the previous command's output, which a
@@ -2164,6 +2256,7 @@ export async function poll(
     ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
     ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
     ...(remoteLost ? { remoteDisconnected: true } : {}),
+    ...(widthChange === undefined ? {} : { paneWidthChanged: widthChange }),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),

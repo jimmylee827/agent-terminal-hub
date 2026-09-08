@@ -647,6 +647,54 @@ chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -
 chk "a start that did NOT start is"      "yes" "$(printf '%s' "$LAUNCH" | grep -q unlaunchedFlagged && echo yes || echo no)"
 chk "and the handle is still returned"   "yes" "$(printf '%s' "$LAUNCH" | grep -q handleStillGiven  && echo yes || echo no)"
 
+# ---- a resize must reach a job that is being POLLED --------------------------
+#
+# The width check lived only in `run`. A job driven by start/poll never learned
+# — and start/poll is exactly when a human attaches, usually to answer the
+# password prompt that job raised. An agent was column-parsing lsof at the
+# moment the pane changed under it.
+#
+# Worse, sampling compares two glances: 200 -> 156 -> 200 between them reads as
+# unchanged, while everything written in the middle was formatted to 156. A
+# tmux `window-resized` hook records every transition, so the sequence survives
+# even when the endpoints match. Driven WITHOUT tmux by writing the log the
+# hook would have written.
+WOBS="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athx$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), out=[];
+(async()=>{
+  await a.create({name:"wx",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("wx").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  await a.run("wx","echo baseline",{timeoutMs:20000});     // establishes the baseline
+  const st=await a.start("wx","sleep 3");
+  // What the hook writes when someone attaches and detaches: out and back.
+  const w=a.widthLogPath("wx");
+  const now=(await a.get("wx")).paneWidth;
+  fs.appendFileSync(w, `${now-80}\n${now}\n`);
+  // Mid-job: must report, and must NOT consume.
+  const mid=await a.poll("wx",st.handle,0);
+  out.push(mid.paneWidthChanged?"midReports":"MIDSILENT");
+  out.push(mid.paneWidthChanged&&mid.paneWidthChanged.seen&&mid.paneWidthChanged.seen.includes(now-80)
+    ?"sawExcursion":"MISSEDEXCURSION");
+  out.push(mid.paneWidthChanged&&mid.paneWidthChanged.explain===true?"explainsOnce":"NOEXPLAIN");
+  await new Promise(r=>setTimeout(r,4000));
+  // Terminal poll: reports, and consumes.
+  const fin=await a.poll("wx",st.handle,0);
+  out.push(fin.done&&fin.paneWidthChanged?"doneReports":"DONESILENT");
+  out.push(fin.paneWidthChanged&&fin.paneWidthChanged.explain===false?"explainOnlyOnce":"REEXPLAINED");
+  const again=await a.poll("wx",st.handle,0);
+  out.push(again.paneWidthChanged===undefined?"consumed":"REPEATSFOREVER");
+  await a.kill("wx").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "poll reports a resize mid-job"       "yes" "$(printf '%s' "$WOBS" | grep -q midReports      && echo yes || echo no)"
+chk "including one sampling cannot see"   "yes" "$(printf '%s' "$WOBS" | grep -q sawExcursion    && echo yes || echo no)"
+chk "the long note is given once"         "yes" "$(printf '%s' "$WOBS" | grep -q explainsOnce    && echo yes || echo no)"
+chk "the finishing poll still reports"    "yes" "$(printf '%s' "$WOBS" | grep -q doneReports     && echo yes || echo no)"
+chk "and does not repeat the long note"   "yes" "$(printf '%s' "$WOBS" | grep -q explainOnlyOnce && echo yes || echo no)"
+chk "after which it is consumed"          "yes" "$(printf '%s' "$WOBS" | grep -q consumed        && echo yes || echo no)"
+
 # ---- a half-eaten marker must not reach the caller ---------------------------
 #
 # A `since` is an arbitrary byte position and can land inside a marker. The

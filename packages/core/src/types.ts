@@ -123,7 +123,14 @@ export interface RunResult {
    * reads differently after it. Two agents hit it; the second put it plainly —
    * "the errors are excellent; the silent state changes are the gap".
    */
-  paneWidthChanged?: { from: number; to: number };
+  paneWidthChanged?: {
+    from: number;
+    to: number;
+    /** Every distinct width seen, when tmux recorded more than the endpoints. */
+    seen?: number[];
+    /** False once the long explanation has been given for this session. */
+    explain?: boolean;
+  };
   /**
    * Present when the command is still running (a prompt or a timeout). Pass it
    * to `poll` to pick the same command back up rather than re-running it.
@@ -225,6 +232,16 @@ export interface PollResult {
    * the local shell, so nothing looked dead and no end marker ever came.
    */
   remoteDisconnected?: boolean;
+  /**
+   * The pane was resized while this command ran, or since the last observation.
+   *
+   * Only `run` ever reported this, so a job driven by start/poll — the one a
+   * human is most likely to attach to — never learned. Reported on every poll
+   * while it differs, and the baseline only moves on the poll that reports
+   * `done`, so a polling loop cannot swallow the notice before a later `run`
+   * sees it.
+   */
+  paneWidthChanged?: { from: number; to: number; seen?: number[]; explain?: boolean };
   state: SessionState;
   needsInput: boolean;
   /**

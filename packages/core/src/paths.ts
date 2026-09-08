@@ -156,6 +156,50 @@ export function logPath(name: string): string {
   return path.join(LOG_DIR, `${name}.log`);
 }
 
+/**
+ * Where tmux records this session's pane resizes.
+ *
+ * Named by TMUX session (`ath-foo`), not the logical one, because the hook
+ * writing it only has `#{session_name}` to work with and cannot strip the
+ * prefix. One conversion, here, rather than a rule every reader must remember.
+ */
+export function widthLogPath(name: string): string {
+  return path.join(RC_DIR, `${tmuxName(name)}.width`);
+}
+
+/** Set once the long width-change explanation has been shown for a session. */
+export function widthNoteFlagPath(name: string): string {
+  return path.join(RC_DIR, `${name}.wnote`);
+}
+
+/**
+ * The tmux command that makes resizes observable at all.
+ *
+ * Set as a COMMAND at session creation, deliberately, not written into
+ * tmux.conf. A running tmux server does not reread its config — verified — so
+ * a conf-only hook would not take effect until the server next restarted,
+ * which for a long-lived hub is approximately never. `set-hook -g` applies to
+ * the live server immediately.
+ *
+ * It also keeps the riskiest file in the project out of this entirely: a
+ * malformed line in tmux.conf breaks session creation for EVERY session and
+ * survives restarts, whereas a rejected `set-hook` fails alone and leaves the
+ * session working.
+ *
+ * The path is double-quoted inside the single-quoted shell command inside the
+ * double-quoted tmux string, because a home directory may contain a space —
+ * tested with one, since this is exactly the shape of quoting that ships
+ * broken.
+ */
+export function resizeHookCommand(): string[] {
+  return [
+    'set-hook',
+    '-g',
+    'window-resized',
+    `run-shell 'echo #{pane_width} >> "${RC_DIR}/#{session_name}.width"'`,
+  ];
+}
+
 /** Where the discard watermark for a session lives, beside its log. */
 export function trimMarkPath(name: string): string {
   return path.join(LOG_DIR, `${name}.trim`);
@@ -705,7 +749,7 @@ export async function purgeLog(name: string): Promise<PurgeResult> {
  * 241 and the oldest survivor was four days old. Adding state without adding
  * it here is the bug this comment exists to prevent.
  */
-const RC_SUFFIXES = ['.rc', '.t', '.caveat', '.boot'] as const;
+const RC_SUFFIXES = ['.rc', '.t', '.caveat', '.boot', '.width', '.wnote'] as const;
 
 /** Remove sentinels left behind by commands that never completed. */
 export async function reapStaleRc(maxAgeMs = 6 * 60 * 60 * 1000): Promise<number> {

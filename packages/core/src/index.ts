@@ -13,6 +13,7 @@ export {
   ensureLayout,
   discardedBytes,
   logPath,
+  widthLogPath,
   logicalName,
   rcPath,
   reapStaleRc,

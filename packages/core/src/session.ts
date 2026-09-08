@@ -13,6 +13,9 @@ import {
   ensureLayout,
   logPath,
   resetDiscardedBytes,
+  resizeHookCommand,
+  widthLogPath,
+  widthNoteFlagPath,
   trimMarkPath,
   logicalName,
   tmuxName,
@@ -346,6 +349,16 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   // offsets start at some large number inherited from a session that no longer
   // exists. See `discardedBytes`.
   await resetDiscardedBytes(name);
+
+  // Make resizes observable, and clear this NAME's resize state with the log.
+  //
+  // Best effort: a tmux that rejects the hook still gives a working session,
+  // which is the whole reason this is a command rather than a line in
+  // tmux.conf. Set on every create because a restarted server forgets it, and
+  // `-g` means one call covers every session on the socket.
+  await tmux(resizeHookCommand(), { allowFail: true }).catch(() => undefined);
+  await fs.rm(widthLogPath(name), { force: true }).catch(() => undefined);
+  await fs.rm(widthNoteFlagPath(name), { force: true }).catch(() => undefined);
 
   // Clear one-shot notices for this NAME, for the same reason.
   //
