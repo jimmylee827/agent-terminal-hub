@@ -20,6 +20,7 @@ export {
   rotateIfNeeded,
   rotateNotifyLog,
   purgeLog,
+  reapDeadLogs,
   LOG_MAX_BYTES,
   NOTIFY_MAX_BYTES,
   tmuxName,
@@ -119,6 +120,7 @@ export {
   listAllRequests,
   listRequests,
   pruneRequests,
+  purgeSessionRequests,
   requestHuman,
 } from './requests';
 export type { CommandOutcome } from './run';

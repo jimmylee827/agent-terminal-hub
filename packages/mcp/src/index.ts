@@ -240,6 +240,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const result = await run(session, command, {
         timeoutMs: Number(args.timeout_seconds ?? 120) * 1000,
         waitForIdle: Boolean(args.wait_for_idle),
+        maxBytes: args.max_bytes === undefined ? undefined : Number(args.max_bytes),
       });
 
       const payload: Record<string, unknown> = {

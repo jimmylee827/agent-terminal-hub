@@ -586,6 +586,66 @@ async function readLogCapped(
 }
 
 /**
+ * Cap what a single `run` hands back, the way `poll` and `read` already are.
+ *
+ * The comment on MAX_RETURN_BYTES describes an agent that got 2.6 MB in one
+ * call and says a warning cannot fix it because "the damage is done by the time
+ * it can see the size". That fix reached `poll` and `read` and never reached
+ * `run` — which is the FIRST tool anyone uses, and the one whose whole job is
+ * running a command and handing back what it printed. `seq 1 400000` through it
+ * returned 2,688,894 bytes: the same 2.6 MB, through the front door.
+ *
+ * Cuts on line boundaries for the reason `readLogCapped` documents at length: a
+ * mid-line cut leaves a line whole in neither half. Safe on a UTF-8 buffer
+ * because 0x0a cannot occur inside a multi-byte sequence.
+ *
+ * The omitted middle is NOT given a byte-exact `since` of its own, and that is
+ * deliberate. `extractBetweenMarkers` collapses overwrites, drops the echoed
+ * command and trims blank edges, so the string being cut here has no
+ * byte-for-byte mapping back onto log positions — any offset computed from it
+ * would be approximately right, which for an offset means wrong. What IS exact
+ * is where the command's region starts, which the caller already receives as
+ * `logOffset`. So the note names that, and says plainly that it returns the
+ * whole region rather than just the gap.
+ */
+function capRunOutput(
+  output: string,
+  maxBytes: number,
+  session: string,
+  resumeFrom: number,
+): { text: string; omittedBytes?: number } {
+  if (maxBytes <= 0) return { text: output };
+  const buf = Buffer.from(output, 'utf8');
+  if (buf.length <= maxBytes) return { text: output };
+
+  const headLen = Math.max(1, Math.floor(maxBytes * CAP_HEAD_FRACTION));
+  const tailLen = maxBytes - headLen;
+  const headBuf = buf.subarray(0, headLen);
+  const lastNewline = headBuf.lastIndexOf(0x0a);
+  const headBytes = lastNewline >= 0 ? lastNewline + 1 : headBuf.length;
+
+  const tailStart = buf.length - tailLen;
+  const tailBuf = buf.subarray(tailStart);
+  const firstNewline = tailBuf.indexOf(0x0a);
+  const tailFrom = tailStart + (firstNewline >= 0 ? firstNewline + 1 : 0);
+
+  // Alignment ate the gap; nothing to omit, so do not claim there is.
+  if (tailFrom <= headBytes) return { text: output };
+
+  const omittedBytes = tailFrom - headBytes;
+  const note =
+    `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output — ` +
+    `run returns at most ${Math.floor(maxBytes / 1024)} KiB. The command's full region is in ` +
+    `the session log: ath read ${session} --since=${resumeFrom} returns all of it, not just ` +
+    `this gap. A later trim can discard it. For output this size, redirect it to a file on ` +
+    `the host instead of reading it back through the transcript.]`;
+  return {
+    text: `${buf.subarray(0, headBytes).toString('utf8')}${note}\n${buf.subarray(tailFrom).toString('utf8')}`,
+    omittedBytes,
+  };
+}
+
+/**
  * Read only the last window of a log.
  *
  * `readTail` used to read the whole file to return five lines, which was
@@ -977,6 +1037,7 @@ async function runLocked(
   pollMs: number,
   options: RunOptions,
 ): Promise<RunResult> {
+  const maxBytes = options.maxBytes ?? MAX_RETURN_BYTES;
   let session = await get(clean); // throws SessionGone if killed
 
   if (session.paneDead) {
@@ -1393,8 +1454,17 @@ async function runLocked(
     ({ state, pane: paneTail } = await classifyNow());
   }
 
-  const output = extractBetweenMarkers(raw, nonce, command);
-  const needsHuman = await raiseHumanWall(clean, command, output, nonce);
+  const fullOutput = extractBetweenMarkers(raw, nonce, command);
+  // The wall reads the FULL output, before any cap.
+  //
+  // It scans for a credential prompt, which arrives at the END of what has been
+  // printed so far — precisely the region a head+tail cap keeps, but only by
+  // luck. Capping first would make prompt detection depend on output volume,
+  // and the failure would be silent: a session parked at a password prompt that
+  // nobody was asked to answer.
+  const needsHuman = await raiseHumanWall(clean, command, fullOutput, nonce);
+  const capped = capRunOutput(fullOutput, maxBytes, clean, discarded + offset);
+  const output = capped.text;
   // The pane can be resized by a human attaching — most often to answer the
   // very password prompt this command raised. Checked here, once per command,
   // so the change surfaces on the first result after it happens.
@@ -1496,6 +1566,9 @@ async function runLocked(
     // Only on the completed path: the early returns never reached the flush
     // loop, so they have nothing to be incomplete about.
     ...(captureIncomplete ? { captureIncomplete: true } : {}),
+    ...(capped.omittedBytes !== undefined
+      ? { omittedBytes: capped.omittedBytes, omittedResumeFrom: discarded + offset }
+      : {}),
     // Surfaced even on success. The directory and environment are restored,
     // but a reconnect still means the remote shell is a NEW process: anything
     // not captured in exported state — a background job, a shell function, an

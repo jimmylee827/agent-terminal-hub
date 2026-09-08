@@ -319,6 +319,14 @@ export interface RunOptions {
   pollMs?: number;
   /** Wait for a busy session to go idle instead of throwing. */
   waitForIdle?: boolean;
+  /**
+   * Cap on the output handed back, in bytes. Defaults to the same 64 KiB
+   * `poll` and `read` use; 0 returns everything.
+   *
+   * `run` was the one surface with no context guard, which made the tool most
+   * likely to flood exactly where a caller was least expecting it.
+   */
+  maxBytes?: number;
 }
 
 export interface StateChange {

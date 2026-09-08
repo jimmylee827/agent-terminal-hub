@@ -325,12 +325,40 @@ chk "kill names the surviving transcript" "yes" \
 chk "kill names the purge command"        "yes" \
     "$(printf '%s' "$KOUT" | grep -q 'ath purge' && echo yes || echo no)"
 
-# purge must not claim more than it does.
+# purge must not claim more than it does — and must now cover what it claims.
+#
+# These asserted the OPPOSITE until purge was widened: that it said "transcript
+# only" and listed `requests/` among the survivors. Both were accurate
+# descriptions of a real shortfall, and both had to change when the shortfall
+# was fixed rather than being loosened to keep passing. The invariant is not any
+# particular wording, it is that the disclosure matches the behaviour.
+#
+# The request record is checked BEHAVIOURALLY. A string test would have passed
+# just as happily against a message that promised a deletion never performed,
+# which is the failure mode this whole file exists to catch.
+node -e 'require("'"$PWD"'/packages/core/dist/index.js").requestHuman(process.argv[1],"sudo password for: SECRET-'"$C"'","agent").then(()=>process.exit(0))' "$C" >/dev/null 2>&1
 POUT="$($ATH_BIN purge "$C" 2>&1)"
-chk "purge states its own limit"    "yes" \
-    "$(printf '%s' "$POUT" | grep -q 'transcript only' && echo yes || echo no)"
-chk "purge names requests/ as surviving" "yes" \
-    "$(printf '%s' "$POUT" | grep -q 'requests/' && echo yes || echo no)"
+chk "purge still discloses what survives" "yes" \
+    "$(printf '%s' "$POUT" | grep -q 'Still on disk:' && echo yes || echo no)"
+chk "purge no longer lists requests/ as surviving" "yes" \
+    "$(printf '%s' "$POUT" | grep -q 'requests/' && echo no || echo yes)"
+chk "purge actually removes the session's request record" "gone" \
+    "$(node -e 'require("'"$PWD"'/packages/core/dist/index.js").listAllRequests().then(r=>process.stdout.write(r.some(x=>x.reason.indexOf("SECRET-"+process.argv[1])>=0)?"still there":"gone"))' "$C" 2>/dev/null)"
+chk "doctor marks requests/ as purged" "purged" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | awk '/^  requests\//{print $4}')"
+
+# The remote footprint is stated, because two reviewers had to establish it by
+# hand. Absence that cannot be shown is indistinguishable from an oversight.
+chk "doctor states the remote footprint" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'On a remote host' && echo yes || echo no)"
+chk "doctor says nothing is written remotely" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'nothing is written' && echo yes || echo no)"
+
+# log/ must not advertise a per-file bound as though it bounded the directory.
+chk "log/ says the directory has no ceiling" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'DIRECTORY has no ceiling' && echo yes || echo no)"
+chk "log/ names the command that reclaims it" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'ath purge --dead' && echo yes || echo no)"
 
 # The enumeration must be complete. Counted, not eyeballed: the previous count
 # was given as "six" from memory when the real figure was ten, twice in a row.
@@ -728,6 +756,59 @@ chk "output is captured, not dropped"       "yes" "$(printf '%s' "$CAPT" | grep 
 chk "a good capture is not flagged"         "yes" "$(printf '%s' "$CAPT" | grep -q noFalseFlag      && echo yes || echo no)"
 chk "a silent command still returns empty"  "yes" "$(printf '%s' "$CAPT" | grep -q emptyIsEmpty     && echo yes || echo no)"
 chk "and printing nothing is NOT flagged"   "yes" "$(printf '%s' "$CAPT" | grep -q silentNotFlagged && echo yes || echo no)"
+
+# ---- run must not flood the caller it is answering ---------------------------
+#
+# The context guard reached `poll` and `read` and never reached `run` — the
+# first tool anyone uses. `seq 1 400000` came back as 2,688,894 bytes in a
+# single result, the same 2.6 MB the cap was written for, through the front
+# door.
+#
+# Four properties, and the last two matter as much as the first: the cut must
+# land on line boundaries (a line split across the gap exists WHOLE in neither
+# half), the offset the marker advertises must actually return the output, and
+# ordinary output must come back untouched with no marker and no field.
+RCAP="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athr$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+(async()=>{
+  await a.create({name:"rc",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("rc").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const big=await a.run("rc","seq 1 400000",{timeoutMs:120000});
+  out.push(big.output.length<200000?"capped":"UNCAPPED");
+  out.push(big.omittedBytes>0?"reportsOmitted":"NOOMITTED");
+  out.push(big.exitCode===0?"exitIntact":"EXITWRONG");
+  // Head and tail both survive, and neither is a fragment of a line.
+  const lines=big.output.split("\n");
+  const mi=lines.findIndex(l=>l.startsWith("[ath:"));
+  const head=lines.slice(0,mi), tail=lines.slice(mi+1).filter(x=>x!=="");
+  out.push(head[0]==="1"?"headFromStart":"HEADWRONG");
+  out.push(tail[tail.length-1]==="400000"?"tailToEnd":"TAILWRONG");
+  out.push(head.every(l=>l===""||/^[0-9]+$/.test(l))&&tail.every(l=>/^[0-9]+$/.test(l))?"linesWhole":"SPLITLINE");
+  // The advertised offset must return the bytes it names.
+  const back=await a.readSince("rc",big.omittedResumeFrom,0);
+  out.push((back.output||"").indexOf("400000")>=0?"resumeWorks":"RESUMEBROKEN");
+  // Opting out returns everything.
+  const full=await a.run("rc","seq 1 400000",{timeoutMs:120000,maxBytes:0});
+  out.push(full.output.length>2000000?"optOutWorks":"OPTOUTBROKEN");
+  // And a small command is untouched: no marker, no field.
+  const small=await a.run("rc","echo tiny",{timeoutMs:20000});
+  out.push(small.output==="tiny"?"smallExact":"SMALLMANGLED");
+  out.push(small.omittedBytes===undefined?"smallNotFlagged":"FALSEOMIT");
+  await a.kill("rc").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "run caps a 2.6 MB result"              "yes" "$(printf '%s' "$RCAP" | grep -q capped          && echo yes || echo no)"
+chk "run reports how much it omitted"       "yes" "$(printf '%s' "$RCAP" | grep -q reportsOmitted  && echo yes || echo no)"
+chk "capping does not disturb the exit code" "yes" "$(printf '%s' "$RCAP" | grep -q exitIntact     && echo yes || echo no)"
+chk "the head starts at the first line"     "yes" "$(printf '%s' "$RCAP" | grep -q headFromStart   && echo yes || echo no)"
+chk "the tail reaches the last line"        "yes" "$(printf '%s' "$RCAP" | grep -q tailToEnd       && echo yes || echo no)"
+chk "no line is split across the gap"       "yes" "$(printf '%s' "$RCAP" | grep -q linesWhole      && echo yes || echo no)"
+chk "the offset it advertises works"        "yes" "$(printf '%s' "$RCAP" | grep -q resumeWorks     && echo yes || echo no)"
+chk "max_bytes 0 returns everything"        "yes" "$(printf '%s' "$RCAP" | grep -q optOutWorks     && echo yes || echo no)"
+chk "small output is returned exactly"      "yes" "$(printf '%s' "$RCAP" | grep -q smallExact      && echo yes || echo no)"
+chk "and small output is NOT flagged"       "yes" "$(printf '%s' "$RCAP" | grep -q smallNotFlagged && echo yes || echo no)"
 
 # ---- a passphrase prompt must park, whatever asked for it --------------------
 #
