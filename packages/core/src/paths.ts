@@ -76,7 +76,19 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     holds: 'one <session>.log per session — every command run, and every byte it printed',
     purged: true,
     sensitive: true,
-    bounded: `trimmed to the last ${LOG_KEEP_BYTES / 1024 / 1024} MiB above ${LOG_MAX_BYTES / 1024 / 1024} MiB`,
+    // Says "each file" because the size printed beside it is the DIRECTORY's.
+    //
+    // The same mistake this entry's own name comment describes, one field over:
+    // a per-file bound rendered next to an aggregate reads as a bound on the
+    // aggregate. It is not one. Sessions are never reaped — `kill` keeps the
+    // transcript on purpose — so the directory only grows, and two reviewers
+    // reported the growth while looking straight at a line that appeared to
+    // promise a ceiling. Nothing here lied; the layout answered a question
+    // nobody asked.
+    bounded:
+      `each file trimmed to the last ${LOG_KEEP_BYTES / 1024 / 1024} MiB above ` +
+      `${LOG_MAX_BYTES / 1024 / 1024} MiB. The DIRECTORY has no ceiling — ` +
+      `reclaim with: ath purge --dead`,
   },
   {
     name: 'rc/',
@@ -90,9 +102,13 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     name: 'requests/',
     absolute: path.join(ATH_HOME, 'requests'),
     holds: 'open and recently-answered human requests. The reason text QUOTES the command',
-    purged: false,
+    // Covered by `purge` now, for the purged session only — same scope as the
+    // log itself. It was `false` while holding the command text verbatim, so
+    // the one command you would run after leaking a secret cleaned the
+    // transcript and left the quote.
+    purged: true,
     sensitive: true,
-    bounded: 'resolved requests expire',
+    bounded: 'resolved requests expire after 1h',
   },
   {
     name: 'claim/',
@@ -154,6 +170,67 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
 
 export function logPath(name: string): string {
   return path.join(LOG_DIR, `${name}.log`);
+}
+
+export interface DeadLogSweep {
+  /** Transcripts removed. */
+  removed: number;
+  /** Bytes reclaimed. */
+  bytes: number;
+  /** Transcripts left alone because their session is still alive. */
+  live: number;
+}
+
+/**
+ * Delete transcripts belonging to sessions that no longer exist.
+ *
+ * The directory had no way to shrink. Every other artifact is reaped, rotated
+ * or expires; `log/` was the one that only grew, and it is the largest by two
+ * orders of magnitude — 648 files and 57 MiB on the development machine, across
+ * sessions that had been dead for days.
+ *
+ * NOT automatic, and that is the whole design. `kill` prints "transcript kept"
+ * and means it: the record outliving the session is the point, because the
+ * question "what did that thing actually do?" is usually asked after it is
+ * gone. A reaper on a timer would answer that question with silence, and would
+ * do it to a transcript someone was keeping deliberately. So this runs only
+ * when a human types `ath purge --dead`, and it refuses to touch anything whose
+ * session is still in tmux.
+ *
+ * Takes the live set as an argument because `session.ts` imports THIS module;
+ * asking it for the list here would be a cycle. Same reason, same shape, as
+ * `pruneRequests`.
+ */
+export async function reapDeadLogs(liveSessions: Set<string>): Promise<DeadLogSweep> {
+  const sweep: DeadLogSweep = { removed: 0, bytes: 0, live: 0 };
+  let entries: string[];
+  try {
+    entries = await fs.readdir(LOG_DIR);
+  } catch {
+    return sweep;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith('.log')) continue;
+    const name = entry.slice(0, -'.log'.length);
+    if (liveSessions.has(name)) {
+      sweep.live++;
+      continue;
+    }
+    const file = path.join(LOG_DIR, entry);
+    try {
+      sweep.bytes += (await fs.stat(file)).size;
+      await fs.unlink(file);
+      sweep.removed++;
+    } catch {
+      continue; // raced, or not ours to remove — leave the watermark alone too
+    }
+    // The trim watermark counts bytes discarded from a file that is now gone.
+    // Left behind, it would be read as the baseline for a NEW session reusing
+    // the name, whose offsets would then all be reported shifted by a number
+    // belonging to its predecessor.
+    await fs.unlink(trimMarkPath(name)).catch(() => undefined);
+  }
+  return sweep;
 }
 
 /**

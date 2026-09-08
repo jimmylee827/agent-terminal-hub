@@ -34,6 +34,8 @@ import {
   lockHolder,
   poll,
   purgeLog,
+  purgeSessionRequests,
+  reapDeadLogs,
   reapStaleRc,
   readSince,
   readTail,
@@ -112,7 +114,7 @@ ${c.bold('Sessions')}
 
 ${c.bold('Driving a session')}
   ath run <name> -- <command>      blocking; prints output, exits with its code
-       [--timeout SEC] [--wait] [--json]
+       [--timeout SEC] [--wait] [--json] [--max-bytes N]  ${c.dim('(0 = everything)')}
   ath start <name> -- <command>    non-blocking; prints a handle for polling
   ath poll <name> --handle H [--since N] [--max-bytes N]
   ath send <name> -- <keys>        tmux key names (C-c, Up, y, Enter)
@@ -125,7 +127,8 @@ ${c.bold('Driving a session')}
 ${c.bold('Humans')}
   ath attach <name>                enter the terminal the agent is using
   ath prompt <name>                copyable handoff text for an agent
-  ath purge <name> | --all         wipe a session's transcript (only that)
+  ath purge <name> | --all         wipe transcript + request records
+  ath purge --dead                 DELETE transcripts of sessions that are gone
   ath watch [--json]               stream state changes
   ath doctor [--artifacts]         health checks, or everything left on disk
 
@@ -247,6 +250,8 @@ async function main(): Promise<number> {
       const result = await run(name, cmd, {
         timeoutMs: flagNumber(flags, 'timeout', 120) * 1000,
         waitForIdle: flagBool(flags, 'wait'),
+        // `--max-bytes 0` returns everything, same opt-out as read and poll.
+        maxBytes: flags['max-bytes'] === undefined ? undefined : flagNumber(flags, 'max-bytes', 0),
       });
 
       if (flagBool(flags, 'json')) {
@@ -576,14 +581,17 @@ async function main(): Promise<number> {
       // What purge covers is stated at the point of use, every time.
       //
       // The command reads as "make it gone", and people reach for it after
-      // typing something they regret. It truncates ONE file. Nine other things
-      // the hub wrote are untouched, and `requests/` quotes the command back.
-      // Printing "purged" alone lets a caller believe a guarantee this does
-      // not provide, so the shortfall is disclosed here rather than buried in
-      // documentation nobody reads at the moment they need it.
+      // typing something they regret. It now covers the transcript AND the
+      // request records — the two places a command's text is stored verbatim —
+      // but not the seven other things the hub wrote. Printing "purged" alone
+      // lets a caller believe a guarantee this does not provide, so whatever is
+      // left is disclosed here rather than buried in documentation nobody reads
+      // at the moment they need it.
       const report = (survives: readonly AthArtifact[]): void => {
         if (survives.length === 0) return;
-        console.error(c.yellow('[ath] purge clears the session transcript only. Still on disk:'));
+        console.error(
+          c.yellow('[ath] purge clears the transcript and request records. Still on disk:'),
+        );
         for (const a of survives) {
           console.error(c.dim(`        ~/.ath/${a.name.padEnd(18)} ${a.holds}`));
         }
@@ -612,16 +620,47 @@ async function main(): Promise<number> {
         // Orphans are the interesting number: they are what a caller did not
         // know was still there.
         const orphans = names.filter((n) => !live.has(n)).length;
+        let reqs = 0;
+        for (const n of names) reqs += await purgeSessionRequests(n);
         console.log(
           `purged ${names.length} transcript(s), ${fmtBytes(bytes)} discarded` +
-            (orphans ? ` (${orphans} from sessions that no longer exist)` : ''),
+            (orphans ? ` (${orphans} from sessions that no longer exist)` : '') +
+            (reqs ? `, ${reqs} request record(s) removed` : ''),
         );
         report(survives);
         return 0;
       }
+
+      // `--dead` reclaims the directory; every other artifact already shrinks.
+      //
+      // Kept separate from `--all` because they answer different questions.
+      // `--all` empties transcripts a secret may have landed in and leaves the
+      // files; this DELETES transcripts, and only for sessions tmux no longer
+      // has. Nothing live is touched, so it cannot take a record out from under
+      // a session someone is still using.
+      if (flagBool(flags, 'dead')) {
+        const live = new Set((await list({ withState: false })).map((s) => s.name));
+        const sweep = await reapDeadLogs(live);
+        console.log(
+          `removed ${sweep.removed} transcript(s) of dead sessions, ` +
+            `${fmtBytes(sweep.bytes)} reclaimed` +
+            (sweep.live ? ` — ${sweep.live} live session(s) untouched` : ''),
+        );
+        if (sweep.removed === 0 && sweep.live > 0) {
+          console.error(
+            c.dim('[ath] nothing to reclaim: every transcript belongs to a live session.'),
+          );
+        }
+        return 0;
+      }
+
       const name = requireName(positional[0]);
       const { bytes, survives } = await purgeLog(name);
-      console.log(`purged recorded output for ${name} — ${fmtBytes(bytes)} discarded`);
+      const removed = await purgeSessionRequests(name);
+      console.log(
+        `purged recorded output for ${name} — ${fmtBytes(bytes)} discarded` +
+          (removed ? `, ${removed} request record(s) removed` : ''),
+      );
       report(survives);
       return 0;
     }
@@ -1052,8 +1091,29 @@ async function main(): Promise<number> {
           console.log(`  ${' '.repeat(31)}  ${c.dim(`bounded: ${a.bounded}`)}`);
         }
         console.log(
-          `\n  ${c.dim('ath purge <name>')} clears only the line marked "purged", and only for that session.`,
+          `\n  ${c.dim('ath purge <name>')} clears the lines marked "purged", and only for that session.`,
         );
+
+        // The remote side, because that is the question people actually ask.
+        //
+        // This whole command answers "what did this leave on MY machine?" while
+        // the tool's main use is driving someone ELSE's. Two reviewers checked
+        // the remote footprint by hand — `ls -la ~`, `/tmp`, shell rc files —
+        // and both found nothing, which is the right answer and was not
+        // obtainable from any surface. Absence is worth printing: unverifiable
+        // absence is indistinguishable from something overlooked, and an
+        // auditor who cannot show a host is clean has to assume it is not.
+        console.log(`\n${c.bold('On a remote host')} ${c.dim('(ath new --remote HOST)')}`);
+        for (const line of [
+          'nothing is written. No files, no directories, no rc-file edits.',
+          'The shell helper is TYPED into the pane — functions in memory only,',
+          'gone when the shell exits. tmux, the transcript and every file above',
+          'live on THIS machine; ssh carries only the connection.',
+          'Two traces are inherent to ssh and are not the hub: your login in the',
+          "host's auth log, and whatever the commands you ran did themselves.",
+        ]) {
+          console.log(`  ${c.dim(line)}`);
+        }
         return 0;
       }
       const { ok, checks } = await doctor();
