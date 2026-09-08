@@ -695,6 +695,42 @@ chk "the finishing poll still reports"    "yes" "$(printf '%s' "$WOBS" | grep -q
 chk "and does not repeat the long note"   "yes" "$(printf '%s' "$WOBS" | grep -q explainOnlyOnce && echo yes || echo no)"
 chk "after which it is consumed"          "yes" "$(printf '%s' "$WOBS" | grep -q consumed        && echo yes || echo no)"
 
+# ---- the omission marker must be followable, and not look like data loss -----
+#
+# Two mechanisms remove output and they mean opposite things: the 64 KB cap
+# ELIDES bytes that are still on disk, a 32 MB log trim DESTROYS them. Both
+# surfaced as a bracketed `[ath: N bytes …]` line, and a cold agent said it
+# "had to actively probe to learn which I was seeing".
+#
+# Worse, the offset printed INSIDE the marker was physical while the field
+# beside it was logical — the same gap advertised as `since=75` and
+# `omitted_resume_from: 87935030`. Following the text landed nowhere. An
+# instruction that is actionable and wrong is worse than no instruction.
+MARK="$(ATH_HOME="$(mktemp -d)" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), path=require("path"), out=[];
+fs.mkdirSync(path.join(process.env.ATH_HOME,"log"),{recursive:true});
+const log=path.join(process.env.ATH_HOME,"log","u.log");
+(async()=>{
+  fs.writeFileSync(log, Array.from({length:20000},(_,i)=>"line-"+i).join("\n")+"\n");
+  await a.rotateIfNeeded("u", 40000);           // discarded > 0, so the two units differ
+  const d = await a.discardedBytes("u");
+  fs.appendFileSync(log, Array.from({length:20000},(_,i)=>"more-"+i).join("\n")+"\n");
+  const r = await a.readSince("u", d);
+  const m = /since=(\d+)/.exec(r.output);
+  out.push(m?"hasMarker":"NOMARKER");
+  out.push(m && Number(m[1])===r.omittedResumeFrom ? "textMatchesField":"UNITSDIVERGE");
+  const back = await a.readSince("u", Number(m?m[1]:0), 0);
+  out.push(back.output.length>0 ? "markerIsFollowable":"DEADEND");
+  out.push(/still on disk/.test(r.output) ? "saysStillOnDisk":"AMBIGUOUS");
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "the omission marker is present"        "yes" "$(printf '%s' "$MARK" | grep -q hasMarker          && echo yes || echo no)"
+chk "its text and its field agree"          "yes" "$(printf '%s' "$MARK" | grep -q textMatchesField   && echo yes || echo no)"
+chk "following the marker returns output"   "yes" "$(printf '%s' "$MARK" | grep -q markerIsFollowable && echo yes || echo no)"
+chk "and it is distinct from a trim notice" "yes" "$(printf '%s' "$MARK" | grep -q saysStillOnDisk    && echo yes || echo no)"
+
 # ---- a half-eaten marker must not reach the caller ---------------------------
 #
 # A `since` is an arbitrary byte position and can land inside a marker. The

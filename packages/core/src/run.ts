@@ -516,6 +516,15 @@ async function readLogCapped(
   since: number,
   size: number,
   maxBytes = MAX_RETURN_BYTES,
+  // Distance between this file's physical positions and the LOGICAL offsets
+  // callers use. Passed in rather than added afterwards, because it was added
+  // afterwards: the caller converted the returned field and left the offset
+  // printed INSIDE the text physical. An agent saw `since=75` in the marker
+  // beside `omitted_resume_from: 87935030` in the field, for the same gap, and
+  // could only tell which to believe by noticing they disagreed. Rendering
+  // both from one number here makes divergence impossible rather than
+  // unlikely.
+  logicalBase = 0,
 ): Promise<CappedSlice> {
   const start = Math.max(0, Math.min(since, size));
   const available = size - start;
@@ -551,10 +560,18 @@ async function readLogCapped(
   const head = headBuf.subarray(0, headBytes).toString('utf8');
   const tail = tailBuf.subarray(tailSkip).toString('utf8');
   const bytes = tailFrom - resumeFrom;
-  const note = `[ath: ${bytes} bytes omitted here — read them with since=${resumeFrom}]`;
+  const logicalResume = logicalBase + resumeFrom;
+  // "still on disk" separates this from the OTHER thing that removes output.
+  //
+  // The cap elides bytes that remain retrievable; a log trim destroys them.
+  // Both surfaced as a bracketed `[ath: N bytes …]` line, and an agent said it
+  // "had to actively probe to learn which I was seeing" — then trusted this
+  // one's instruction on bytes that a trim had already taken. Similar-looking
+  // notices with opposite meanings is a defect in the notice, not the reader.
+  const note = `[ath: ${bytes} bytes omitted here — still on disk, read them with since=${logicalResume}]`;
   return {
     raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
-    omitted: { bytes, resumeFrom },
+    omitted: { bytes, resumeFrom: logicalResume },
   };
 }
 
@@ -2127,7 +2144,7 @@ export async function poll(
   const size = await fileSize(log);
   const at = await resolveOffset(clean, since);
   const discarded = at.logicalEnd - size;
-  const slice = await readLogCapped(log, at.physical, size, maxBytes);
+  const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded);
   const output = trimToCommandWindow(slice.raw, handle);
 
   let exitCode: number | null = null;
@@ -2248,7 +2265,9 @@ export async function poll(
       ? {}
       : {
           omittedBytes: slice.omitted.bytes,
-          omittedResumeFrom: discarded + slice.omitted.resumeFrom,
+          // Already logical — `readLogCapped` renders the marker text from the
+          // same number, so the two can no longer disagree.
+          omittedResumeFrom: slice.omitted.resumeFrom,
         }),
     // Trimmed out from under the caller. Reported rather than left to be
     // inferred from a `next_offset` smaller than the `since` that was passed —
@@ -2716,11 +2735,11 @@ export async function readSince(
   const log = logPath(clean);
   const size = await fileSize(log);
   const at = await resolveOffset(clean, since);
+  const discarded = at.logicalEnd - size;
   // Capped for the same reason `poll` is, and it must be BOTH: this is the
   // other half of the documented follow loop, so bounding one and leaving the
   // other just moves the flood to whichever the caller happened to pick.
-  const slice = await readLogCapped(log, at.physical, size, maxBytes);
-  const discarded = at.logicalEnd - size;
+  const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded);
   return {
     output: cleanSlice(slice.raw),
     nextOffset: at.logicalEnd,
@@ -2730,7 +2749,9 @@ export async function readSince(
           omittedBytes: slice.omitted.bytes,
           // Back to LOGICAL before it leaves, or the caller resumes at a
           // physical position that means something else after the next trim.
-          omittedResumeFrom: discarded + slice.omitted.resumeFrom,
+          // Already logical — `readLogCapped` renders the marker text from the
+          // same number, so the two can no longer disagree.
+          omittedResumeFrom: slice.omitted.resumeFrom,
         }),
     ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
     ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
