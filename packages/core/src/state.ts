@@ -11,6 +11,23 @@ const SHELLS = new Set(['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh
 export const INTERACTIVE_COMMANDS = new Set([
   'sudo',
   'ssh',
+  // The ssh KEY tools, not just ssh itself.
+  //
+  // `ssh-keygen` and `ssh-add` ask for a passphrase and wait forever. Their
+  // prompts matched the text patterns perfectly — `Enter passphrase for
+  // "<path>" (empty for no passphrase):` and the bare `Enter passphrase:` both
+  // hit `/passphrase[^\n]{0,160}:\s*$/`. The text was never the problem: the
+  // pane classified as `busy` because the dual signal also needs a command
+  // known to ask humans things, and these two were not on the list. So no
+  // request was filed, nothing notified anyone, and the session simply sat
+  // there.
+  //
+  // Found by the tool's own author generating a key THROUGH the hub, which is
+  // the shape worth noting: the workflow the hub exists for, on a command
+  // nobody had thought to enumerate.
+  'ssh-keygen',
+  'ssh-add',
+  'ssh-copy-id',
   'gpg',
   'su',
   'doas',

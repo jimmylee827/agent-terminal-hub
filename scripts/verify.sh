@@ -695,6 +695,33 @@ chk "the finishing poll still reports"    "yes" "$(printf '%s' "$WOBS" | grep -q
 chk "and does not repeat the long note"   "yes" "$(printf '%s' "$WOBS" | grep -q explainOnlyOnce && echo yes || echo no)"
 chk "after which it is consumed"          "yes" "$(printf '%s' "$WOBS" | grep -q consumed        && echo yes || echo no)"
 
+# ---- a passphrase prompt must park, whatever asked for it --------------------
+#
+# `ssh-keygen` and `ssh-add` ask for a passphrase and wait forever. Their
+# prompts matched the text patterns exactly; the pane still classified as
+# `busy`, because the dual signal also needs a command known to ask humans
+# things and neither was on that list. No request was filed and the session sat
+# there — found by generating a key THROUGH the hub, which is the workflow the
+# hub exists for.
+#
+# The negative case matters as much: a key being generated is genuinely busy,
+# and a signal that fires on any ssh-keygen would be worse than the silence.
+PASSP="$(node -e '
+const s=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+const withPath=`Enter passphrase for \"/Users/x/.ssh/k_ed25519\" (empty for no passphrase): `;
+const cl=(cmd,pane)=>s.classify({paneDead:false,currentCommand:cmd,paneTail:pane,paneWidth:200});
+out.push(cl("ssh-keygen",withPath)==="needs-input"?"keygenParks":"KEYGENBUSY");
+out.push(cl("ssh-keygen","Enter same passphrase again: ")==="needs-input"?"confirmParks":"CONFIRMBUSY");
+out.push(cl("ssh-add","Enter passphrase: ")==="needs-input"?"addParks":"ADDBUSY");
+out.push(cl("ssh-keygen","Generating public/private ed25519 key pair.")==="busy"?"workingStaysBusy":"FALSEPARK");
+process.stdout.write(out.join(" "));
+' 2>/dev/null)"
+chk "ssh-keygen parks on a passphrase"     "yes" "$(printf '%s' "$PASSP" | grep -q keygenParks      && echo yes || echo no)"
+chk "and on the confirmation prompt"       "yes" "$(printf '%s' "$PASSP" | grep -q confirmParks     && echo yes || echo no)"
+chk "ssh-add parks on the bare prompt"     "yes" "$(printf '%s' "$PASSP" | grep -q addParks         && echo yes || echo no)"
+chk "but generating a key stays busy"      "yes" "$(printf '%s' "$PASSP" | grep -q workingStaysBusy && echo yes || echo no)"
+
 # ---- the omission marker must be followable, and not look like data loss -----
 #
 # Two mechanisms remove output and they mean opposite things: the 64 KB cap
