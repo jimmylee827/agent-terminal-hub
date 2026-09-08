@@ -159,6 +159,20 @@ export interface RunResult {
    * transition, rather than on every command.
    */
   fallbackShell?: boolean;
+  /**
+   * The output could not be framed, so `output` is NOT trustworthy.
+   *
+   * `extractBetweenMarkers` returns an empty string when it cannot find this
+   * command's start marker, and that was handed back as the command's output
+   * beside `exit_code: 0` — identical in shape to a command that genuinely
+   * printed nothing. An agent running `netstat | grep LISTEN` got exit 0 and
+   * no output and was one step from reporting "no listening ports"; a `read` a
+   * moment later showed sixteen.
+   *
+   * Set when the markers had not both arrived within the flush window. Re-read
+   * with `read --since <logOffset>` rather than trusting `output`.
+   */
+  captureIncomplete?: boolean;
 }
 
 export interface StartResult {

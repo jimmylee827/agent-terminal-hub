@@ -277,6 +277,16 @@ async function main(): Promise<number> {
       // Loud, and raised by the system rather than by the agent choosing to.
       // Same reason as the MCP side: computed for rounds, shown by nobody.
       // Same signal on the human's surface — they are the one who resized it.
+      if (result.captureIncomplete) {
+        console.error(
+          c.red(
+            `[ath] CAPTURE INCOMPLETE — the output above could not be framed and may be empty ` +
+              `or partial. The exit code is still exact; the output is not. Re-read with ` +
+              `"ath read ${name} --since ${result.logOffset}" before concluding anything, ` +
+              `especially that the command found nothing.`,
+          ),
+        );
+      }
       if (result.paneWidthChanged) {
         console.error(
           c.yellow(

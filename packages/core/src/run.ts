@@ -568,7 +568,17 @@ async function readLogCapped(
   // "had to actively probe to learn which I was seeing" — then trusted this
   // one's instruction on bytes that a trim had already taken. Similar-looking
   // notices with opposite meanings is a defect in the notice, not the reader.
-  const note = `[ath: ${bytes} bytes omitted here — still on disk, read them with since=${logicalResume}]`;
+  // "as of this call", because the claim has a shelf life.
+  //
+  // Round D was told the offset was unusable; the fix said "still on disk",
+  // which is true when written and can stop being true. A later trim destroys
+  // those bytes, and the next agent followed the marker to find them already
+  // gone — reading a flat promise where the tool could only honestly offer a
+  // snapshot. Stronger wording was the right fix for a wrong offset and the
+  // wrong fix for a perishable one.
+  const note =
+    `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
+    `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
   return {
     raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
     omitted: { bytes, resumeFrom: logicalResume },
@@ -1306,12 +1316,30 @@ async function runLocked(
 
   // The marker that carried the exit code is already in the log by definition,
   // but the output BEFORE it may still be in flight through pipe-pane.
+  //
+  // Wait for BOTH markers, not just the end.
+  //
+  // `extractBetweenMarkers` returns '' when it cannot find the START marker, and
+  // that empty string was handed back as the command's output beside
+  // `exit_code: 0` — indistinguishable from a command that printed nothing. An
+  // agent ran `netstat | grep LISTEN`, got exit 0 and no output, and was one
+  // step from reporting "no listening ports" as an audit finding; a `read` a
+  // moment later showed sixteen. The completion signal comes from a scan of the
+  // log TAIL, so it can see the end marker while a read from this command's
+  // start offset has not caught up.
   const flushDeadline = Date.now() + MARKER_FLUSH_MS;
+  const bothMarkers = (text: string): boolean =>
+    text.includes(startMarker(nonce)) && text.includes(endMarker(nonce));
   let raw = await readLogFrom(log, offset);
-  while (!raw.includes(endMarker(nonce)) && Date.now() < flushDeadline) {
+  while (!bothMarkers(raw) && Date.now() < flushDeadline) {
     await sleep(40);
     raw = await readLogFrom(log, offset);
   }
+  // Still not framed after the wait: whatever we return is a guess, and an
+  // empty guess is the dangerous one. SAY the capture is incomplete rather
+  // than presenting it as the command's output — "printed nothing" and "I
+  // could not find what it printed" must not look the same.
+  const captureIncomplete = !bothMarkers(raw);
 
   const exitCode = completion.exitCode;
   await recordLast(clean, command, exitCode);
@@ -1419,7 +1447,16 @@ async function runLocked(
     // way: its code is the last stage's, so a non-zero tells you that stage
     // failed and still says nothing about the ones before it. Filtering both
     // the same way would have silently dropped the harder case.
-    (compoundExitCaveat(command) === 'last-pipeline-stage-only' || exitCode === 0)
+    // Asks whether the line CONTAINS a pipeline, not how it was classified.
+    //
+    // A line with both `;` and `|` classifies as `last-command-only`, so the
+    // pipeline protection this condition exists to preserve was dropped for
+    // exactly the commands that have both — "filtering both the same way would
+    // have silently dropped the harder case", done by the guard written to
+    // prevent it. An agent inspected a firewall with such a line, got a bare
+    // `1` from a trailing grep that matched nothing, and read it as the
+    // inspection having failed.
+    (hasPipeline(command) || exitCode === 0)
       ? {
           exitCaveat: compoundExitCaveat(command),
           ...((await firstCaveatFor(clean))
@@ -1456,6 +1493,9 @@ async function runLocked(
     state,
     ...(widthChange ? { paneWidthChanged: widthChange } : {}),
     logOffset: discarded + offset,
+    // Only on the completed path: the early returns never reached the flush
+    // loop, so they have nothing to be incomplete about.
+    ...(captureIncomplete ? { captureIncomplete: true } : {}),
     // Surfaced even on success. The directory and environment are restored,
     // but a reconnect still means the remote shell is a NEW process: anything
     // not captured in exported state — a background job, a shell function, an
@@ -2408,6 +2448,12 @@ const HUMAN_WALL_RE =
  * `&&` and `||` are excluded on purpose — there the propagated status is
  * usually the answer you wanted. It is `;` and `|` that hide it.
  */
+/** Whether the line contains a real pipeline, ignoring quoted text and `||`. */
+function hasPipeline(command: string): boolean {
+  const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+  return /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
+}
+
 function compoundExitCaveat(command: string): string | undefined {
   // Ignore separators inside quotes: `echo "a;b"` is not a compound command.
   const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');

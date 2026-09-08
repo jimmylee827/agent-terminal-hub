@@ -256,9 +256,20 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // A human attaching — usually to answer a password prompt this very
       // command raised — resizes the pane, so anything parsed by column reads
       // differently from here on. Two agents hit it; neither was told.
+      // An unreliable capture outranks everything else this result can say.
+      if (result.captureIncomplete) {
+        payload.capture_incomplete = true;
+        payload.what_to_do =
+          'The output below could NOT be framed and may be empty or partial — do not treat it ' +
+          'as what the command printed. The exit code is still exact; only the capture is in ' +
+          `doubt. Re-read with the \`read\` tool and since=${result.logOffset} before drawing ` +
+          'any conclusion, especially a negative one: "no results" from this call is not ' +
+          'evidence there were none.';
+      }
       if (result.paneWidthChanged) {
         payload.pane_width_changed = result.paneWidthChanged;
-        payload.what_to_do = widthNote(result.paneWidthChanged);
+        // Do not overwrite the louder notice above.
+        if (!result.captureIncomplete) payload.what_to_do = widthNote(result.paneWidthChanged);
       }
 
       // A request was filed on the caller's behalf — SAY SO.

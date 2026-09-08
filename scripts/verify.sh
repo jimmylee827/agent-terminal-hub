@@ -695,6 +695,40 @@ chk "the finishing poll still reports"    "yes" "$(printf '%s' "$WOBS" | grep -q
 chk "and does not repeat the long note"   "yes" "$(printf '%s' "$WOBS" | grep -q explainOnlyOnce && echo yes || echo no)"
 chk "after which it is consumed"          "yes" "$(printf '%s' "$WOBS" | grep -q consumed        && echo yes || echo no)"
 
+# ---- an unframed capture must not look like an empty result ------------------
+#
+# `extractBetweenMarkers` returns '' when it cannot find the command's START
+# marker, and that empty string was handed back as the output beside
+# `exit_code: 0` — identical in shape to a command that printed nothing. An
+# agent ran `netstat | grep LISTEN`, got exit 0 and no output, and was one step
+# from reporting "no listening ports" as an audit finding; a `read` a moment
+# later showed sixteen. Completion is detected from a scan of the log TAIL, so
+# it can see the end marker while a read from the command's start offset has
+# not caught up.
+#
+# The negative case is the point: a command that genuinely prints nothing must
+# NOT be flagged, or the signal is noise and gets ignored the one time it counts.
+CAPT="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athc$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+(async()=>{
+  await a.create({name:"cp",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("cp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const withOut=await a.run("cp","echo alpha; echo beta",{timeoutMs:20000});
+  out.push(withOut.output.includes("alpha")?"capturesOutput":"LOSTOUTPUT");
+  out.push(withOut.captureIncomplete===undefined?"noFalseFlag":"FALSEFLAG");
+  const silent=await a.run("cp","true",{timeoutMs:20000});
+  out.push(silent.output===""?"emptyIsEmpty":"NOTEMPTY");
+  out.push(silent.captureIncomplete===undefined?"silentNotFlagged":"FLAGGEDSILENT");
+  await a.kill("cp").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "output is captured, not dropped"       "yes" "$(printf '%s' "$CAPT" | grep -q capturesOutput   && echo yes || echo no)"
+chk "a good capture is not flagged"         "yes" "$(printf '%s' "$CAPT" | grep -q noFalseFlag      && echo yes || echo no)"
+chk "a silent command still returns empty"  "yes" "$(printf '%s' "$CAPT" | grep -q emptyIsEmpty     && echo yes || echo no)"
+chk "and printing nothing is NOT flagged"   "yes" "$(printf '%s' "$CAPT" | grep -q silentNotFlagged && echo yes || echo no)"
+
 # ---- a passphrase prompt must park, whatever asked for it --------------------
 #
 # `ssh-keygen` and `ssh-add` ask for a passphrase and wait forever. Their
@@ -749,14 +783,17 @@ const log=path.join(process.env.ATH_HOME,"log","u.log");
   out.push(m && Number(m[1])===r.omittedResumeFrom ? "textMatchesField":"UNITSDIVERGE");
   const back = await a.readSince("u", Number(m?m[1]:0), 0);
   out.push(back.output.length>0 ? "markerIsFollowable":"DEADEND");
-  out.push(/still on disk/.test(r.output) ? "saysStillOnDisk":"AMBIGUOUS");
+  // Must say it is on disk AND that the claim can expire — a flat promise is
+  // what sent the next agent after bytes a later trim had already taken.
+  out.push(/on disk as of this call/.test(r.output) && /later trim/.test(r.output)
+    ? "saysOnDiskForNow":"AMBIGUOUS");
   process.stdout.write(out.join(" "));
 })();
 ' 2>/dev/null)"
 chk "the omission marker is present"        "yes" "$(printf '%s' "$MARK" | grep -q hasMarker          && echo yes || echo no)"
 chk "its text and its field agree"          "yes" "$(printf '%s' "$MARK" | grep -q textMatchesField   && echo yes || echo no)"
 chk "following the marker returns output"   "yes" "$(printf '%s' "$MARK" | grep -q markerIsFollowable && echo yes || echo no)"
-chk "and it is distinct from a trim notice" "yes" "$(printf '%s' "$MARK" | grep -q saysStillOnDisk    && echo yes || echo no)"
+chk "and it is distinct from a trim notice" "yes" "$(printf '%s' "$MARK" | grep -q saysOnDiskForNow   && echo yes || echo no)"
 
 # ---- a half-eaten marker must not reach the caller ---------------------------
 #
