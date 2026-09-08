@@ -757,6 +757,41 @@ chk "a good capture is not flagged"         "yes" "$(printf '%s' "$CAPT" | grep 
 chk "a silent command still returns empty"  "yes" "$(printf '%s' "$CAPT" | grep -q emptyIsEmpty     && echo yes || echo no)"
 chk "and printing nothing is NOT flagged"   "yes" "$(printf '%s' "$CAPT" | grep -q silentNotFlagged && echo yes || echo no)"
 
+# ---- one answer to "is this framed", not two -------------------------------
+#
+# The incompleteness check used to test `raw.includes(marker)` while the
+# extractor scanned `collapseOverwrites(raw)` line by line — the same question,
+# a different string, a different rule. Three inputs make them disagree, and all
+# three return an empty capture the check calls fine.
+#
+# The middle case is the one seen in the wild, twice: the helper's own source
+# matches on the marker text (`case "$1" in <ATHS:…>)`), so re-injecting the
+# helper mid-session puts a perfect copy of the marker into the log. A reviewer
+# got exit_code 0 and no output for three echoes, and said an agent accepting it
+# "would have reported the host has no configured hostname and no IP addresses".
+#
+# Two of these now RECOVER the output rather than merely being flagged.
+FRAMED="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const N="abc12345", S="<ATHS:"+N+">", E="<ATHE:"+N+":0:Lw==:x>";
+const t=(raw)=>a.extractFramed(raw,N);
+const out=[];
+out.push(t(S+"\nreal\n"+E).output==="real"?"normalOk":"NORMALBROKE");
+out.push(t(S+"\nreal\n"+E+"\necho "+S).output==="real"?"echoAfterEndRecovered":"ECHOLOST");
+out.push(t("__ath_pre() { case \"$1\" in "+S+") ;; esac }\n"+S+"\nreal\n"+E).output==="real"?"helperBlobRecovered":"BLOBLOST");
+out.push(t("__ath_pre() { case \"$1\" in "+S+") ;; esac }\n"+E).framed===false?"blobOnlyFlagged":"BLOBONLYSILENT");
+out.push(t(E+"\nreal\n"+S).framed===false?"endBeforeStartFlagged":"ORDERSILENT");
+const silent=t(S+"\n"+E);
+out.push(silent.framed===true&&silent.output===""?"silentStillUnflagged":"SILENTFLAGGED");
+process.stdout.write(out.join(" "));
+' 2>/dev/null)"
+chk "a normal frame still extracts"          "yes" "$(printf '%s' "$FRAMED" | grep -q normalOk               && echo yes || echo no)"
+chk "a marker echoed after the end recovers" "yes" "$(printf '%s' "$FRAMED" | grep -q echoAfterEndRecovered  && echo yes || echo no)"
+chk "a marker in helper source recovers"     "yes" "$(printf '%s' "$FRAMED" | grep -q helperBlobRecovered    && echo yes || echo no)"
+chk "helper source ALONE is not a frame"     "yes" "$(printf '%s' "$FRAMED" | grep -q blobOnlyFlagged        && echo yes || echo no)"
+chk "end before start is not a frame"        "yes" "$(printf '%s' "$FRAMED" | grep -q endBeforeStartFlagged  && echo yes || echo no)"
+chk "a silent command is still NOT flagged"  "yes" "$(printf '%s' "$FRAMED" | grep -q silentStillUnflagged   && echo yes || echo no)"
+
 # ---- run must not flood the caller it is answering ---------------------------
 #
 # The context guard reached `poll` and `read` and never reached `run` — the

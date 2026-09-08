@@ -5,6 +5,7 @@ import { AthError, SessionBusy, SessionGone } from './errors';
 import { withSessionLock } from './lock';
 import {
   HELPER_ONELINE,
+  LOG_MAX_BYTES,
   RC_DIR,
   agentTagLine,
   ensureLayout,
@@ -576,9 +577,27 @@ async function readLogCapped(
   // gone — reading a flat promise where the tool could only honestly offer a
   // snapshot. Stronger wording was the right fix for a wrong offset and the
   // wrong fix for a perishable one.
-  const note =
-    `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
-    `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
+  // When the log is near the trim point, the ADVICE changes, not just a hedge.
+  //
+  // "on disk as of this call, read them with since=N. A later trim can still
+  // discard them" is accurate, and a reviewer following it still lost the
+  // bytes: their 41 MB job pushed the log past 32 MiB, and the offset they had
+  // been handed came back as `lost_bytes: 32717998`. They put it precisely —
+  // that hedge "is carrying enormous weight in a sentence whose main claim is
+  // 'read them with since=…'". A caveat attached to an instruction does not
+  // stop a reader following the instruction.
+  //
+  // So when a trim is actually close, lead with that and point at the durable
+  // route instead of offering an offset that is about to expire.
+  const trimIsClose = size > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
+  const note = trimIsClose
+    ? `[ath: ${bytes} bytes omitted here. This session's log is ${Math.floor(size / 1048576)} MiB ` +
+      `and is trimmed past ${Math.floor(LOG_MAX_BYTES / 1048576)} MiB, so these bytes are likely ` +
+      `to be DESTROYED before you can read them — since=${logicalResume} will probably return ` +
+      `lost_bytes, not output. Redirect this job's output to a file on the host instead; the ` +
+      `transcript is not durable storage for it.]`
+    : `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
+      `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
   return {
     raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
     omitted: { bytes, resumeFrom: logicalResume },
@@ -775,16 +794,78 @@ function dropEchoedCommand(lines: string[], command?: string): string[] {
   return first.endsWith(wanted) ? lines.slice(1) : lines;
 }
 
-export function extractBetweenMarkers(raw: string, nonce: string, command?: string): string {
+/**
+ * A line that CONTAINS the start marker without being one.
+ *
+ * The helper's own source matches on the marker text — `case "$1" in <ATHS:…>)`
+ * — so when the hub re-injects the helper mid-session, its source lands in the
+ * log carrying a perfect copy of the marker it is written to recognise. A
+ * reviewer watched exactly that happen: the helper reinstalled itself garbled
+ * across the pane, and the capture came back empty beside `exit_code: 0`.
+ *
+ * Shell syntax is the tell. A marker the shell PRINTED is the marker; a marker
+ * inside `case`/`() {`/`;;` is source code quoting it.
+ */
+function isMarkerInSource(line: string): boolean {
+  return /\(\)\s*\{|case\s|;;/.test(line);
+}
+
+export interface FramedCapture {
+  /**
+   * A start marker AND an end marker after it were both found.
+   *
+   * False means "I could not find what it printed", which must never be
+   * returned as the same empty string that means "it printed nothing".
+   */
+  framed: boolean;
+  output: string;
+}
+
+/**
+ * Extract one command's output, and say whether it was actually framed.
+ *
+ * The two questions — what did it print, and did I find the frame at all —
+ * are answered HERE, from one pass over one string. They used to be answered in
+ * two places from two different strings: this function scanned
+ * `collapseOverwrites(raw)` line by line, while the caller's incompleteness
+ * check tested `raw.includes(marker)` directly. Anything that made those two
+ * disagree produced a confident empty result, and three inputs do: a start
+ * marker echoed after the end, a start marker sitting inside re-injected helper
+ * source, and an end marker preceding the start. All three returned '' while
+ * the caller's check said the frame was fine.
+ *
+ * That is the same defect twice. The first fix added a second opinion; the real
+ * problem was having two.
+ */
+export function extractFramed(raw: string, nonce: string, command?: string): FramedCapture {
   const lines = toLines(collapseOverwrites(raw));
   const start = startMarker(nonce);
   const end = endMarker(nonce);
 
-  let startIndex = -1;
+  // The END marker first, because it BOUNDS the frame. Anything after it
+  // belongs to no command of ours, and a start marker found out there is an
+  // echo — taking it left nothing in between and returned empty.
+  let endIndex = -1;
   for (let i = 0; i < lines.length; i++) {
-    if ((lines[i] ?? '').includes(start)) startIndex = i;
+    if ((lines[i] ?? '').includes(end)) {
+      endIndex = i;
+      break;
+    }
   }
-  if (startIndex === -1) return '';
+
+  // Then the last start marker BEFORE it. Last, not first, because the wrapper
+  // line we type is echoed back and carries the marker too; before the end,
+  // because of the echo case above.
+  let startIndex = -1;
+  const limit = endIndex === -1 ? lines.length : endIndex + 1;
+  for (let i = 0; i < limit; i++) {
+    const line = lines[i] ?? '';
+    if (!line.includes(start) || isMarkerInSource(line)) continue;
+    startIndex = i;
+  }
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+    return { framed: false, output: '' };
+  }
 
   const out: string[] = [];
   for (let i = startIndex + 1; i < lines.length; i++) {
@@ -801,7 +882,22 @@ export function extractBetweenMarkers(raw: string, nonce: string, command?: stri
     if (ZSH_PARTIAL_LINE_RE.test(line)) continue;
     out.push(line);
   }
-  return stripZshPartialMarker(trimBlankEdges(dropEchoedCommand(out, command))).join('\n');
+  return {
+    framed: true,
+    output: stripZshPartialMarker(trimBlankEdges(dropEchoedCommand(out, command))).join('\n'),
+  };
+}
+
+/**
+ * The output alone, for callers that have already established the frame.
+ *
+ * Kept so the many call sites that only want text do not each have to unpack a
+ * result — but `run` must NOT use this: dropping the `framed` flag here is
+ * precisely how an unframed capture became an empty string with a clean exit
+ * code beside it.
+ */
+export function extractBetweenMarkers(raw: string, nonce: string, command?: string): string {
+  return extractFramed(raw, nonce, command).output;
 }
 
 /**
@@ -1388,19 +1484,34 @@ async function runLocked(
   // moment later showed sixteen. The completion signal comes from a scan of the
   // log TAIL, so it can see the end marker while a read from this command's
   // start offset has not caught up.
+  // Ask the EXTRACTOR whether it is framed, rather than forming a second
+  // opinion here.
+  //
+  // This loop used to test `raw.includes(startMarker) && raw.includes(endMarker)`
+  // — the same question the extractor answers, asked of a different string by a
+  // different rule. Three inputs make them disagree, and every one of them
+  // yields an empty capture the check calls fine: a start marker echoed after
+  // the end, a start marker inside re-injected helper source (the helper's own
+  // `case` arm quotes the marker verbatim), and an end marker before the start.
+  //
+  // A reviewer hit the middle one on a live session and got `exit_code: 0` with
+  // no output for three `echo`s. Their words: an agent that accepted it "would
+  // have reported the host has no configured hostname and no IP addresses".
+  // Second occurrence of this failure, first one after it was supposedly fixed
+  // — because the first fix added a second opinion instead of removing one.
   const flushDeadline = Date.now() + MARKER_FLUSH_MS;
-  const bothMarkers = (text: string): boolean =>
-    text.includes(startMarker(nonce)) && text.includes(endMarker(nonce));
   let raw = await readLogFrom(log, offset);
-  while (!bothMarkers(raw) && Date.now() < flushDeadline) {
+  let capture = extractFramed(raw, nonce, command);
+  while (!capture.framed && Date.now() < flushDeadline) {
     await sleep(40);
     raw = await readLogFrom(log, offset);
+    capture = extractFramed(raw, nonce, command);
   }
   // Still not framed after the wait: whatever we return is a guess, and an
   // empty guess is the dangerous one. SAY the capture is incomplete rather
   // than presenting it as the command's output — "printed nothing" and "I
   // could not find what it printed" must not look the same.
-  const captureIncomplete = !bothMarkers(raw);
+  const captureIncomplete = !capture.framed;
 
   const exitCode = completion.exitCode;
   await recordLast(clean, command, exitCode);
@@ -1454,7 +1565,7 @@ async function runLocked(
     ({ state, pane: paneTail } = await classifyNow());
   }
 
-  const fullOutput = extractBetweenMarkers(raw, nonce, command);
+  const fullOutput = capture.output;
   // The wall reads the FULL output, before any cap.
   //
   // It scans for a credential prompt, which arrives at the END of what has been

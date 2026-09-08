@@ -74,6 +74,8 @@ export {
   endMarker,
   envAssignments,
   extractBetweenMarkers,
+  extractFramed,
+  type FramedCapture,
   lastCommandEvidence,
   latestHandle,
   notePrompts,
