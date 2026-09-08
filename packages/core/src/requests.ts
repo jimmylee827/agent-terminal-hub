@@ -209,6 +209,32 @@ export async function clearAllRequests(): Promise<number> {
   return removed;
 }
 
+/**
+ * Remove every request record belonging to one session, answered or not.
+ *
+ * `purge` exists for the moment a secret lands in a transcript, and it emptied
+ * the transcript while leaving this directory untouched — where `reason` quotes
+ * the command verbatim. Two independent reviewers called that out in the same
+ * words: purging the log and keeping the quoted command is "the opposite of
+ * what purge implies". They were right. The name is a promise about traces of a
+ * session, not about one file.
+ *
+ * Scoped to the session on purpose. `clearAllRequests` is the human-only escape
+ * hatch and stays that way; purging one session must not silently discard
+ * another session's open handoff, which someone may be walking over to answer.
+ *
+ * Returns the count, because the number `purge` prints is a claim about what is
+ * gone and has been wrong before.
+ */
+export async function purgeSessionRequests(name: string): Promise<number> {
+  let removed = 0;
+  for (const request of await listAllRequests()) {
+    if (request.session !== name) continue;
+    if (await deleteRequest(request.id)) removed++;
+  }
+  return removed;
+}
+
 /** Every request, resolved ones included. `listRequests` returns only open. */
 export async function listAllRequests(): Promise<HumanRequest[]> {
   return listRequests({ includeResolved: true });
