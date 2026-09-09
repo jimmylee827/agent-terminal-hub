@@ -2,6 +2,7 @@
 import { promises as fsp } from 'node:fs';
 
 import {
+  augmentRequestReason,
   assertRemoteConnected,
   attachedClientsNote,
   AthError,
@@ -299,8 +300,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // read `--json`, which dumps every field: they checked that the data was
       // produced, never that anyone could see it.
       if (result.warning) payload.warning = result.warning;
-      if (result.exitCaveat) payload.exit_code_covers = result.exitCaveat;
-      if (result.exitCaveatNote) payload.exit_code_caveat = result.exitCaveatNote;
+      if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
+      if (result.exitCodeCaveat) payload.exit_code_caveat = result.exitCodeCaveat;
 
       if (result.needsHuman) {
         // `needsHuman` covers two different situations, and this said the same
@@ -460,6 +461,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         next_offset: result.nextOffset,
         state: result.state,
       };
+      // The same caveat `run` carries, withheld here until now — which is the
+      // worse way round. `poll` is what you call after being AWAY, so an
+      // unqualified exit code is least likely to be questioned exactly here. A
+      // reviewer polled a job ending in `; date`, got `exit_code: 0` with no
+      // caveat, and noted that an agent which had learned "the hub flags this
+      // for me" would be walked into the trap by the flag's absence.
+      if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
       // Output that is GONE, said out loud.
       //
       // A session log is rewritten to its last 8 MB once it passes 32 MB,
@@ -602,10 +610,20 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         (r) => r.session === session && r.handle === handle && handle !== undefined,
       );
       if (existing) {
+        // Keep the caller's reason instead of dropping it on the floor.
+        //
+        // A parked command files its own request first, so an agent explaining
+        // WHY it needs the password arrives second and used to be answered
+        // with `already_open: true` and silence. The human was then asked for
+        // a credential with no statement of what it was for.
+        const merged = await augmentRequestReason(existing.id, reason).catch(() => undefined);
         return json({
           requested: true,
           id: existing.id,
           already_open: true,
+          ...(merged && merged.reason !== existing.reason
+            ? { reason_added: true, reason: merged.reason }
+            : {}),
           note:
             'A request for this command was already open, so nothing new was filed. The human ' +
             'has been notified. Tell them what is needed and stop.',

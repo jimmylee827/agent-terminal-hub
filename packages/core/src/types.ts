@@ -90,9 +90,23 @@ export interface RunResult {
   /** A problem with the command itself that the hub can see but cannot fix. */
   warning?: string;
   /** Terse marker: `exitCode` covers only part of a compound command. */
-  exitCaveat?: string;
+  exitCodeCovers?: string;
   /** The full explanation, shown once per session so it cannot become noise. */
-  exitCaveatNote?: string;
+  /**
+   * Named so the GENERIC camelCase->snake_case serializer produces exactly the
+   * name the MCP surface publishes.
+   *
+   * It was `exitCaveatNote`, hand-mapped to `exit_code_caveat` on MCP only, so
+   * the CLI printed `exit_caveat_note` for the long note while MCP printed
+   * `exit_code_caveat` — and the CLI's SHORT field was `exit_caveat`, one
+   * underscore from MCP's name for the long one. Two surfaces, two spellings,
+   * and the two spellings crossed over. This file's own claim that "both
+   * surfaces use the same field names" was false for exactly this pair.
+   *
+   * Deleting the special case is the fix; adding a second one is what created
+   * it.
+   */
+  exitCodeCaveat?: string;
   /** null when the command did not finish (timed out or is awaiting input). */
   exitCode: number | null;
   /** Combined stdout+stderr for this command only, ANSI-stripped. */
@@ -297,6 +311,19 @@ export interface PollResult {
   /** True when a poll actually saw the command running, which raises the floor. */
   elapsedObserved?: boolean;
   /** A problem with how this poll was called that the hub can see but not fix. */
+  /**
+   * What the reported `exitCode` actually covers, same as `run` reports.
+   *
+   * Wired to `run` and not to here, which is the worse way round: `poll` is
+   * what you call after being AWAY, so an unqualified exit code is least
+   * likely to be questioned exactly here. A reviewer polled a job ending in
+   * `; date`, got `exit_code: 0` with no caveat, and noted that an agent which
+   * had learned "the hub flags this for me" would be walked into the trap by
+   * the flag's absence. They caught it by reconciling line counts instead.
+   *
+   * Exactly the omission the `warning` field documents, one field over.
+   */
+  exitCodeCovers?: string;
   warning?: string;
 }
 

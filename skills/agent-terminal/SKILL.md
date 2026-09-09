@@ -127,7 +127,10 @@ so an ordinary follow loop just carries on regardless.
 
 **But the transcript is not durable storage, and above 32 MiB it really does
 lose data.** The session log is rewritten to its last 8 MiB once it passes
-32 MiB. Anything older is gone for good — no offset brings it back. This
+32 MiB — but the check runs when a command STARTS, not continuously, so a job
+that is still running can take the log well past 32 MiB and the trim only lands
+on your next command. Do not read "it is over 32 MiB and still readable" as "the
+trim will not happen"; it has not happened *yet*. Anything older is gone for good — no offset brings it back. This
 paragraph used to say "nothing is lost" without that qualification, and an
 agent following a 46 MB job believed it: it polled at the offset the hub had
 given it, and ~38 MB of its results no longer existed.

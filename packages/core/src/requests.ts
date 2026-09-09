@@ -93,6 +93,43 @@ export async function requestHuman(
   return request;
 }
 
+/**
+ * Add an explanation to a request that already exists.
+ *
+ * A parked command files its own request automatically, with text that says
+ * what to DO — "X is waiting at a prompt, attach and answer it". An agent then
+ * calling `request_human` to explain WHY got `already_open: true` and had its
+ * reason thrown away. The human was left being asked for a password with no
+ * statement of what it was for, and `already_open` reads as harmless
+ * de-duplication rather than "the more informative of your two messages lost".
+ *
+ * Both halves are kept, auto-text first, because the actionable instruction is
+ * what the human needs at a glance and the reason is what they need to decide.
+ * Appending rather than replacing also means an agent cannot overwrite the
+ * attach instruction with something less useful.
+ *
+ * Idempotent: re-sending the same explanation does not stack it up.
+ */
+export async function augmentRequestReason(
+  id: string,
+  extra: string,
+): Promise<HumanRequest | undefined> {
+  const trimmed = extra.trim();
+  if (!trimmed) return undefined;
+  const file = path.join(REQUEST_DIR, `${id}.json`);
+  let request: HumanRequest;
+  try {
+    request = JSON.parse(await fs.readFile(file, 'utf8')) as HumanRequest;
+  } catch {
+    return undefined;
+  }
+  if (request.reason.includes(trimmed)) return request;
+  const merged = `${request.reason} — ${trimmed}`.slice(0, 500);
+  const updated = { ...request, reason: merged };
+  await writeRequestFile(file, updated);
+  return updated;
+}
+
 export async function listRequests(
   opts: { includeResolved?: boolean } = {},
 ): Promise<HumanRequest[]> {

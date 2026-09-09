@@ -1468,6 +1468,20 @@ async function runLocked(
       await requestHuman(clean, parkedAsk, 'agent', nonce, true).catch(() => undefined);
     }
 
+    // Width is observed HERE too, not only on the completed path.
+    //
+    // This return fires when a command parks on a prompt or hits its timeout —
+    // and parking is precisely what brings a human to the keyboard, where
+    // attaching resizes the pane. Reporting the resize only on the next
+    // command that runs to completion delays it past the point it matters. A
+    // reviewer finished an audit and found their pane had gone 200 -> 156 with
+    // no result having said so; they were using `run`, and the notice was
+    // wired to the paths they were not on.
+    const parkWidth = await observeWidth(
+      clean,
+      (await get(clean).catch(() => undefined))?.paneWidth,
+      true,
+    ).catch(() => undefined);
     return {
       session: clean,
       command,
@@ -1476,6 +1490,7 @@ async function runLocked(
       timedOut: completion.kind === 'timeout',
       needsInput: state === 'needs-input',
       state,
+      ...(parkWidth ? { paneWidthChanged: parkWidth } : {}),
       logOffset: discarded + offset,
       handle: nonce,
       ...(parkedAsk ? { needsHuman: parkedAsk } : {}),
@@ -1651,10 +1666,10 @@ async function runLocked(
     // inspection having failed.
     (hasPipeline(command) || exitCode === 0)
       ? {
-          exitCaveat: compoundExitCaveat(command),
+          exitCodeCovers: compoundExitCaveat(command),
           ...((await firstCaveatFor(clean))
             ? {
-                exitCaveatNote:
+                exitCodeCaveat:
                   'The exit code above is the status of only the last part of this line — an ' +
                   'earlier failure can be hidden by a later success, and a pipeline reports its ' +
                   'last stage. Read the output rather than trusting the number. ' +
@@ -2528,6 +2543,11 @@ export async function poll(
       ? {}
       : { elapsedLowerSeconds: timing.lowerSeconds, elapsedUpperSeconds: timing.upperSeconds }),
     ...(timing === undefined ? {} : { elapsedObserved: timing.observed }),
+    // Only once the code EXISTS: a caveat about an exit code nobody has yet is
+    // noise, and `done: false` results carry no code to qualify.
+    ...(done && session.lastCommand && compoundExitCaveat(session.lastCommand)
+      ? { exitCodeCovers: compoundExitCaveat(session.lastCommand) }
+      : {}),
     ...(staleSince
       ? {
           warning:

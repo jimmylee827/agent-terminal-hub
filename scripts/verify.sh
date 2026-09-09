@@ -803,6 +803,69 @@ chk "skill no longer says purge covers the transcript only" "yes" \
 chk "skill says purge covers request records" "yes" \
     "$(grep -q 'request records' "$SK" && echo yes || echo no)"
 
+# ---- the exit-code caveat must reach poll, not only run ----------------------
+#
+# `exitCodeCovers` was computed in `run` and nowhere else, so a job driven by
+# start/poll reported a bare exit code for a compound line. That is the worse
+# way round: poll is what you call after being AWAY, so an unqualified code is
+# least likely to be questioned exactly there. A reviewer polled a job ending in
+# `; date`, got exit_code 0 with no caveat, and caught it only by reconciling
+# line counts. Same omission the `warning` field on that type already documents.
+#
+# The names were ALSO divergent. The core fields were exitCaveat/exitCaveatNote:
+# the CLI serialized them generically to exit_caveat / exit_caveat_note, while
+# MCP hand-mapped them to exit_code_covers / exit_code_caveat. So the CLI's name
+# for the SHORT value was one underscore away from MCP's name for the LONG one,
+# and the two spellings crossed over — under a doc promising both surfaces use
+# the same names. Fixed by renaming the core fields so the generic serializer
+# produces the published names, deleting the hand-mapping rather than adding a
+# second one. The CLI's JSON key for this is now exit_code_covers.
+CAV="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+(async()=>{
+  await a.create({name:"cv",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("cv").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const r=await a.run("cv","true; false; date",{timeoutMs:20000});
+  out.push(r.exitCodeCovers==="last-command-only"?"runCaveat":"NORUNCAVEAT");
+  const plain=await a.run("cv","echo plain",{timeoutMs:20000});
+  out.push(plain.exitCodeCovers===undefined?"plainUnflagged":"FALSECAVEAT");
+  const st=await a.start("cv","sleep 1; false; date");
+  await new Promise(r=>setTimeout(r,3500));
+  const p=await a.poll("cv",st.handle,0);
+  out.push(p.done?"pollDone":"NOTDONE");
+  out.push(p.exitCodeCovers==="last-command-only"?"pollCaveat":"NOPOLLCAVEAT");
+  await a.kill("cv").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "run reports the exit-code caveat"        "yes" "$(printf '%s' "$CAV" | grep -q runCaveat      && echo yes || echo no)"
+chk "a simple command is NOT flagged"         "yes" "$(printf '%s' "$CAV" | grep -q plainUnflagged && echo yes || echo no)"
+chk "poll reports the SAME caveat as run"     "yes" "$(printf '%s' "$CAV" | grep -q pollCaveat     && echo yes || echo no)"
+chk "no hand-mapped caveat name remains"      "0" \
+    "$(grep -c 'exitCaveat' "$RP/packages/mcp/src/index.ts" "$RP/packages/core/src/run.ts" | awk -F: '{t+=$2} END{print t+0}')"
+
+# The parked/timeout return is where a human is about to attach and resize.
+chk "the parked return observes pane width" "yes" \
+    "$(grep -q 'const parkWidth = await observeWidth' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# An agent's explanation must survive meeting an auto-filed request.
+chk "an already-open request absorbs the reason" "merged" \
+    "$(node -e '
+const c=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  const r=await c.requestHuman("cvx","\"sudo -v\" is waiting at a prompt.","agent","hcv",true);
+  const m=await c.augmentRequestReason(r.id,"needed for read-only pf inspection");
+  const ok=m&&m.reason.includes("waiting at a prompt")&&m.reason.includes("read-only pf inspection");
+  const again=await c.augmentRequestReason(r.id,"needed for read-only pf inspection");
+  process.stdout.write(ok&&again.reason===m.reason?"merged":"LOST");
+  await c.clearAllRequests();
+})();' 2>/dev/null)"
+
+# The trim is lazy; the doc read as automatic and a reviewer concluded wrongly.
+chk "skill says the trim check runs at command start" "yes" \
+    "$(grep -q 'the check runs when a command STARTS' "$SK" && echo yes || echo no)"
+
 # ---- one answer to "is this framed", not two -------------------------------
 #
 # The incompleteness check used to test `raw.includes(marker)` while the
@@ -2823,7 +2886,7 @@ cav() {
   n="xc$RANDOM"
   $ATH new "$n" >/dev/null 2>&1
   for _ in 1 2 3 4 5 6 7 8; do $ATH ls 2>/dev/null | grep -q "^$n " && break; sleep 1; done
-  r=$($ATH run "$n" --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_caveat?"flagged":"silent")}catch(e){console.log("x")}})')
+  r=$($ATH run "$n" --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_code_covers?"flagged":"silent")}catch(e){console.log("x")}})')
   $ATH kill "$n" --force >/dev/null 2>&1
   printf '%s' "$r"
 }
@@ -2985,8 +3048,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do $ATH ls 2>/dev/null | grep -q '^cv ' && break;
 # directions one round apart — "I stopped reading it" and "it fired once then
 # went quiet while the hazard remained" — and both were right about a different
 # failure. Neither always nor once is correct for the same text.
-cvm() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_caveat?"marked":"none")}catch(e){console.log("x")}})'; }
-cvn() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_caveat_note?"explained":"quiet")}catch(e){console.log("x")}})'; }
+cvm() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_code_covers?"marked":"none")}catch(e){console.log("x")}})'; }
+cvn() { $ATH run cv --json -- "$1" 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{console.log(JSON.parse(d).exit_code_caveat?"explained":"quiet")}catch(e){console.log("x")}})'; }
 check "the first compound command is explained" "explained" "$(cvn 'true; echo a')"
 check "the second is not explained again" "quiet" "$(cvn 'true; echo b')"
 check "but it is still marked" "marked" "$(cvm 'true; echo c')"
