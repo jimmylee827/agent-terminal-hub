@@ -1278,7 +1278,11 @@ async function runLocked(
   }
 
   // Safe here and nowhere else: we hold the lock, so no offset is in flight.
-  await rotateIfNeeded(clean).catch(() => undefined);
+  const trim = await rotateIfNeeded(clean).catch(() => undefined);
+  const trimmedBytes =
+    trim?.rotated && trim.from !== undefined && trim.to !== undefined
+      ? trim.from - trim.to
+      : undefined;
 
   const log = logPath(clean);
   let nonce = randomNonce();
@@ -1704,6 +1708,7 @@ async function runLocked(
     state,
     ...(widthChange ? { paneWidthChanged: widthChange } : {}),
     logOffset: discarded + offset,
+    ...(trimmedBytes ? { logTrimmedBytes: trimmedBytes } : {}),
     // Every command HAS a handle; only some results used to carry one.
     //
     // It was returned on the timeout and needs-input paths and withheld on
@@ -2115,7 +2120,11 @@ export async function start(name: string, command: string): Promise<StartResult>
     // you could type".
     await assertNotCredentialPrompt(clean);
 
-    await rotateIfNeeded(clean).catch(() => undefined);
+    const startTrim = await rotateIfNeeded(clean).catch(() => undefined);
+    const startTrimmedBytes =
+      startTrim?.rotated && startTrim.from !== undefined && startTrim.to !== undefined
+        ? startTrim.from - startTrim.to
+        : undefined;
 
     const nonce = randomNonce();
     // Logical, so `poll --since <this>` still resolves after a trim — a long
@@ -2191,7 +2200,12 @@ export async function start(name: string, command: string): Promise<StartResult>
       // the command you wrote" everywhere it appears, and folding a delivery
       // failure into it would make one field mean two things. Each surface
       // renders its own guidance for this, in its own idiom.
-      ...(launched ? {} : { launched: false }),
+      // Always present, not only on failure. Absence was the documented
+      // positive signal being missing: two reviewers had to infer success from
+      // a later poll because there was nothing to read. "No news is good news"
+      // is not a signal, it is the lack of one.
+      launched,
+      ...(startTrimmedBytes ? { logTrimmedBytes: startTrimmedBytes } : {}),
       ...(startWarning ? { warning: startWarning } : {}),
     };
   });
@@ -2789,7 +2803,26 @@ function walksRecursively(command: string): boolean {
 }
 
 /** Paths where an unprivileged walk WILL hit unreadable areas. */
-const SYSTEM_PATH_RE = /(^|\s)\/(?:$|\s)|(^|\s)\/(var|etc|root|home|usr|opt|srv|proc|sys)\b/;
+/**
+ * Paths whose walk is worth warning about when stderr is thrown away.
+ *
+ * The list was Linux-only — var, etc, root, home, usr, opt, srv, proc, sys —
+ * on a tool whose main development and test target is macOS. So the warning
+ * fired on `du /usr/share` and stayed SILENT on `/System/Library`, which is
+ * both the most macOS-specific system path there is and the one richest in
+ * permission-denied files.
+ *
+ * A reviewer hit exactly that: warned about a `du … 2>/dev/null`, unwarned on
+ * a checksum walk of /System/Library that hid 17 unreadable files, and
+ * concluded "the detector fires on du-shaped commands, not on the pattern it
+ * describes". The shape was never the problem; the path list was.
+ *
+ * `dev` is deliberately NOT here. `2>/dev/null` is the very idiom being
+ * detected, so matching it would make every discarding command self-triggering
+ * and turn the warning into noise.
+ */
+const SYSTEM_PATH_RE =
+  /(^|\s)\/(?:$|\s)|(^|\s)\/(var|etc|root|home|usr|opt|srv|proc|sys|System|Library|Applications|Users|Volumes|private|bin|sbin)\b/;
 
 const STDERR_DISCARDED_RE =
   /(^|[\s;|&(])(2\s*>>?\s*\/dev\/null|2\s*>\s*&\s*-|&>>?\s*\/dev\/null|>&\s*\/dev\/null)(\s|$|[;|&)])/;

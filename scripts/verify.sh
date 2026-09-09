@@ -659,7 +659,14 @@ const out=[];
   for(let i=0;i<12;i++){const s=await a.get("lp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   // A healthy shell must NOT be flagged, or the signal is worthless.
   const good=await a.start("lp","sleep 1");
-  out.push(good.launched===undefined?"healthyNotFlagged":"FALSEALARM");
+  // Was `launched===undefined`, asserting the ABSENCE of the field. That is the
+  // contract that changed: success is now stated as `launched: true` rather
+  // than left to be inferred from silence, because two reviewers in a row had
+  // to confirm a start by polling afterwards, with no documented positive
+  // signal available to read. The invariant that matters is unchanged: a
+  // healthy start must never look like a failed one.
+  out.push(good.launched!==false?"healthyNotFlagged":"FALSEALARM");
+  out.push(good.launched===true?"healthyStatesSuccess":"NOPOSITIVESIGNAL");
   await new Promise(r=>setTimeout(r,2500));
   // Now a shell with neither hooks nor wrapper.
   await a.sendLine("lp","exec env -i PATH=/usr/bin:/bin bash --norc --noprofile");
@@ -672,6 +679,7 @@ const out=[];
 })();
 ' 2>/dev/null)"
 chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyNotFlagged && echo yes || echo no)"
+chk "and states success positively"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyStatesSuccess && echo yes || echo no)"
 chk "a start that did NOT start is"      "yes" "$(printf '%s' "$LAUNCH" | grep -q unlaunchedFlagged && echo yes || echo no)"
 chk "and the handle is still returned"   "yes" "$(printf '%s' "$LAUNCH" | grep -q handleStillGiven  && echo yes || echo no)"
 
@@ -802,6 +810,67 @@ chk "skill no longer says purge covers the transcript only" "yes" \
     "$(grep -q 'purge clears the transcript \*\*only\*\*' "$SK" && echo no || echo yes)"
 chk "skill says purge covers request records" "yes" \
     "$(grep -q 'request records' "$SK" && echo yes || echo no)"
+
+# ---- the stderr warning must know macOS paths, not only Linux ones -----------
+#
+# SYSTEM_PATH_RE listed var|etc|root|home|usr|opt|srv|proc|sys and nothing else,
+# on a tool whose main test target is a Mac. So `du /usr/share 2>/dev/null` was
+# warned and a checksum walk of /System/Library was SILENT — and that silent one
+# hid 17 unreadable files from a reviewer's inventory. They concluded "the
+# detector fires on du-shaped commands, not on the pattern it describes"; the
+# shape was never the problem, the path list was.
+#
+# `dev` must stay out of that list: 2>/dev/null is the idiom being detected, so
+# matching it would make every discarding command self-triggering.
+SPW="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const out=[];
+(async()=>{
+  await a.create({name:"sp",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("sp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const w=async(c)=>(await a.run("sp",c,{timeoutMs:60000})).warning!==undefined;
+  // A SMALL macOS path: the warning is computed from the command TEXT, so this
+  // needs no real walk. The first version pointed at all of /System/Library and
+  // pushed the suite past its timeout on a real Mac.
+  out.push(await w("find /System/Library/Fonts -type f 2>/dev/null | head -1")?"macWarned":"MACSILENT");
+  out.push(await w("du -sh /usr/share/zoneinfo 2>/dev/null")?"linuxWarned":"LINUXSILENT");
+  out.push(await w("echo hi 2>/dev/null")?"FALSEPOSITIVE":"plainQuiet");
+  out.push(await w("du -sh /System/Library/Fonts 2>e.txt")?"FALSEPOSITIVE2":"toFileQuiet");
+  await a.kill("sp").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a macOS system path walk is warned"   "yes" "$(printf '%s' "$SPW" | grep -q macWarned    && echo yes || echo no)"
+chk "a linux system path walk still is"    "yes" "$(printf '%s' "$SPW" | grep -q linuxWarned  && echo yes || echo no)"
+chk "an ordinary 2>/dev/null is not"       "yes" "$(printf '%s' "$SPW" | grep -q plainQuiet   && echo yes || echo no)"
+chk "stderr sent to a FILE is not"         "yes" "$(printf '%s' "$SPW" | grep -q toFileQuiet  && echo yes || echo no)"
+chk "/dev is not a system path"            "yes" \
+    "$(grep -q 'sys|System' "$RP/packages/core/src/run.ts" && grep -qE '\|dev\|' "$RP/packages/core/src/run.ts" && echo no || echo yes)"
+
+# ---- a trim must be reported by the command that caused it -------------------
+#
+# `rotateIfNeeded` runs when a command starts and its result was DISCARDED at
+# both call sites, so the transcript was rewritten, tens of megabytes ceased to
+# exist, and the result said nothing. The notice existed only on a later read at
+# a dead offset. Meanwhile the skill file promised "You are told when it happens"
+# — true of the read path only. A reviewer lost 28 MB and learned of it solely
+# because they deliberately probed a stale offset afterwards.
+chk "the trim result is not discarded"     "yes" \
+    "$(grep -q 'const trim = await rotateIfNeeded' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "start captures its trim too"          "yes" \
+    "$(grep -q 'const startTrim = await rotateIfNeeded' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the trim size reaches the result"     "yes" \
+    "$(grep -q 'logTrimmedBytes' "$RP/packages/core/src/types.ts" && echo yes || echo no)"
+chk "MCP names the destroyed bytes"        "yes" \
+    "$(grep -q 'log_trimmed_bytes' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- start must state success, not merely fail to deny it --------------------
+#
+# `launched` was emitted only when FALSE, so success was an absence and the
+# documented positive signal had nothing to read. Two reviewers in a row
+# inferred success from a later poll; one said the field "wasn't there to check".
+chk "start reports launched on SUCCESS" "true" \
+    "$($ATH_BIN start "$C" --json -- 'echo lv' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(String(JSON.parse(d).launched))}catch(e){process.stdout.write("x")}})')"
 
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #

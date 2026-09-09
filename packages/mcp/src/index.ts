@@ -273,6 +273,17 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // introduced by the change that added the cap. A marker in the text
       // saying bytes were dropped, with no field saying how many, forces the
       // agent to parse prose to learn something it was told would be data.
+      // A trim this command triggered destroys transcript for good. Reported
+      // where it happens, because the notice used to exist only on a later read
+      // at a dead offset — an agent that trimmed and moved on never learned.
+      if (result.logTrimmedBytes) {
+        payload.log_trimmed_bytes = result.logTrimmedBytes;
+        payload.log_trimmed_note =
+          `${result.logTrimmedBytes} bytes of this session's transcript were DESTROYED when ` +
+          `this command started: the log passed its ceiling and was rewritten to its tail. ` +
+          `Offsets from before this point return lost_bytes. If you need this job's output, ` +
+          `write it to a file on the host — the transcript is for watching, not collecting.`;
+      }
       if (result.omittedBytes !== undefined) {
         payload.omitted_bytes = result.omittedBytes;
         payload.omitted_resume_from = result.omittedResumeFrom;
@@ -431,10 +442,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // available here and never offered, so the caller had to fail first to
         // learn it. Computed live because a stale name is worse than none.
         parallel_work: await parallelHint(started.session),
+        // Always stated, either way.
+        //
+        // This emitted `launched` only when it was FALSE, so success was an
+        // absence and the documented positive signal had nothing to read. Two
+        // reviewers in a row inferred success from a later poll instead, one
+        // noting the documented field "wasn't there to check". A signal you can
+        // only detect by its absence is not a signal.
+        launched: started.launched !== false,
+        ...(started.logTrimmedBytes ? { log_trimmed_bytes: started.logTrimmedBytes } : {}),
         // A start that could not be confirmed must not read as a start.
         ...(started.launched === false
           ? {
-              launched: false,
               what_to_do:
                 'The command was sent but its frame never opened, so it may not be running. ' +
                 'Read the session (`read` with a small `lines`) to see what actually happened ' +

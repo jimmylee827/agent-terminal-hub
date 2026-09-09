@@ -85,6 +85,20 @@ export interface Session {
 }
 
 export interface RunResult {
+  /**
+   * Bytes destroyed by a log trim that THIS command's start triggered.
+   *
+   * The trim runs when a command starts, and its result was discarded at both
+   * call sites — so the transcript was rewritten, tens of megabytes ceased to
+   * exist, and the result said nothing. The notice only appeared later, if a
+   * caller happened to read at an offset that had died. An agent that trimmed
+   * and moved on never learned. The skill file meanwhile promised "you are told
+   * when it happens", which was true only of the read path.
+   *
+   * Reported on the command that caused it, so "told when it happens" is now
+   * the literal truth rather than a claim about a different code path.
+   */
+  logTrimmedBytes?: number;
   session: string;
   command: string;
   /** A problem with the command itself that the hub can see but cannot fix. */
@@ -206,6 +220,20 @@ export interface RunResult {
 }
 
 export interface StartResult {
+  /**
+   * Bytes destroyed by a log trim that THIS command's start triggered.
+   *
+   * The trim runs when a command starts, and its result was discarded at both
+   * call sites — so the transcript was rewritten, tens of megabytes ceased to
+   * exist, and the result said nothing. The notice only appeared later, if a
+   * caller happened to read at an offset that had died. An agent that trimmed
+   * and moved on never learned. The skill file meanwhile promised "you are told
+   * when it happens", which was true only of the read path.
+   *
+   * Reported on the command that caused it, so "told when it happens" is now
+   * the literal truth rather than a claim about a different code path.
+   */
+  logTrimmedBytes?: number;
   session: string;
   command: string;
   /** Opaque handle for `poll`. Internally the same nonce the blocking path uses. */
