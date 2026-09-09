@@ -803,6 +803,32 @@ chk "skill no longer says purge covers the transcript only" "yes" \
 chk "skill says purge covers request records" "yes" \
     "$(grep -q 'request records' "$SK" && echo yes || echo no)"
 
+# ---- a remote session must not silently read a LOCAL-only path ---------------
+#
+# The hub runs on the driving machine; ssh carries only the connection. So
+# `~/.ath` is not on the remote host, and a read of a missing path returns EMPTY
+# rather than failing — silence that looks like a real answer. A reviewer
+# cross-checked a job's runtime by grepping ~/.ath/log/bulk.log INSIDE a remote
+# session, got nothing back, and said the abstraction "made speaking as jmaxi so
+# seamless that I forgot to ask" which machine they were addressing. One step
+# further out, the same slip probed the wrong NETWORK: "all ports closed" for a
+# host with no firewall at all, caught only by a contradiction they happened to
+# notice.
+#
+# Narrow on purpose. Warnings in this family are skimmed the moment they cry
+# wolf, so this fires only on the hub's own paths, and only when the session is
+# remote.
+chk "the local-path warning exists"        "yes" \
+    "$(grep -q 'function localPathBlindSpot' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "it is wired into run"                 "yes" \
+    "$(grep -q 'localPathBlindSpot(command, session.remote)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "it is wired into run AND start"       "3" \
+    "$(grep -c 'localPathBlindSpot(command, session.remote)' "$RP/packages/core/src/run.ts")"
+chk "skill states the hub runs locally"    "yes" \
+    "$(grep -q 'The hub runs HERE, not on the remote host' "$SK" && echo yes || echo no)"
+chk "skill warns a missing path reads empty" "yes" \
+    "$(grep -q 'empty rather than an error' "$SK" && echo yes || echo no)"
+
 # ---- the exit-code caveat must reach poll, not only run ----------------------
 #
 # `exitCodeCovers` was computed in `run` and nowhere else, so a job driven by

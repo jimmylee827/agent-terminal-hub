@@ -200,6 +200,20 @@ but output written in between was formatted to a different width. It is the one
 case a width check cannot catch by sampling, and the reason the full sequence
 is reported at all.
 
+**The hub runs HERE, not on the remote host.** A `--remote` session feels like
+being on that machine, and that is the point — but only your *commands* go
+there. tmux, the transcript, `~/.ath` and everything `doctor --artifacts` lists
+live on the machine driving the session. So a command inside a remote session
+that reads `~/.ath/log/<name>.log` is reading a path that does not exist, and a
+missing path usually returns **empty rather than an error** — silence that looks
+like a real answer. To inspect hub state, use your ordinary shell, not the
+session. An agent lost this thread and cross-checked a job's runtime against a
+log that was never there; the same slip one step further out probes the wrong
+NETWORK — it tested reachability against a LAN it was not on, got "all ports
+closed" for a host with no firewall at all, and nearly reported the exact
+opposite of the truth. When a question is about a host, ask which host you are
+speaking *as*.
+
 **A dropped ssh link ends the command.** For a `--remote` session, losing the
 connection does not kill the pane — it falls back to the LOCAL shell — so the
 command is gone but nothing looks dead. `poll` reports `remote_disconnected`

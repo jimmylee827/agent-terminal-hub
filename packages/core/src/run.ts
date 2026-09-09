@@ -1631,11 +1631,14 @@ async function runLocked(
     // The traversal warning gets no such reprieve: `du` exits 0 while
     // under-reporting, which is the entire hazard.
     ...(!needsHuman &&
-    ((exitCode !== 0 ? credentialBlindSpot(command) : undefined) ?? traversalBlindSpot(command))
+    ((exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
+      traversalBlindSpot(command) ??
+      localPathBlindSpot(command, session.remote))
       ? {
           warning:
             (exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
-            traversalBlindSpot(command),
+            traversalBlindSpot(command) ??
+            localPathBlindSpot(command, session.remote),
         }
       : {}),
     // Marked only when the number can actually MISLEAD, explained once.
@@ -2154,7 +2157,10 @@ export async function start(name: string, command: string): Promise<StartResult>
     // so the one command shape most likely to be backgrounded — a long
     // filesystem walk with stderr thrown away — was also the one nothing
     // checked.
-    const startWarning = credentialBlindSpot(command) ?? traversalBlindSpot(command);
+    const startWarning =
+      credentialBlindSpot(command) ??
+      traversalBlindSpot(command) ??
+      localPathBlindSpot(command, session.remote);
 
     // Confirm the frame actually opened, because `start` could not fail.
     //
@@ -2834,6 +2840,43 @@ function credentialBlindSpot(command: string): string | undefined {
  * errors, and the exit code was 0. A 50 GB understatement that looked entirely
  * plausible, caught only by cross-checking df.
  */
+/**
+ * A remote session reaching for a path that only exists on the LOCAL machine.
+ *
+ * The hub runs here; ssh carries only the connection. So `~/.ath` — the
+ * transcript, the rc files, everything `doctor` lists — is on the machine
+ * driving the session, not on the host the commands run on. Nothing about the
+ * session says so: it feels like being on the remote box, which is the point,
+ * and that is exactly what makes this misfire.
+ *
+ * A reviewer grepped `~/.ath/log/bulk.log` inside a remote session to
+ * cross-check a job's runtime. It returned EMPTY — no file, no error, because
+ * grep on a missing path via a glob is simply silent. They then did the same
+ * thing one step further out and probed the wrong NETWORK, getting "all ports
+ * closed" for a host with no firewall at all; only a contradiction they
+ * happened to notice stopped them reporting the exact opposite of the truth.
+ * Their words: the abstraction "made speaking as jmaxi so seamless that I
+ * forgot to ask" which machine they were addressing.
+ *
+ * Silence is the failure mode here, so a warning is the whole fix. Matched on
+ * the hub's own paths only — a narrow, high-precision test, because the
+ * warnings in this family get skimmed the moment they cry wolf.
+ */
+const ATH_PATH_RE = /(^|[\s"'`=(])(~|\$HOME)?\/?\.ath\b/;
+
+function localPathBlindSpot(command: string, remote?: string): string | undefined {
+  if (!remote || !ATH_PATH_RE.test(command)) return undefined;
+  return (
+    `This command runs on ${remote} and references ~/.ath, which exists on the machine ` +
+    `driving this session, NOT on ${remote}. The hub runs locally and ssh carries only the ` +
+    `connection, so the transcript, rc files and everything "doctor --artifacts" lists are ` +
+    `here, not there. A read of a missing path returns EMPTY rather than failing, so an ` +
+    `absent result from this is not evidence about ${remote}. Run it without the session ` +
+    `(your ordinary shell) to inspect hub state, and keep track of which host a question is ` +
+    `about — the same slip one step out probes the wrong NETWORK.`
+  );
+}
+
 function traversalBlindSpot(command: string): string | undefined {
   // Both halves must be in the SAME segment of a compound line.
   //
