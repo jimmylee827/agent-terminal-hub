@@ -903,6 +903,32 @@ chk "the guard reads the process, not text" "yes" \
     "$(grep -q 'INTERACTIVE_COMMANDS.has(foreground)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "the guard exempts the session transport" "yes" \
     "$(grep -q "foreground !== transport" "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# The REMOTE half of the guard. The process signal is unavailable there — the
+# foreground is `ssh` for the session's whole life — and remote is exactly where
+# the failure was reported, so the pane is searched a few lines deep instead of
+# tail-anchored. Depth is small on purpose: it must catch a prompt the marker's
+# erase pushed off the end, and must NOT reach back and rediscover one somebody
+# answered minutes ago.
+NEAR="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const o=[];
+o.push(a.looksLikeCredentialPromptNear("u % sudo -v\nPassword:")?"lastLine":"MISSLAST");
+o.push(a.looksLikeCredentialPromptNear("u % sudo -v\nPassword:\n\n \n")?"survivesErase":"MISSERASE");
+o.push(a.looksLikeCredentialPromptNear("Password:\n"+"out\n".repeat(20)+"u % ")?"REACHESBACK":"staysRecent");
+o.push(a.looksLikeCredentialPromptNear("u % echo hi\nhi\nu % ")?"FALSEPOS":"quietWhenClean");
+process.stdout.write(o.join(" "));
+' 2>/dev/null)"
+chk "a prompt on the last line is seen"      "yes" "$(printf '%s' "$NEAR" | grep -q lastLine       && echo yes || echo no)"
+chk "and one the erase pushed up is too"     "yes" "$(printf '%s' "$NEAR" | grep -q survivesErase  && echo yes || echo no)"
+chk "but not one far back in scrollback"     "yes" "$(printf '%s' "$NEAR" | grep -q staysRecent    && echo yes || echo no)"
+chk "and a clean pane stays quiet"           "yes" "$(printf '%s' "$NEAR" | grep -q quietWhenClean && echo yes || echo no)"
+chk "the pane half is gated on the command"  "yes" \
+    "$(grep -q 'asksForCredentials' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and sudo -n is excluded from it"        "yes" \
+    "$(grep -q 'non-interactive' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "printing the word Password does not park" "idle" \
+    "$($ATH_BIN run "$C" --json -- 'echo \"Password: literal\"' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).state)}catch(e){process.stdout.write("x")}})')"
 chk "an ordinary command is NOT parked" "idle" \
     "$($ATH_BIN run "$C" --json -- 'echo notparked' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).state)}catch(e){process.stdout.write("x")}})')"
 chk "and still reports its exit code" "0" \

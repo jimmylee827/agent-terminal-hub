@@ -90,6 +90,29 @@ export function looksLikeCredentialPrompt(paneText: string): boolean {
   return CREDENTIAL_PROMPT_PATTERNS.some((re) => re.test(lastLine));
 }
 
+/**
+ * A credential prompt at or NEAR the end of the pane, not strictly the last line.
+ *
+ * `looksLikeCredentialPrompt` takes the last non-empty line only, which is
+ * right for "is it safe to type here" and wrong for "did this command really
+ * finish". The end marker's printf ends with `\r\033[K` and erases the line it
+ * lands on, so a spurious marker landing after `Password:` leaves debris below
+ * it — the prompt is still on screen but no longer LAST, and a tail-anchored
+ * test answers no.
+ *
+ * That is not hypothetical: a reviewer's own `read` showed `Password:` two
+ * lines from the end while every surface reported the command finished with
+ * exit 0. Depth is small so this stays recent — it must not reach back into
+ * scrollback and rediscover a prompt somebody answered minutes ago.
+ */
+export function looksLikeCredentialPromptNear(paneText: string, depth = 6): boolean {
+  const lines = paneText
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .slice(-depth);
+  return lines.some((line) => CREDENTIAL_PROMPT_PATTERNS.some((re) => re.test(line)));
+}
+
 const PROMPT_PATTERNS: RegExp[] = [
   // The bounds are generous because these run against UNWRAPPED text: an ssh
   // passphrase prompt carries a full key path, easily 70+ characters between

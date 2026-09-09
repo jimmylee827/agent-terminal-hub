@@ -34,6 +34,7 @@ export {
   couldBePrompting,
   isShell,
   looksLikeCredentialPrompt,
+  looksLikeCredentialPromptNear,
   looksLikePrompt,
   isNesting,
   looksLikeShellPrompt,

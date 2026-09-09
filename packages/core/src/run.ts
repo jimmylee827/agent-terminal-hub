@@ -41,6 +41,7 @@ import {
   isNesting,
   isShell,
   looksLikeCredentialPrompt,
+  looksLikeCredentialPromptNear,
   looksLikePrompt,
 } from './state';
 import type { PollResult, RunOptions, RunResult, Session, StartResult } from './types';
@@ -1639,11 +1640,25 @@ async function runLocked(
   // checks failed the moment this landed. The transport is the pane's process,
   // not a command waiting on a person.
   const transport = session.remote ? 'ssh' : '';
-  if (
-    state !== 'needs-input' &&
-    foreground !== transport &&
-    INTERACTIVE_COMMANDS.has(foreground)
-  ) {
+  // Two signals, because neither covers both cases.
+  //
+  // LOCAL: the foreground process. If sudo is still running the command has not
+  // finished, whatever any marker claims, and no screen rewriting changes it.
+  // Unavailable on a remote session, where the foreground is `ssh` for the
+  // session's whole life — which is exactly where the failure was reported.
+  //
+  // REMOTE: the pane, searched a few lines deep rather than tail-anchored,
+  // because the marker's erase is what pushes the prompt off the end. Gated on
+  // the COMMAND being one that asks people things, so ordinary output can never
+  // trip it, and on the command not having opted out of prompting: `sudo -n`
+  // refuses rather than parking, so a stale prompt above it must not park.
+  const asksForCredentials =
+    INTERACTIVE_COMMANDS.has((command.trim().split(/\s+/)[0] ?? '').replace(/^.*\//, '')) &&
+    !/(^|\s)(-n|--non-interactive)(\s|$)/.test(command);
+  const processSaysRunning = foreground !== transport && INTERACTIVE_COMMANDS.has(foreground);
+  const paneSaysPrompting =
+    asksForCredentials && looksLikeCredentialPromptNear(stripAnsi(paneTail));
+  if (state !== 'needs-input' && (processSaysRunning || paneSaysPrompting)) {
     const parkedNow =
       `${quoteForMessage(command)} is waiting at a prompt in "${clean}". ` +
       `Attach with "ath attach ${clean}" and answer it.`;
