@@ -101,7 +101,23 @@ function jsonWithOutput(value: Record<string, unknown>, output: string): ToolRes
   // output, genuinely ambiguous for a command that emits JSON itself. A
   // trailing newline and a labelled trailer keep the boundary visible however
   // the client chooses to render them.
-  if (output) blocks.push({ type: 'text', text: output.endsWith('\n') ? output : `${output}\n` });
+  if (output) {
+    blocks.push({ type: 'text', text: output.endsWith('\n') ? output : `${output}\n` });
+  } else {
+    // Silence is STATED, not left as an absent block.
+    //
+    // An empty output emitted nothing at all here, so "the command printed
+    // nothing" and "the capture failed and I have nothing to show you" arrived
+    // identically: a JSON trailer with no output above it. Two reviewers asked
+    // the same question from opposite ends — one wondered whether an absent
+    // output field was distinguishable from an empty one, the other got exit 0
+    // with no output for a command whose results were sitting in the pane and
+    // said an agent trusting it "would silently record no output as a finding".
+    //
+    // It costs one line to make the negative affirmative, and a negative you
+    // can read is the whole difference between a result and a guess.
+    blocks.push({ type: 'text', text: '(no output — the command printed nothing)\n' });
+  }
   blocks.push({ type: 'text', text: `--- ath ---\n${JSON.stringify(value, null, 2)}` });
   return { content: blocks };
 }

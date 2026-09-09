@@ -1335,7 +1335,26 @@ async function runLocked(
     //
     // The tag now answers through the PTY. No answer, nothing was typed that
     // could run, and the wrapper — which fails safely when absent — takes over.
-    usedFraming = await awaitTagAck(clean, nonce, 1500);
+    // A slow ack is NOT proof the shell lost its hooks.
+    //
+    // 1500 ms flat, and a timeout tore down the framing metadata and re-injected
+    // the helper — which types ~1.8 KB into the pane, driving extra prompt
+    // cycles. Each of those emits an end marker carrying the LAST exit code,
+    // which is how a parked command came back "finished with exit 0" and how a
+    // command's output went missing. Both failures were reported next to visible
+    // helper source; this is where that source comes from.
+    //
+    // The window that produces a slow ack is exactly the busy one: a reviewer
+    // ran a 350-second checksum job in a second session over the SAME ssh
+    // connection while working in this one. Under that load 1.5 s is a coin
+    // flip, and losing the flip corrupted the framing rather than merely
+    // delaying it.
+    //
+    // So: a longer window over ssh, where round trips are real, and a second
+    // look before concluding anything. Tearing down framing on a first timeout
+    // treats latency as evidence.
+    usedFraming = await awaitTagAck(clean, nonce, session.remote ? 4000 : 1500);
+    if (!usedFraming) usedFraming = await awaitTagAck(clean, nonce, 1500);
     if (usedFraming) {
       // The line is empty: we just pressed Enter on the tag ourselves. Clearing
       // it again sends C-e/C-u to a shell that may still be starting, which
@@ -2236,7 +2255,9 @@ export async function start(name: string, command: string): Promise<StartResult>
     let framed = false;
     if (bare !== undefined && (await hooksActive(clean, session))) {
       await sendLine(clean, agentTagLine(nonce));
-      framed = await awaitTagAck(clean, nonce, 1500);
+      // Same reasoning as `run`: latency is not evidence of a missing helper.
+      framed = await awaitTagAck(clean, nonce, session.remote ? 4000 : 1500);
+      if (!framed) framed = await awaitTagAck(clean, nonce, 1500);
       if (framed) await sendLine(clean, bare);
     }
     if (!framed) {
