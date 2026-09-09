@@ -34,7 +34,15 @@ import {
 } from './session';
 import { ensureControlDir, sshLaunchLine } from './ssh';
 import { clearRequest, listRequests, requestHuman } from './requests';
-import { classify, couldBePrompting, isNesting, isShell, looksLikePrompt } from './state';
+import {
+  INTERACTIVE_COMMANDS,
+  classify,
+  couldBePrompting,
+  isNesting,
+  isShell,
+  looksLikeCredentialPrompt,
+  looksLikePrompt,
+} from './state';
 import type { PollResult, RunOptions, RunResult, Session, StartResult } from './types';
 import { randomNonce, shellQuote, sleep, stripAnsi, toLines, trimBlankEdges } from './util';
 
@@ -1576,23 +1584,72 @@ async function runLocked(
   // short settle rather than asserting idle outright: the human CAN have typed
   // something into the shared pane, and inventing "idle" over that would be its
   // own lie.
-  const classifyNow = async (): Promise<{ state: RunResult['state']; pane: string }> => {
+  const classifyNow = async (): Promise<{
+    state: RunResult['state'];
+    pane: string;
+    foreground: string;
+  }> => {
     const pane = await capturePane(clean).catch(() => '');
     const now = await get(clean).catch(() => null);
+    const foreground = now?.currentCommand ?? 'zsh';
     return {
       state: classify({
         paneDead: false,
-        currentCommand: now?.currentCommand ?? 'zsh',
+        currentCommand: foreground,
         paneTail: pane,
         paneWidth: now?.paneWidth ?? 0,
       }),
       pane,
+      foreground,
     };
   };
-  let { state, pane: paneTail } = await classifyNow();
+  let { state, pane: paneTail, foreground } = await classifyNow();
   if (state === 'busy') {
     await sleep(PROMPT_CHECK_MS);
-    ({ state, pane: paneTail } = await classifyNow());
+    ({ state, pane: paneTail, foreground } = await classifyNow());
+  }
+
+  // An end marker is NOT proof the command finished, if the pane is asking for
+  // a password.
+  //
+  // The end marker is emitted by the shell's precmd, which fires on ANY prompt
+  // cycle — so anything that makes the shell redraw a prompt while `__ath_n` is
+  // still set emits a marker carrying the LAST exit code, and the hub reads it
+  // as this command completing with that code. Re-injecting the helper types
+  // lines into the pane and does exactly that.
+  //
+  // The marker's own printf ends with `\r\033[K`, which ERASES the line it
+  // lands on. So the spurious marker overwrites `Password:`, the pane tail no
+  // longer ENDS with a prompt, `classify` finds nothing prompt-shaped and
+  // answers `idle` — and the result is `exit_code: 0, state: idle` for a
+  // command sitting at a password prompt, with no request filed and no handoff
+  // offered. A reviewer hit exactly that on `sudo -v`, said the two facts
+  // "can't both be right", and was saved from publishing "sudo is passwordless
+  // on this host" only by the doc's insistence on confirming with `sudo -n true`.
+  //
+  // The signal is the FOREGROUND PROCESS, not the pane text. Text detection is
+  // what the erase defeats: `looksLikeCredentialPrompt` is tail-anchored, and a
+  // marker landing after `Password:` takes the prompt off the end — a guard
+  // reading the pane was written first and verified NOT to catch this. If sudo
+  // is still the foreground process then the command has not finished, whatever
+  // any marker claims, and no amount of screen rewriting changes that.
+  if (state !== 'needs-input' && INTERACTIVE_COMMANDS.has(foreground)) {
+    const parkedNow =
+      `${quoteForMessage(command)} is waiting at a prompt in "${clean}". ` +
+      `Attach with "ath attach ${clean}" and answer it.`;
+    await requestHuman(clean, parkedNow, 'agent', nonce, true).catch(() => undefined);
+    return {
+      session: clean,
+      command,
+      exitCode: null,
+      output: capture.output,
+      timedOut: false,
+      needsInput: true,
+      state: 'needs-input',
+      logOffset: discarded + offset,
+      handle: nonce,
+      needsHuman: parkedNow,
+    };
   }
 
   const fullOutput = capture.output;

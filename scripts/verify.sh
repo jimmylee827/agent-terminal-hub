@@ -872,6 +872,43 @@ chk "MCP names the destroyed bytes"        "yes" \
 chk "start reports launched on SUCCESS" "true" \
     "$($ATH_BIN start "$C" --json -- 'echo lv' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(String(JSON.parse(d).launched))}catch(e){process.stdout.write("x")}})')"
 
+# ---- an end marker is not proof of completion at a password prompt -----------
+#
+# The worst result this tool has produced. `sudo -v` came back exit_code 0,
+# state idle, no needs_input, no request filed and no handoff offered — while
+# the pane sat at `Password:`. The next command was refused with needs_human,
+# and the reviewer said the two facts "cannot both be right". Only the doc
+# insisting on `sudo -n true` stopped them publishing "sudo is passwordless on
+# this host" as a security finding.
+#
+# Mechanism: the end marker is emitted by the shell precmd, which fires on ANY
+# prompt cycle, so a redraw while __ath_n is set emits a marker carrying the
+# LAST exit code. The marker printf ends with \r\033[K, which ERASES the line
+# it lands on — so it overwrites `Password:`, the pane tail stops ending in a
+# prompt, classify answers idle, and the marker's 0 becomes the exit code.
+#
+# The guard reads the FOREGROUND PROCESS, not the pane. A first version read the
+# pane and was verified NOT to catch this: looksLikeCredentialPrompt is
+# tail-anchored, and the erase is exactly what moves the prompt off the end.
+# The three parked-sudo assertions are NOT run here. They need a genuinely
+# expired sudo timestamp, and a suite cannot arrange one without prompting a
+# human — priming or clearing it either way makes the check answer a different
+# question than the one asked. Verified by hand against the reported failure
+# instead: `sudo -k` then `sudo -v` returns exitCode null, state needs-input,
+# and a filed request, where it previously returned exit_code 0 / idle / none.
+#
+# What IS asserted here is deterministic: the guard exists, keys off the
+# FOREGROUND PROCESS rather than pane text, and does not park ordinary work.
+chk "the guard reads the process, not text" "yes" \
+    "$(grep -q 'INTERACTIVE_COMMANDS.has(foreground)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the guard runs before the result is built" "yes" \
+    "$(grep -q "state !== 'needs-input' && INTERACTIVE_COMMANDS.has(foreground)" "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "an ordinary command is NOT parked" "idle" \
+    "$($ATH_BIN run "$C" --json -- 'echo notparked' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).state)}catch(e){process.stdout.write("x")}})')"
+chk "and still reports its exit code" "0" \
+    "$($ATH_BIN run "$C" --json -- 'echo stillzero' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(String(JSON.parse(d).exit_code))}catch(e){process.stdout.write("x")}})')"
+
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
