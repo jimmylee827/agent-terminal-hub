@@ -1633,7 +1633,17 @@ async function runLocked(
   // reading the pane was written first and verified NOT to catch this. If sudo
   // is still the foreground process then the command has not finished, whatever
   // any marker claims, and no amount of screen rewriting changes that.
-  if (state !== 'needs-input' && INTERACTIVE_COMMANDS.has(foreground)) {
+  // NOT the session's own transport. `pane_current_command` is `ssh` for the
+  // whole life of a remote session, and `ssh` is on the interactive list, so
+  // testing membership alone parked every remote command — 59 of 71 remote
+  // checks failed the moment this landed. The transport is the pane's process,
+  // not a command waiting on a person.
+  const transport = session.remote ? 'ssh' : '';
+  if (
+    state !== 'needs-input' &&
+    foreground !== transport &&
+    INTERACTIVE_COMMANDS.has(foreground)
+  ) {
     const parkedNow =
       `${quoteForMessage(command)} is waiting at a prompt in "${clean}". ` +
       `Attach with "ath attach ${clean}" and answer it.`;

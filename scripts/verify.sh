@@ -901,8 +901,8 @@ chk "start reports launched on SUCCESS" "true" \
 # FOREGROUND PROCESS rather than pane text, and does not park ordinary work.
 chk "the guard reads the process, not text" "yes" \
     "$(grep -q 'INTERACTIVE_COMMANDS.has(foreground)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
-chk "the guard runs before the result is built" "yes" \
-    "$(grep -q "state !== 'needs-input' && INTERACTIVE_COMMANDS.has(foreground)" "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the guard exempts the session transport" "yes" \
+    "$(grep -q "foreground !== transport" "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "an ordinary command is NOT parked" "idle" \
     "$($ATH_BIN run "$C" --json -- 'echo notparked' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).state)}catch(e){process.stdout.write("x")}})')"
 chk "and still reports its exit code" "0" \
