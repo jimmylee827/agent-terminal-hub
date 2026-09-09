@@ -65,8 +65,10 @@ export const TOOL_DEFINITIONS = [
     name: 'run',
     annotations: { title: 'Run a command', readOnlyHint: false, destructiveHint: false },
     description:
-      'Run a command in a session and wait for it to finish. Returns the exact combined ' +
-      'stdout+stderr and the real exit code. IMPORTANT: if the result has needsInput=true, the ' +
+      'Run a command in a session and wait for it to finish. Returns its combined ' +
+      'stdout+stderr and the real exit code. The exit code is always exact; the OUTPUT is ' +
+      'capped (see max_bytes), so a command printing megabytes comes back as head+tail with ' +
+      'the middle named rather than all of it at once. IMPORTANT: if the result has needsInput=true, the ' +
       'command is waiting on a password or a confirmation prompt. Do NOT attempt to answer it and ' +
       'never send a credential — report it to the human, who is attached to the same terminal and ' +
       'will type it. Then continue with the `read` tool. (The CLI signals these as exit codes 75 ' +
@@ -85,6 +87,14 @@ export const TOOL_DEFINITIONS = [
         timeout_seconds: {
           type: 'number',
           description: 'How long to wait before returning partial output. Default 120.',
+        },
+        max_bytes: {
+          type: 'integer',
+          description:
+            'Cap on how much output comes back (default 65536). Anything left out is taken ' +
+            'from the MIDDLE; `omitted_bytes` says how much, and the note names the offset ' +
+            'that returns the command\'s full region. Pass 0 for no cap when you genuinely ' +
+            'want every byte in one call.',
         },
         wait_for_idle: {
           type: 'boolean',

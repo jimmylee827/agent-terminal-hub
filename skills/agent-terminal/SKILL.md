@@ -25,8 +25,10 @@ else — you say so, and they type it into the same terminal you are using.
    handoff. But anything typed at an *ordinary* prompt — an API key, a
    token — IS in the log and will appear in your `read` output. Do not repeat
    such a value back, quote it, or write it anywhere; tell the user it is in
-   the session log and that `ath purge <name>` clears it. Say plainly that
-   purge clears the transcript **only** — see "What this leaves on disk".
+   the session log and that `ath purge <name>` clears it. Purge covers the
+   transcript **and** that session's request records — the two places a
+   command's text is stored verbatim — but not everything the hub wrote; see
+   "What this leaves on disk".
 3. **`needs_input` is a handoff, not an error.** Report it and stop. Do not
    retry, do not try `sudo -S`, do not work around it.
    When you come back, note that **an exit code cannot tell you a human
@@ -111,15 +113,21 @@ including one with no `--since`, so that is where your first one comes from.
 
 **Output is capped, and the cap paginates.** A job printing megabytes would
 otherwise hand you all of them in one call, and you cannot know you wanted
-less until it has arrived. `poll` and `read --since` return at most 64 KB by
-default: a head, then a marker, then the tail. What the *cap* leaves out is
-still on disk — the marker and the `omitted_resume_from` field both name the
-`since` that returns it. `next_offset` still points at the end, so an ordinary
-follow loop just carries on.
+less until it has arrived. `run`, `poll` and `read --since` all return at most
+64 KiB by default: a head, then a marker, then the tail. The exit code is
+never affected — only the output is. `omitted_bytes` says how much was left
+out, and `max_bytes: 0` opts out when you genuinely want the lot.
 
-**But the transcript is not durable storage, and above 32 MB it really does
-lose data.** The session log is rewritten to its last 8 MB once it passes
-32 MB. Anything older is gone for good — no offset brings it back. This
+What the cap leaves out is on disk **at the moment you are told about it**,
+and the marker names the `since` that returns it. That is a snapshot, not a
+promise: on a chatty job the log is growing behind you, and the note switches
+to warning you off entirely once a trim is close — read the next paragraph
+before planning to collect a gap later. `next_offset` still points at the end,
+so an ordinary follow loop just carries on regardless.
+
+**But the transcript is not durable storage, and above 32 MiB it really does
+lose data.** The session log is rewritten to its last 8 MiB once it passes
+32 MiB. Anything older is gone for good — no offset brings it back. This
 paragraph used to say "nothing is lost" without that qualification, and an
 agent following a 46 MB job believed it: it polled at the offset the hub had
 given it, and ~38 MB of its results no longer existed.
@@ -481,22 +489,32 @@ own password. One connection, two terminals.
 Every session is recorded. `pipe-pane` appends **everything printed in the
 pane** — your commands, your output, and the human's, whether or not you read
 it — to `~/.ath/log/<session>.log`. It outlives the session, the agent and the
-editor. Nothing rotates it until 32 MB.
+editor. Nothing rotates it until 32 MiB.
 
 Tell the user this exists when it matters (before they type a secret at an
 echoing prompt, or after they already have). Do not treat `kill` as cleanup.
 
-`ath purge <name>` truncates **that one transcript**, and nothing else. Two
-things survive it and still describe what happened:
+`ath purge <name>` clears **that session's transcript and its request
+records** — the two places a command's text is kept word for word. It does not
+clear everything the hub wrote. What survives, and still describes what
+happened:
 
 | survives purge | holds |
 | --- | --- |
-| `~/.ath/requests/` | the reason text of each human request — it **quotes the command** |
 | `~/.ath/rc/` | exit codes and timings per command. No command text. Reaped after 6h |
+| `~/.ath/notify.log` | session names and request ids. Rotated at 1 MiB |
+
+`requests/` was on that list until it was fixed: purging the log while keeping
+a record that quotes the command back is the opposite of what the word means.
+
+`ath purge --dead` is a different thing — it DELETES the transcripts of sessions
+that no longer exist. `log/` is bounded per file, not in aggregate, so it is the
+one directory that otherwise only grows.
 
 `ath doctor --artifacts` prints the full list of ten, with sizes and what each
-one is bounded by. Use it when the human asks what the hub left behind; do not
-guess from this table, which names only the two that matter most.
+one is bounded by, plus what is left on a REMOTE host (nothing — the helper is
+typed into the pane, not written to disk). Use it when the human asks what the
+hub left behind; do not guess from this table, which names only what survives.
 
 A password prompt is the one safe case: it echoes nothing, so the password is
 in no file, and there is nothing to purge after a sudo handoff.

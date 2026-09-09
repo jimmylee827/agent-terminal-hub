@@ -632,6 +632,7 @@ function capRunOutput(
   maxBytes: number,
   session: string,
   resumeFrom: number,
+  logSize: number,
 ): { text: string; omittedBytes?: number } {
   if (maxBytes <= 0) return { text: output };
   const buf = Buffer.from(output, 'utf8');
@@ -652,12 +653,22 @@ function capRunOutput(
   if (tailFrom <= headBytes) return { text: output };
 
   const omittedBytes = tailFrom - headBytes;
-  const note =
-    `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output — ` +
-    `run returns at most ${Math.floor(maxBytes / 1024)} KiB. The command's full region is in ` +
-    `the session log: ath read ${session} --since=${resumeFrom} returns all of it, not just ` +
-    `this gap. A later trim can discard it. For output this size, redirect it to a file on ` +
-    `the host instead of reading it back through the transcript.]`;
+  // Same trim awareness as `readLogCapped`, because the caller cannot be
+  // expected to get different advice for the same situation depending on which
+  // tool they reached for. Pointing at a region the next trim is about to
+  // destroy is worse than saying so.
+  const trimIsClose = logSize > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
+  const note = trimIsClose
+    ? `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output. This ` +
+      `session's log is ${Math.floor(logSize / 1048576)} MiB and is trimmed past ` +
+      `${Math.floor(LOG_MAX_BYTES / 1048576)} MiB, so re-reading it is likely to return ` +
+      `lost_bytes rather than output. Redirect this job's output to a file on the host; the ` +
+      `transcript is not durable storage for it.]`
+    : `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output — ` +
+      `run returns at most ${Math.floor(maxBytes / 1024)} KiB. The command's full region is in ` +
+      `the session log: ath read ${session} --since=${resumeFrom} returns all of it, not just ` +
+      `this gap. A later trim can discard it. For output this size, redirect it to a file on ` +
+      `the host instead of reading it back through the transcript.]`;
   return {
     text: `${buf.subarray(0, headBytes).toString('utf8')}${note}\n${buf.subarray(tailFrom).toString('utf8')}`,
     omittedBytes,
@@ -1574,7 +1585,8 @@ async function runLocked(
   // and the failure would be silent: a session parked at a password prompt that
   // nobody was asked to answer.
   const needsHuman = await raiseHumanWall(clean, command, fullOutput, nonce);
-  const capped = capRunOutput(fullOutput, maxBytes, clean, discarded + offset);
+  const logSizeNow = await fs.stat(log).then((st) => st.size).catch(() => 0);
+  const capped = capRunOutput(fullOutput, maxBytes, clean, discarded + offset, logSizeNow);
   const output = capped.text;
   // The pane can be resized by a human attaching — most often to answer the
   // very password prompt this command raised. Checked here, once per command,
@@ -1674,6 +1686,15 @@ async function runLocked(
     state,
     ...(widthChange ? { paneWidthChanged: widthChange } : {}),
     logOffset: discarded + offset,
+    // Every command HAS a handle; only some results used to carry one.
+    //
+    // It was returned on the timeout and needs-input paths and withheld on
+    // success, so `await_human` could hand back a handle for a command run
+    // through `run` that had never issued one. A reviewer noticed exactly that
+    // and put it well: "handles exist that I have no other way to discover".
+    // Nothing is gained by withholding it — the handle stays valid for
+    // `commandOutcome` after the command is done.
+    handle: nonce,
     // Only on the completed path: the early returns never reached the flush
     // loop, so they have nothing to be incomplete about.
     ...(captureIncomplete ? { captureIncomplete: true } : {}),

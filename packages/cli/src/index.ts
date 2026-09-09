@@ -466,7 +466,7 @@ async function main(): Promise<number> {
             console.error(
               c.red(
                 `[ath] ${result.lostBytes} bytes before this point were TRIMMED AWAY and are ` +
-                  `gone — the log is rewritten to its last 8 MB above 32 MB, which invalidates ` +
+                  `gone — the log is rewritten to its last 8 MiB above 32 MiB, which invalidates ` +
                   `older offsets. Output resumes from the earliest byte that survives. For a ` +
                   `job this size, write it to a file and read that instead.`,
               ),

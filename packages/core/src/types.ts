@@ -173,6 +173,22 @@ export interface RunResult {
    * with `read --since <logOffset>` rather than trusting `output`.
    */
   captureIncomplete?: boolean;
+  /**
+   * Bytes dropped from the MIDDLE of `output` because it exceeded the cap.
+   *
+   * Undeclared until now, while `run` set it through an object spread — so the
+   * CLI printed it, the type did not have it, and the MCP layer could not
+   * reach it to emit. A field that exists at runtime and not in the type is a
+   * field only some callers can find.
+   *
+   * `omittedResumeFrom` is the offset of the command's WHOLE region, not of
+   * the gap alone: the extracted text has no byte-exact mapping back onto log
+   * positions, so a narrower offset would be a guess wearing the shape of a
+   * fact. Re-reading returns everything the command printed.
+   */
+  omittedBytes?: number;
+  /** The `since` that returns the command's full region. See `omittedBytes`. */
+  omittedResumeFrom?: number;
 }
 
 export interface StartResult {

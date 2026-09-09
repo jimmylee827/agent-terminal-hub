@@ -267,6 +267,15 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           'any conclusion, especially a negative one: "no results" from this call is not ' +
           'evidence there were none.';
       }
+      // Promised by this tool's own schema, and not emitted until now — the
+      // same gap the comment above `log_offset` describes, one field over and
+      // introduced by the change that added the cap. A marker in the text
+      // saying bytes were dropped, with no field saying how many, forces the
+      // agent to parse prose to learn something it was told would be data.
+      if (result.omittedBytes !== undefined) {
+        payload.omitted_bytes = result.omittedBytes;
+        payload.omitted_resume_from = result.omittedResumeFrom;
+      }
       if (result.paneWidthChanged) {
         payload.pane_width_changed = result.paneWidthChanged;
         // Do not overwrite the louder notice above.

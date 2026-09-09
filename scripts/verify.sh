@@ -757,6 +757,52 @@ chk "a good capture is not flagged"         "yes" "$(printf '%s' "$CAPT" | grep 
 chk "a silent command still returns empty"  "yes" "$(printf '%s' "$CAPT" | grep -q emptyIsEmpty     && echo yes || echo no)"
 chk "and printing nothing is NOT flagged"   "yes" "$(printf '%s' "$CAPT" | grep -q silentNotFlagged && echo yes || echo no)"
 
+# ---- a doc must not promise a field the surface does not emit ----------------
+#
+# Every one of these was introduced by the change that added them, and each is
+# the same shape: a claim made in one place and not honoured in another.
+#
+#  - the `run` MCP schema documents max_bytes and omitted_bytes; the handler
+#    read max_bytes but the payload never emitted omitted_bytes, so an agent got
+#    a marker in the prose saying bytes were dropped and no number to act on.
+#  - `omittedBytes` reached `RunResult` through an object spread and was never
+#    declared on the type, so the CLI printed it and the MCP layer could not see
+#    it. A field that exists at runtime but not in the type is a field only some
+#    callers can find.
+#  - `run` withheld its handle on success and returned it on the timeout path,
+#    so `await_human` could hand back a handle for a command that never issued
+#    one — "handles exist that I have no other way to discover".
+chk "run schema declares max_bytes" "yes" \
+    "$(node -e 'const t=require("'"$RP"'/packages/mcp/dist/tools.js");const l=t.TOOLS||Object.values(t)[0];const r=l.find(x=>x.name==="run");process.stdout.write(r.inputSchema.properties.max_bytes?"yes":"no")' 2>/dev/null)"
+chk "run schema stops calling its output exact" "yes" \
+    "$(node -e 'const t=require("'"$RP"'/packages/mcp/dist/tools.js");const l=t.TOOLS||Object.values(t)[0];const r=l.find(x=>x.name==="run");process.stdout.write(/exact combined/.test(r.description)?"no":"yes")' 2>/dev/null)"
+chk "run emits a handle on SUCCESS, not only on timeout" "yes" \
+    "$($ATH_BIN run "$C" --json -- 'echo handlecheck' 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{try{process.stdout.write(JSON.parse(b).handle?"yes":"no")}catch(e){process.stdout.write("no")}})')"
+# Both cap implementations must give the SAME advice for the same situation.
+# Asserted on the shared sentence rather than on a symbol count: the guard is
+# named twice per cap (declaration and use), so counting mentions measured the
+# spelling and not the property.
+chk "both caps warn about an imminent trim" "2" \
+    "$(grep -c 'transcript is not durable storage for it' "$RP/packages/core/src/run.ts")"
+chk "RunResult declares omittedBytes" "yes" \
+    "$(grep -q 'omittedBytes?: number;' "$RP/packages/core/src/types.ts" && echo yes || echo no)"
+
+# ---- stated bounds must be labelled in the units they are measured in --------
+#
+# `doctor` was corrected from MB to MiB after an agent compared its "47 MB"
+# against `du`'s 52M and could not account for the gap. The SKILL file kept
+# saying MB for the same 1024-based constants — fixed in one file, left in
+# another, which is the same way the output cap reached poll and read but not
+# run. Narrative recollections of past incidents keep their original figures.
+chk "skill states the trim bound in MiB" "yes" \
+    "$(grep -q 'above 32 MiB it really does' "$SK" && echo yes || echo no)"
+chk "skill does not state the bound in MB" "yes" \
+    "$(grep -qE 'above 32 MB|last 8 MB|until 32 MB' "$SK" && echo no || echo yes)"
+chk "skill no longer says purge covers the transcript only" "yes" \
+    "$(grep -q 'purge clears the transcript \*\*only\*\*' "$SK" && echo no || echo yes)"
+chk "skill says purge covers request records" "yes" \
+    "$(grep -q 'request records' "$SK" && echo yes || echo no)"
+
 # ---- one answer to "is this framed", not two -------------------------------
 #
 # The incompleteness check used to test `raw.includes(marker)` while the
