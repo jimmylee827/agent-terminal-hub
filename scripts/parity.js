@@ -55,10 +55,33 @@ function payloadFor(tool) {
   return mcp.slice(i, j < 0 ? mcp.length : j);
 }
 
+/**
+ * Every result type paired with the tool that publishes it.
+ *
+ * This listed run, poll and start and nothing else, so `wait` was a blind spot:
+ * it published `exit_code` with no `exit_code_covers` beside it, and a reviewer
+ * whose command ended in `echo DONE` was handed an exit 0 belonging to the
+ * echo. They said the field was "more reassuring than it is entitled to be",
+ * and they were right — and this checker, written to catch exactly that shape,
+ * never looked.
+ *
+ * The coverage list IS the checker. A tool missing from here is not checked,
+ * and nothing says so, which is the same failure the EXPECTED_OMISSIONS list
+ * exists to prevent one level down.
+ */
 const CHECKS = [
   ['RunResult', 'run'],
   ['PollResult', 'poll'],
   ['StartResult', 'start'],
+];
+
+/**
+ * Tools whose payload is hand-built from a session rather than a result type,
+ * with the fields they must carry when the underlying data exists.
+ */
+const HAND_BUILT = [
+  ['wait', ['exit_code', 'exit_code_covers', 'verified', 'last_command']],
+  ['read', ['next_offset', 'omitted_bytes', 'lost_bytes']],
 ];
 
 let bad = 0;
@@ -75,5 +98,14 @@ for (const [iface, tool] of CHECKS) {
     bad++;
   }
 }
+for (const [tool, fields] of HAND_BUILT) {
+  const seg = payloadFor(tool);
+  for (const f of fields) {
+    if (seg.includes(`${f}:`) || seg.includes(`${f} =`)) { ok++; continue; }
+    console.log(`  MISSING  ${tool} does not emit ${f}  (hand-built payload)`);
+    bad++;
+  }
+}
+
 console.log(`parity: ${ok} carried or deliberately omitted, ${bad} missing`);
 process.exit(bad === 0 ? 0 : 1);

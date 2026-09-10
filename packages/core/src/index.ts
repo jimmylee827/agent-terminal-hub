@@ -71,6 +71,7 @@ export {
 } from './session';
 export {
   commandFinished,
+  compoundExitCaveat,
   commandOutcome,
   endMarker,
   envAssignments,

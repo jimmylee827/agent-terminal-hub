@@ -2943,7 +2943,7 @@ function hasPipeline(command: string): boolean {
   return /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
 }
 
-function compoundExitCaveat(command: string): string | undefined {
+export function compoundExitCaveat(command: string): string | undefined {
   // Ignore separators inside quotes: `echo "a;b"` is not a compound command.
   const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
   const hasSemicolon = /;/.test(bare);

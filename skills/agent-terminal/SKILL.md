@@ -167,11 +167,20 @@ from the CLI — and offsets survive a trim rather than breaking on one, so the
 follow loop keeps working. That is damage reporting, not a fix.
 
 **So for a job whose output you actually need, write it to a file on the host
-and read the file.** Use the session to watch progress and get the exit code:
+and read the file.** Use the session to watch progress and get the exit code.
+
+For "is it alive and how far in", `poll` is the instrument — `running_for_seconds`
+and a climbing `next_offset` answer it directly. A short `read --tail 3` does
+NOT: on a chatty job it returns three arbitrary lines from the middle of a
+stream, which tells you nothing about progress. A reviewer following a checksum
+job got exactly one filename back and said so. Use `--tail` when you want the
+last CONTENT of a finished job, and give it enough lines — a wrapped 200-column
+pane needs more than 3 to show you a line you can read:
 
 ```sh
 ath start bulk -- 'big-job > /tmp/run.out 2>/tmp/run.err; echo done'
-ath read bulk --tail 3                      # progress, bounded, any volume
+ath poll bulk --handle <h> --max-bytes 400   # progress: is it alive, how far in
+ath read bulk --tail 40                     # the last lines, when you need CONTENT
 ath wait bulk --handle <h> --timeout 60     # finish, exact
 ath run bulk -- 'wc -l /tmp/run.out; tail -20 /tmp/run.out'   # the real output
 ```

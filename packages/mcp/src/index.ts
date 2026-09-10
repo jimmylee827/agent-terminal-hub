@@ -9,6 +9,7 @@ import {
   AthError,
   commandOutcome,
   type CommandOutcome,
+  compoundExitCaveat,
   create,
   get,
   kill,
@@ -367,7 +368,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (result.logTrimmedBytes) {
         payload.log_trimmed_bytes = result.logTrimmedBytes;
         payload.log_trimmed_note =
-          `${result.logTrimmedBytes} bytes of this session's transcript were DESTROYED when ` +
+          `${result.logTrimmedBytes} bytes — counted from the START of the log, so a lost_bytes ` +
+          `figure measured from a later offset will be smaller — of this session's transcript ` +
+          `were DESTROYED when ` +
           `this command started: the log passed its ceiling and was rewritten to its tail. ` +
           `Offsets from before this point return lost_bytes. If you need this job's output, ` +
           `write it to a file on the host — the transcript is for watching, not collecting.`;
@@ -517,7 +520,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             : {
                 lost_bytes: result.lostBytes,
                 lost_note:
-                  `${result.lostBytes} bytes before this point were TRIMMED AWAY and cannot be ` +
+                  `${result.lostBytes} bytes — counted from the offset YOU asked for, not from the ` +
+          `start of the log, which is why this figure is smaller than any log_trimmed_bytes ` +
+          `you were shown — were TRIMMED AWAY and cannot be ` +
                   `recovered — a session log is rewritten to its last 8 MB once it passes 32 MB, ` +
                   `which invalidates offsets issued before that. The output below resumes from ` +
                   `the earliest byte that still exists. For a job this size, write it to a file ` +
@@ -1127,6 +1132,24 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               // From the handle's own marker when we have one, so the caller
               // does not need a second call to learn what it just waited for.
               ...(outcome?.exitCode === undefined ? {} : { exit_code: outcome.exitCode }),
+              // The same caveat `run` and `poll` carry, and for the same reason.
+              //
+              // `wait` presented `exit_code` with nothing qualifying it, so a
+              // reviewer whose command ended in `echo BULK2_DONE` was handed
+              // exit 0 that belonged to the echo, not the pipeline in front of
+              // it. Their words: "an agent that trusted it would believe a
+              // failed shasum pipeline succeeded". They sidestepped it by
+              // reconciling line counts; the field was, as they put it, "more
+              // reassuring than it is entitled to be".
+              //
+              // Missed by scripts/parity.js because that checker enumerated
+              // run, poll and start and never looked at `wait` — a hole in the
+              // coverage list, which is exactly how a shape-1 defect gets
+              // through after the checker exists. `wait` and `read` are in it
+              // now.
+              ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
+                ? { exit_code_covers: compoundExitCaveat(s.lastCommand) }
+                : {}),
               ...(outcome?.seconds === undefined ? {} : { took_seconds: outcome.seconds }),
               // Say WHICH of the two idles this is. `false` means the pane
               // looked idle and nothing could confirm it — the exact answer

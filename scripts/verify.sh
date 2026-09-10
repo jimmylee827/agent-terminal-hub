@@ -666,6 +666,7 @@ LAUNCH="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athl$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const out=[];
 (async()=>{
+  await a.kill("lp").catch(()=>{});
   await a.create({name:"lp",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("lp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   // A healthy shell must NOT be flagged, or the signal is worthless.
@@ -710,6 +711,7 @@ WOBS="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athx$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const fs=require("fs"), out=[];
 (async()=>{
+  await a.kill("wx").catch(()=>{});
   await a.create({name:"wx",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("wx").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   await a.run("wx","echo baseline",{timeoutMs:20000});     // establishes the baseline
@@ -759,6 +761,7 @@ CAPT="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athc$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const out=[];
 (async()=>{
+  await a.kill("cp").catch(()=>{});
   await a.create({name:"cp",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("cp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const withOut=await a.run("cp","echo alpha; echo beta",{timeoutMs:20000});
@@ -837,6 +840,7 @@ SPW="$(node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const out=[];
 (async()=>{
+  await a.kill("sp").catch(()=>{});
   await a.create({name:"sp",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("sp").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const w=async(c)=>(await a.run("sp",c,{timeoutMs:60000})).warning!==undefined;
@@ -961,6 +965,7 @@ PART="$(node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const o=[];
 (async()=>{
+  await a.kill("pt").catch(()=>{});
   await a.create({name:"pt",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("pt").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const e3=await a.run("pt","echo hello; exit 3",{timeoutMs:20000});
@@ -991,6 +996,7 @@ OFFS="$(node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const o=[];
 (async()=>{
+  await a.kill("of").catch(()=>{});
   await a.create({name:"of",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("of").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const r=await a.run("of","echo UNIQUE_XYZ",{timeoutMs:20000});
@@ -1269,6 +1275,37 @@ chk "the caveat covers under-reporting too" "yes" \
 chk "and names what IS authoritative"       "yes" \
     "$(grep -q 'authoritative: the outcome from' "$SK" && echo yes || echo no)"
 
+# ---- wait must qualify its exit code like run and poll do --------------------
+#
+# `wait` published `exit_code` with nothing beside it, so a reviewer whose
+# command ended in `echo BULK2_DONE` was handed exit 0 that belonged to the echo
+# rather than the pipeline in front of it. Their words: "an agent that trusted it
+# would believe a failed shasum pipeline succeeded", and the field is "more
+# reassuring than it is entitled to be".
+#
+# scripts/parity.js — written to catch exactly this shape — never looked at
+# `wait`, because its coverage list held run, poll and start only. The coverage
+# list IS the checker; a tool missing from it is unchecked and nothing says so.
+# `wait` and `read` are in it now.
+chk "wait carries the exit-code caveat"   "yes" \
+    "$(grep -q 'exit_code_covers: compoundExitCaveat' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "parity covers the hand-built payloads" "yes" \
+    "$(grep -q 'const HAND_BUILT' "$RP/scripts/parity.js" && echo yes || echo no)"
+chk "parity still reports zero missing"   "0" \
+    "$(node "$RP/scripts/parity.js" 2>/dev/null | sed -n 's/.*, \([0-9]*\) missing/\1/p')"
+
+# Two numbers for "how much was destroyed", measured from different origins.
+chk "lost_bytes states its frame"         "yes" \
+    "$(grep -q 'counted from the offset YOU asked for' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "log_trimmed_bytes states its frame"  "yes" \
+    "$(grep -q 'counted from the START of the log' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# The doc recommended --tail 3 for progress on exactly the jobs it is useless for.
+chk "the doc points progress at poll"     "yes" \
+    "$(grep -q 'poll\` is the instrument' "$SK" && echo yes || echo no)"
+chk "and no longer sells --tail 3 as progress" "yes" \
+    "$(grep -q 'tail 3                      # progress' "$SK" && echo no || echo yes)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
@@ -1319,6 +1356,7 @@ CAV="$(node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const out=[];
 (async()=>{
+  await a.kill("cv").catch(()=>{});
   await a.create({name:"cv",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("cv").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const r=await a.run("cv","true; false; date",{timeoutMs:20000});
@@ -1411,6 +1449,7 @@ RCAP="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athr$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const out=[];
 (async()=>{
+  await a.kill("rc").catch(()=>{});
   await a.create({name:"rc",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("rc").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const big=await a.run("rc","seq 1 400000",{timeoutMs:120000});
@@ -1580,6 +1619,7 @@ WOUT="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athw$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const out=[];
 (async()=>{
+  await a.kill("wq").catch(()=>{});
   await a.create({name:"wq",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("wq").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   // A subshell exit: non-zero WITHOUT killing the session shell, which would
@@ -1621,7 +1661,9 @@ const a=require("'"$RP"'/packages/core/dist/index.js");
 const fs=require("fs"), path=require("path"), out=[];
 const S="\x1e";
 (async()=>{
+  await a.kill("rem").catch(()=>{});
   await a.create({name:"rem",cwd:"/tmp"});
+  await a.kill("loc").catch(()=>{});
   await a.create({name:"loc",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("rem").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   // A command that started and never wrote an end marker: the exact residue a
@@ -1723,6 +1765,7 @@ UNITS="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athu$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const fs=require("fs"), out=[];
 (async()=>{
+  await a.kill("un").catch(()=>{});
   await a.create({name:"un",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("un").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   await a.run("un","printf \"pad-%s\\n\" $(seq 1 400)",{timeoutMs:20000});
@@ -1892,6 +1935,7 @@ chk "…while dropping out of the open list"   "yes" "$(printf '%s' "$AWAIT" | g
 SW="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athv$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("w").catch(()=>{});
   await a.create({name:"w",cwd:"/tmp"});
   for(let i=0;i<10;i++){const s=await a.get("w").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const r=await a.start("w","du -x --max-depth=2 / 2>/dev/null");
@@ -1935,6 +1979,7 @@ chk "run schema states sudo is per-session"     "yes" \
 TIMING="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="atht$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("tq").catch(()=>{});
   await a.create({name:"tq",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("tq").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const s=await a.start("tq","sleep 5");
@@ -2009,6 +2054,7 @@ chk "and is reported as answered, in words"        "yes" \
 WARN="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athw$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("w").catch(()=>{});
   await a.create({name:"w",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("w").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const hazard = await a.run("w","du -xh -d1 /etc 2>/dev/null",{timeoutMs:20000});
@@ -2059,6 +2105,7 @@ chk "and no camelCase survives" "yes" \
 WIDE="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athx$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("wx").catch(()=>{});
   await a.create({name:"wx",cwd:"/tmp",width:500});
   for(let i=0;i<12;i++){const s=await a.get("wx").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const r=await a.run("wx","tput cols",{timeoutMs:20000});
@@ -2082,6 +2129,7 @@ chk "a program inside the session sees the width it was given" "500" "$WIDE"
 PARK="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athp$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("pk").catch(()=>{});
   await a.create({name:"pk",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("pk").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   await a.run("pk","false",{timeoutMs:15000}).catch(()=>{});          // finishes, exit 1
@@ -2131,6 +2179,7 @@ chk "wait reports a prompt instead of blocking on it" "yes" \
 WID="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athW$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("wz").catch(()=>{});
   await a.create({name:"wz",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("wz").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   await a.run("wz","export MARK=kept",{timeoutMs:15000});
@@ -2200,6 +2249,7 @@ WCH="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athC$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const {execSync}=require("child_process");
 (async()=>{
+  await a.kill("cw").catch(()=>{});
   await a.create({name:"cw",cwd:"/tmp",width:200});
   for(let i=0;i<12;i++){const s=await a.get("cw").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   const one=await a.run("cw","echo 1",{timeoutMs:15000});
@@ -2233,6 +2283,7 @@ chk "MCP run emits log_offset" "yes" \
 FORGE="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athF$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 (async()=>{
+  await a.kill("fk").catch(()=>{});
   await a.create({name:"fk",cwd:"/tmp"});
   for(let i=0;i<12;i++){const s=await a.get("fk").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   // A convincing fake END marker claiming exit 99, printed mid-output.
