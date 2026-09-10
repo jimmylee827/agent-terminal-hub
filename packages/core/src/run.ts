@@ -2158,6 +2158,15 @@ export interface WidthObservation {
   seen?: number[];
   /** False once the long explanation has been given for this session. */
   explain: boolean;
+  /**
+   * `from` is the width that was REQUESTED, not one previously observed.
+   *
+   * Set only on the first observation, when the pane never reached the width
+   * `new --width` asked for — usually because an editor panel attached between
+   * creation and the first command. Distinguished because "it changed under
+   * you" and "it never was what you asked for" call for different reactions.
+   */
+  requested?: boolean;
 }
 
 /**
@@ -2193,9 +2202,14 @@ async function observeWidth(
     await fs.writeFile(widthLogPath(name), '', { mode: 0o600 }).catch(() => undefined);
   };
 
-  // A first command has nothing to compare against, and is not a change.
+  // A first command has no baseline — but it may still have a REQUESTED width,
+  // and silently not matching it is worth saying once.
   if (!baseline) {
+    const asked = Number(await readMeta(name, 'w0').catch(() => '')) || 0;
     await settle();
+    if (asked && asked !== now) {
+      return { from: asked, to: now, explain: await firstWidthNoteFor(name), requested: true };
+    }
     return undefined;
   }
   const everyWidth = [...recorded, now];

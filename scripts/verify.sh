@@ -1034,6 +1034,24 @@ chk "a related chain still matches"     "MINE"   "$(printf '%s' "$PROV" | awk '{
 chk "and says so when only others are free" "yes" \
     "$(grep -q 'belong to someone else' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
+# ---- a pane that never reached the requested width must say so ---------------
+#
+# `observeWidth` skips its first observation because "there is nothing to compare
+# against". There is: the width the caller asked for. An editor panel attaching
+# between creation and the first command resizes the pane, the baseline absorbs
+# it, and nobody is told they did not get what they requested. A reviewer created
+# a session at 200, found it at 156 through an unrelated `list`, and read the
+# documented change notice as broken. It was not broken; it had nothing to
+# compare against.
+chk "an unmet requested width is reported once" "yes" \
+    "$(grep -q "readMeta(name, 'w0')" "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the requested case is distinguishable"      "yes" \
+    "$(grep -q 'requested?: boolean' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the requested width is recorded at create"  "yes" \
+    "$(grep -q "setMeta(name, 'w0'" "$RP/packages/core/src/session.ts" && echo yes || echo no)"
+chk "the skill explains the two offsets"         "yes" \
+    "$(grep -q 'Two offsets, and they point opposite ways' "$SK" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

@@ -111,6 +111,14 @@ new output instead of re-reading the whole log into your context. Space the
 polls to match the work — do not spin. Every `read` returns a `next_offset`,
 including one with no `--since`, so that is where your first one comes from.
 
+**Two offsets, and they point opposite ways.** `run` returns both. `log_offset`
+marks where that command's own output BEGINS; `next_offset` marks where the
+output AFTER it starts. Pass `next_offset` forward to `read --since` or `poll`.
+Passing `log_offset` re-reads the command you just ran — a reviewer did exactly
+that, reasonably, because the names are one word apart and only one of them was
+documented. `read` and `poll` return `next_offset` only, so there is nothing to
+confuse there.
+
 **Output is capped, and the cap paginates.** A job printing megabytes would
 otherwise hand you all of them in one call, and you cannot know you wanted
 less until it has arrived. `run`, `poll` and `read --since` all return at most

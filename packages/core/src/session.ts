@@ -396,6 +396,17 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   // finds its own pid here — which means notifications need no negotiation
   // between windows at all in the normal case.
   await setMeta(name, 'creator', (opts.creatorPids ?? ancestorPids()).join(','));
+  // The width that was ASKED for, so a pane that never reached it can say so.
+  //
+  // `observeWidth` reports changes against a baseline taken at the first
+  // command, and skips the first observation because "there is nothing to
+  // compare against". There is: what the caller requested. An editor panel
+  // attaching between creation and the first command resizes the pane, the
+  // baseline absorbs it, and the caller is never told it did not get the width
+  // it asked for. A reviewer created a session at 200, found it at 156 via an
+  // unrelated `list`, and reasonably read the documented change notice as
+  // broken — it was not, it had nothing to compare against.
+  if (opts.width) await setMeta(name, 'w0', String(opts.width));
   if (opts.remote) await setMeta(name, 'remote', opts.remote);
   if (opts.label) await setMeta(name, 'label', opts.label);
 
