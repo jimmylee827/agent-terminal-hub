@@ -1071,6 +1071,25 @@ chk "empty + fallback is flagged incomplete" "yes" \
 chk "a silent command with no fallback is not" "" \
     "$($ATH_BIN run "$C" --json -- 'true' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);process.stdout.write(j.capture_incomplete?"FLAGGED":"")}catch(e){process.stdout.write("x")}})')"
 
+# ---- an outstanding request must be visible in the LISTING, not just the CLI -
+#
+# The CLI table has marked a session `asked-for-you` for a long time and the docs
+# describe it, but it lived only in the human listing. Over MCP a session parked
+# at `Password:` came back as `state: "idle"` with nothing to contradict it,
+# because `classify` reads the pane and answers idle whenever the prompt is not
+# the last line — which is what a parked sudo looks like once the shell redraws.
+#
+# Raised independently by two reviewers. The second put the damage plainly: an
+# agent that trusts `idle` sends its next command into a live password field,
+# and it avoided that only because it had read an unrelated warning and chose
+# `poll` over `run`. A wrong answer in a listing is worse than a missing one.
+chk "the MCP listing carries asked_for_you" "yes" \
+    "$(grep -q 'asked_for_you: true' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and it is computed from open requests" "yes" \
+    "$(grep -q 'const askedFor = new Set' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "singular sessions read grammatically"  "yes" \
+    "$(grep -q "belongs' : 'belong'" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

@@ -150,6 +150,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
 
   switch (name) {
     case 'list': {
+      // Same source the CLI listing uses for its `asked-for-you` mark.
+      await reapResolvedRequests().catch(() => undefined);
+      const askedFor = new Set((await listRequests().catch(() => [])).map((r) => r.session));
       const sessions = await list();
       // An empty hub answered `[]` from the CLI and a sentence from here — the
       // same question in two shapes, so a caller parsing one had to special-case
@@ -186,6 +189,21 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // anywhere, so an agent that read about it in the docs could not find
           // it in any output and could not say what drove it.
           owner: s.owner,
+          // An outstanding request, which `state` does NOT carry.
+          //
+          // The CLI table has marked this `asked-for-you` for a long time and
+          // the docs describe it, but it lived only in the human listing — so
+          // over MCP a session parked at `Password:` came back as
+          // `state: "idle"` with nothing to contradict it. `classify` reads the
+          // pane and answers idle whenever the prompt is not the last line,
+          // which is what a parked sudo looks like once the shell redraws.
+          //
+          // Two reviewers hit this. The second put the damage plainly: an agent
+          // that trusts `idle` sends its next command into a live password
+          // field, and it avoided that only because it had read an unrelated
+          // warning and chose `poll` over `run`. A wrong answer in a listing is
+          // worse than a missing one — nothing prompts you to check it.
+          ...(askedFor.has(s.name) ? { asked_for_you: true } : {}),
           pinned: s.pinned,
           remote: s.remote,
           // NOT necessarily humans. This is tmux's client count, and the VS
@@ -1156,7 +1174,8 @@ async function parallelHint(current: string): Promise<string> {
     if (ours.length === 0) {
       return (
         `No session of YOURS is free. ${theirs.slice(0, 3).join(', ')} ` +
-        `${theirs.length === 1 ? 'is' : 'are'} idle but belong to someone else — ` +
+        `${theirs.length === 1 ? 'is' : 'are'} idle but ` +
+        `${theirs.length === 1 ? 'belongs' : 'belong'} to someone else — ` +
         `do not run your work there. Create your own with \`new\`.`
       );
     }
