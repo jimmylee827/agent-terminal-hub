@@ -81,6 +81,7 @@ export {
   latestHandle,
   notePrompts,
   reapResolvedRequests,
+  logNearTrim,
   poll,
   readLogFrom,
   readSince,

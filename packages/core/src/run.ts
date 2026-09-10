@@ -99,6 +99,25 @@ const MAX_RETURN_BYTES = 64 * 1024;
  */
 const CAP_HEAD_FRACTION = 0.25;
 
+/**
+ * How close a log has to get before a reader is told it is about to be trimmed.
+ *
+ * The warning used to ride ONLY on the omission marker, so it appeared when the
+ * 64 KiB cap happened to fire and was silent otherwise. A reviewer read at an
+ * offset with nothing omitted, got the neutral house note, and the very next
+ * poll — same offset — reported 49 MB about to be destroyed. Their words: read
+ * "is silent exactly where poll shouts", and `read --tail` is the cheap progress
+ * glance the docs recommend for long jobs, so the recommended way to watch a big
+ * job was the way that would not warn you it was eating itself.
+ *
+ * Now it is a property of the LOG, not of whether a cap fired.
+ */
+const TRIM_WARN_FRACTION = 0.75;
+
+export function logNearTrim(size: number): number | undefined {
+  return size > LOG_MAX_BYTES * TRIM_WARN_FRACTION ? size : undefined;
+}
+
 /** Below this, eliding costs the reader more than the bytes would. */
 const CAP_MIN_OMISSION = 4096;
 
@@ -3188,9 +3207,29 @@ async function raiseHumanWall(
   );
 }
 
+/**
+ * Characters a TTY consumes as KEYSTROKES rather than accepting as text.
+ *
+ * A tab is the one that matters. In a real terminal it is a completion request,
+ * not a character, so a literal tab inside a quoted pattern never reaches the
+ * shell — the command runs, exits 0, and silently means something else.
+ *
+ * A reviewer wrote `grep -E '^[a-z0-9_]+:|^<TAB>inet '` against `ifconfig`, got
+ * every interface line and NOT ONE address line, with exit 0 and no diagnostic.
+ * Reproduced exactly: 6 interface lines, 0 address lines. They called it their
+ * worst error and noted the docs warn at length that the TTY changes program
+ * OUTPUT while never saying it also eats your INPUT.
+ *
+ * Newline was already handled for the same underlying reason — it submits the
+ * line early. The rule was right; the list was one character short.
+ */
+const TTY_EATS_RE = /[\t\v\f\r\x00-\x08\x0e-\x1f]/;
+
 function commandLine(nonce: string, command: string): string | undefined {
   // Multi-line commands cannot be typed as one line, so they keep the wrapper.
   if (command.includes('\n')) return undefined;
+  // Nor can a command carrying a character the terminal would interpret.
+  if (TTY_EATS_RE.test(command)) return undefined;
   return command;
 }
 
@@ -3227,7 +3266,9 @@ async function deliverCommand(session: string, command: string): Promise<string>
 }
 
 function encodeCommand(command: string): string {
-  if (!command.includes('\n')) return shellQuote(command);
+  // Same test as `commandLine`: anything the terminal would treat as a keystroke
+  // has to travel as data rather than as typed text.
+  if (!command.includes('\n') && !TTY_EATS_RE.test(command)) return shellQuote(command);
   const b64 = Buffer.from(command, 'utf8').toString('base64');
   return `"$(printf %s ${shellQuote(b64)} | base64 -d)"`;
 }

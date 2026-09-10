@@ -59,7 +59,11 @@ semantics, typed arguments, no shell quoting: `list`, `new`, `run`, `start`,
 `poll`, `read`, `send`, `wait`, `request_human`, `requests`, `await_human`,
 `kill`.
 Reach for the `ath` CLI only when MCP is not registered, or for `attach`,
-`purge`, `doctor` and `watch`, which have no MCP equivalent by design.
+`watch`, which has no MCP equivalent by design. `purge` and `doctor` exist on
+BOTH — they were added to MCP after agents told to leave nothing behind could
+not, because the commands that clear and enumerate the artifacts were CLI-only.
+The CLI's `doctor --artifacts` is still the richer of the two: it adds sizes and
+the paragraph about what a remote host receives.
 
 The examples below are written in CLI syntax because it is the more compact
 form to read. **Both surfaces use the same field names** — `exit_code`,

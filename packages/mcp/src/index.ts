@@ -17,6 +17,7 @@ import {
   list,
   listAllRequests,
   listRequests,
+  logNearTrim,
   logPath,
   ATH_ARTIFACTS,
   ATH_HOME,
@@ -427,10 +428,29 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           Number(args.since),
           args.max_bytes === undefined ? undefined : Number(args.max_bytes),
         );
+        // The log is near its ceiling, whether or not the cap fired.
+        //
+        // This warning used to ride only on the omission marker, so `read` was
+        // silent when nothing was elided — a reviewer read at an offset, got the
+        // neutral house note, and the very next poll at the SAME offset reported
+        // 49 MB about to be destroyed. `read --tail` is the cheap progress glance
+        // the docs recommend for long jobs, which made the recommended way to
+        // watch a big job the one that would not warn you it was eating itself.
+        const nearTrim = logNearTrim(await logSizeBytes(session).catch(() => 0));
         return json({
           session,
           output: result.output,
           next_offset: result.nextOffset,
+          ...(nearTrim === undefined
+            ? {}
+            : {
+                log_near_trim_bytes: nearTrim,
+                log_near_trim_note:
+                  `This session's log is ${Math.floor(nearTrim / 1048576)} MiB and is rewritten ` +
+                  `to its last 8 MiB once it passes 32 MiB, at the START of the next command. ` +
+                  `Offsets from before that point will return lost_bytes. If you need this ` +
+                  `job's output, write it to a file on the host now.`,
+              }),
           ...(result.lostBytes === undefined
             ? {}
             : {
@@ -568,6 +588,25 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // reviewer polled a job ending in `; date`, got `exit_code: 0` with no
       // caveat, and noted that an agent which had learned "the hub flags this
       // for me" would be walked into the trap by the flag's absence.
+      // The log is near its ceiling, whether or not the cap fired.
+      //
+      // This warning used to ride only on the omission marker, so `read` was
+      // silent when nothing was elided — a reviewer read at an offset, got the
+      // neutral house note, and the very next poll at the SAME offset reported
+      // 49 MB about to be destroyed. `read --tail` is the cheap progress glance
+      // the docs recommend for long jobs, which made the recommended way to
+      // watch a big job the way that would not warn you it was eating itself.
+      {
+        const near = logNearTrim(await logSizeBytes(session).catch(() => 0));
+        if (near !== undefined) {
+          payload.log_near_trim_bytes = near;
+          payload.log_near_trim_note =
+            `This session's log is ${Math.floor(near / 1048576)} MiB and is rewritten to its ` +
+            `last 8 MiB once it passes 32 MiB, at the START of the next command. Offsets from ` +
+            `before that point will return lost_bytes. If you need this job's output, write it ` +
+            `to a file on the host now.`;
+        }
+      }
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
       // Output that is GONE, said out loud.
       //
@@ -1253,6 +1292,14 @@ async function parallelHint(current: string): Promise<string> {
     );
   } catch {
     return 'To run something alongside this, use a different session — this one is occupied until it finishes.';
+  }
+}
+
+async function logSizeBytes(session: string): Promise<number> {
+  try {
+    return (await fsp.stat(logPath(session))).size;
+  } catch {
+    return 0;
   }
 }
 

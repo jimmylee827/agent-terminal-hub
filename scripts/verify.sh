@@ -1141,6 +1141,35 @@ chk "and no longer says transcript only"     "0" \
 chk "the doc names the timing exception"     "yes" \
     "$(grep -q 'with ONE exception' "$SK" && echo yes || echo no)"
 
+# ---- a literal tab must not be eaten by the terminal -------------------------
+#
+# In a real TTY a tab is a COMPLETION KEYSTROKE, not a character, so a literal
+# tab inside a quoted pattern never reaches the shell. A reviewer wrote
+# `grep -E '^[a-z0-9_]+:|^<TAB>inet '` against ifconfig, got every interface
+# line and NOT ONE address line, exit 0, no diagnostic. Reproduced exactly before
+# the fix: 6 interface lines, 0 address lines. They called it their worst error
+# and noted the docs warn at length that the TTY changes program OUTPUT while
+# never saying it eats your INPUT.
+#
+# Newline was already routed through the encoded path for the same underlying
+# reason. The rule was right; the list was one character short.
+chk "control characters force the encoded path" "yes" \
+    "$(grep -q 'TTY_EATS_RE.test(command)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and encodeCommand uses the same test"      "3" \
+    "$(grep -c 'TTY_EATS_RE' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+TABOK="$(node "$RP/scripts/tabcheck.js" 2>/dev/null)"
+chk "a tabbed pattern actually matches now" "yes" "$TABOK"
+
+# The near-trim warning is a property of the LOG, not of whether the cap fired.
+chk "read and poll both warn near the ceiling" "2" \
+    "$(grep -c 'log_near_trim_bytes' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "the threshold is shared, not duplicated"  "yes" \
+    "$(grep -q 'export function logNearTrim' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# The doc must not deny MCP tools that exist.
+chk "the skill no longer denies MCP purge/doctor" "yes" \
+    "$(grep -q 'purge\` and \`doctor\` exist on' "$SK" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
