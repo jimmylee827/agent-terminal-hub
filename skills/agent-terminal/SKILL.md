@@ -64,7 +64,12 @@ Reach for the `ath` CLI only when MCP is not registered, or for `attach`,
 The examples below are written in CLI syntax because it is the more compact
 form to read. **Both surfaces use the same field names** — `exit_code`,
 `needs_input`, `timed_out`, `next_offset`, `log_offset`, `last_command`,
-`pane_width` — so nothing needs translating as you read. (They diverged once,
+`pane_width` — so nothing needs translating as you read, with ONE exception.
+The timing fields differ on purpose: the CLI publishes `elapsed_seconds` in both
+states, while MCP splits it into `took_seconds` when the job is done and
+`running_for_seconds` while it is not, because a finished six-second job
+labelled "running for 6 seconds" reads as still going. `ran_between_seconds` is
+the MCP name for the `elapsed_lower_seconds`/`elapsed_upper_seconds` pair. (They diverged once,
 CLI camelCase against MCP snake_case, and this file carried a mapping table;
 an agent noted that a table "means the doc knows this is a cost and passes it
 to me anyway". Both now serialise through one function.)

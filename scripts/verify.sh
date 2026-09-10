@@ -1120,6 +1120,27 @@ chk "the skill budgets a spare for the park" "yes" \
 chk "and says a parked session blocks all work" "yes" \
     "$(grep -q 'not just for privileged work' "$SK" && echo yes || echo no)"
 
+# ---- surface parity, enforced mechanically ----------------------------------
+#
+# Three quarters of everything fourteen cold reviewers found was ONE shape: a
+# fact known in one place and not carried to another surface. exit_code_covers
+# on run but not poll. asked_for_you in the CLI table but not MCP. omitted_bytes
+# in the CLI and not MCP. max_bytes in the handler and not the schema. launched
+# only when false. fallback_shell invisible on the surface the docs tell agents
+# to prefer. handle absent from MCP run — the very field added because a
+# reviewer said "handles exist that I have no other way to discover".
+#
+# None of those needed an agent to find. They needed this check. Running it the
+# first time found four more, and a second pass found three beyond that.
+chk "every result field reaches its surface" "0" \
+    "$(node "$RP/scripts/parity.js" 2>/dev/null | sed -n 's/.*, \([0-9]*\) missing/\1/p')"
+chk "MCP purge clears request records too"   "yes" \
+    "$(grep -q 'purgeSessionRequests(session)' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and no longer says transcript only"     "0" \
+    "$(grep -c 'the session transcript only' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "the doc names the timing exception"     "yes" \
+    "$(grep -q 'with ONE exception' "$SK" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

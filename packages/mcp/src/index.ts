@@ -26,6 +26,7 @@ import {
   readSince,
   readTail,
   purgeLog,
+  purgeSessionRequests,
   requestHuman,
   run,
   setPinned,
@@ -287,6 +288,15 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // agent working here could not find what it had been promised — the
         // same shape of gap as a doc naming a field in the wrong spelling.
         log_offset: result.logOffset,
+        // Every command HAS a handle, and this surface never published it.
+        //
+        // The field was added to the core result two rounds ago because a
+        // reviewer found `await_human` handing back a handle for a command that
+        // had never issued one — "handles exist that I have no other way to
+        // discover". The fix reached the CLI through the generic serializer and
+        // stopped there, so on the surface the docs tell agents to PREFER, the
+        // situation it was written to fix still held.
+        handle: result.handle,
         // And the one that points FORWARD. Without it `log_offset` was the only
         // offset a run caller had, and it marks where this command STARTED — a
         // reviewer fed it to `read --since` and re-read the command it had just
@@ -329,6 +339,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         payload.omitted_bytes = result.omittedBytes;
         payload.omitted_resume_from = result.omittedResumeFrom;
       }
+      // The remote shell was REBUILT. Anything not captured in exported state —
+      // a background job, a shell function, an unexported variable — did not
+      // survive, and a caller assuming otherwise is exactly what this prevents.
+      // Emitted by the CLI through the generic serializer and hand-omitted here.
+      if (result.reconnecting) payload.reconnecting = true;
+      // The framing was torn down and rebuilt DURING this command. It is what
+      // `capture_incomplete` is built on top of, and it was invisible on the
+      // surface the docs tell agents to prefer — the CLI had it via toWire, MCP
+      // never emitted it, so an MCP agent could not see the condition that
+      // explains an odd result.
+      if (result.fallbackShell) payload.fallback_shell = true;
+      if (result.omittedAtRisk) payload.omitted_at_risk = true;
       if (result.paneWidthChanged) {
         payload.pane_width_changed = result.paneWidthChanged;
         // Do not overwrite the louder notice above.
@@ -353,6 +375,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // produced, never that anyone could see it.
       if (result.warning) payload.warning = result.warning;
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
+      // Same judgment `read` carries: the resume offer may already be void.
+      if (result.omittedAtRisk) payload.omitted_at_risk = true;
       if (result.exitCodeCaveat) payload.exit_code_caveat = result.exitCodeCaveat;
 
       if (result.needsHuman) {
@@ -553,6 +577,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // `since` that was passed — an agent following a 46 MB job read that as
       // "no new output", and ~38 MB of its results were gone under a
       // documented promise that nothing would be.
+      // Same judgment `read` carries: the resume offer may already be void.
+      if (result.omittedAtRisk) payload.omitted_at_risk = true;
+      // How much was elided and where to get it — as DATA, not only as prose
+      // inside the output.
+      //
+      // `read` published these and `poll` did not, so a caller following a long
+      // job through poll saw a bracketed marker in the text and had no field to
+      // act on. The same asymmetry `run` had until it was fixed, one tool over.
+      if (result.omittedBytes !== undefined) {
+        payload.omitted_bytes = result.omittedBytes;
+        payload.omitted_resume_from = result.omittedResumeFrom;
+      }
       if (result.lostBytes !== undefined) {
         payload.lost_bytes = result.lostBytes;
         payload.lost_note =
@@ -1053,10 +1089,21 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // decision, not substituting its own. It still cannot reach anyone
       // else's data: one named session, transcript only.
       const { bytes, survives } = await purgeLog(session);
+      // The request records too, exactly as the CLI does.
+      //
+      // This called `purgeLog` alone, so over MCP the one command you run after
+      // a secret lands left `requests/` intact — and its `reason` quotes the
+      // command verbatim, which is the entire reason purge was widened to cover
+      // it. The CLI got that fix through its own call site; this surface kept
+      // the old behaviour AND described it with the old sentence.
+      const requestsCleared = await purgeSessionRequests(session).catch(() => 0);
       return json({
         session,
         bytes_discarded: bytes,
-        cleared: 'the session transcript only',
+        requests_cleared: requestsCleared,
+        cleared:
+          'the session transcript and its request records — the two places a command is ' +
+          'stored word for word',
         still_on_disk: survives.map((a) => ({ path: `~/.ath/${a.name}`, holds: a.holds })),
         note: 'Run the `doctor` tool for the complete list, including what nothing removes.',
       });
