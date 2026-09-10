@@ -428,8 +428,18 @@ async function readLogRange(file: string, start: number, length: number): Promis
 
 export interface CappedSlice {
   raw: string;
-  /** Bytes dropped from the middle, and the `since` that returns them. */
-  omitted?: { bytes: number; resumeFrom: number };
+  /**
+   * Bytes dropped from the middle, the `since` that returns them, and whether
+   * that offer is about to expire.
+   *
+   * `atRisk` travels WITH the numbers because a caller rendering them has no
+   * way to work it out. The MCP layer built its own note from a flat string
+   * saying the bytes were "NOT lost", while this module's inline marker in the
+   * SAME response said they were "likely to be DESTROYED". A reviewer received
+   * both at once, tested it, and found the prose right and the field wrong —
+   * the dangerous way round, because the field is the machine-readable half.
+   */
+  omitted?: { bytes: number; resumeFrom: number; atRisk?: boolean };
 }
 
 /**
@@ -624,7 +634,15 @@ async function readLogCapped(
       `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
   return {
     raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
-    omitted: { bytes, resumeFrom: logicalResume },
+    // `atRisk` travels WITH the numbers, because the caller that renders them
+    // has no way to work it out. The MCP layer built its own `omitted_note`
+    // from a flat string saying the bytes are "NOT lost", while this function's
+    // inline marker in the SAME response said they were "likely to be
+    // DESTROYED". A reviewer got both at once, tested it, and found the prose
+    // right and the field wrong — the dangerous way round, since the field is
+    // the machine-readable half. Now there is one judgment and both renderings
+    // read it.
+    omitted: { bytes, resumeFrom: logicalResume, atRisk: trimIsClose },
   };
 }
 
@@ -2729,6 +2747,8 @@ export async function poll(
           // Already logical — `readLogCapped` renders the marker text from the
           // same number, so the two can no longer disagree.
           omittedResumeFrom: slice.omitted.resumeFrom,
+          // And whether that offer is about to expire, for the same reason.
+          ...(slice.omitted.atRisk ? { omittedAtRisk: true } : {}),
         }),
     // Trimmed out from under the caller. Reported rather than left to be
     // inferred from a `next_offset` smaller than the `since` that was passed —
@@ -3254,6 +3274,15 @@ export async function readSince(
   nextOffset: number;
   omittedBytes?: number;
   omittedResumeFrom?: number;
+  /**
+   * The resume offer above is about to expire — the log is near its trim point.
+   *
+   * Declared here because the MCP layer rendered its own note from a flat
+   * string saying the omitted bytes were "NOT lost", in the same response whose
+   * inline marker said they were "likely to be DESTROYED". One judgment, two
+   * renderings, and only one of them knew the log size.
+   */
+  omittedAtRisk?: boolean;
   /** Requested bytes trimmed away before this call. Output starts later. */
   lostBytes?: number;
   /** The offset was past the end of the log. */
@@ -3280,6 +3309,8 @@ export async function readSince(
           // Already logical — `readLogCapped` renders the marker text from the
           // same number, so the two can no longer disagree.
           omittedResumeFrom: slice.omitted.resumeFrom,
+          // And whether that offer is about to expire, for the same reason.
+          ...(slice.omitted.atRisk ? { omittedAtRisk: true } : {}),
         }),
     ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
     ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),

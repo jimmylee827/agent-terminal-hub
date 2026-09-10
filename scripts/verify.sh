@@ -1090,6 +1090,36 @@ chk "and it is computed from open requests" "yes" \
 chk "singular sessions read grammatically"  "yes" \
     "$(grep -q "belongs' : 'belong'" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
+# ---- the omission note and its marker must not contradict each other ---------
+#
+# One `read` response carried both: an inline marker saying the omitted bytes
+# were "likely to be DESTROYED", and an `omitted_note` field saying they were
+# "NOT lost". A reviewer tested it — the prose was right, the field was wrong,
+# and reading the offset the field recommended returned lost_bytes. That is the
+# dangerous way round, because the field is the machine-readable half. It also
+# did not self-correct: the next read carried the same reassuring shape beside a
+# correct `lost_bytes`.
+#
+# Cause: the durability judgment was made in core, which knows the log size, and
+# rendered in two places — the second built its own flat string. Now `atRisk`
+# travels with the numbers and both renderings read it.
+chk "the risk judgment travels with the numbers" "yes" \
+    "$(grep -q 'atRisk: trimIsClose' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the MCP note branches on it"                "yes" \
+    "$(grep -q 'omitted_note: result.omittedAtRisk' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "no flat NOT-lost assertion remains"         "0" \
+    "$(grep -c 'They are NOT lost' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "the safe wording is snapshot-shaped"        "yes" \
+    "$(grep -q 'on disk as of this call' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# A parked session blocks EVERYTHING, so the recommended session count has to
+# budget for it. An agent followed "a typical audit is two", had `work` park on
+# sudo while `bulk` ran its long job, and had zero usable sessions mid-audit.
+chk "the skill budgets a spare for the park" "yes" \
+    "$(grep -q 'A typical audit is three' "$SK" && echo yes || echo no)"
+chk "and says a parked session blocks all work" "yes" \
+    "$(grep -q 'not just for privileged work' "$SK" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

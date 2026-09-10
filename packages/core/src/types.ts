@@ -235,6 +235,8 @@ export interface RunResult {
   omittedBytes?: number;
   /** The `since` that returns the command's full region. See `omittedBytes`. */
   omittedResumeFrom?: number;
+  /** See `omittedAtRisk` on PollResult: the resume offer may already be void. */
+  omittedAtRisk?: boolean;
 }
 
 export interface StartResult {
@@ -301,6 +303,16 @@ export interface PollResult {
   omittedBytes?: number;
   /** The `since` that returns what `omittedBytes` counts. */
   omittedResumeFrom?: number;
+  /**
+   * The offer above is about to expire: the log is near its trim point, so
+   * `omittedResumeFrom` will probably return `lostBytes` rather than output.
+   *
+   * Exists because the durability judgment was made in one place and rendered
+   * in two. The inline marker knew the log size and said the bytes were
+   * "likely to be DESTROYED"; the MCP field was a flat string saying they were
+   * "NOT lost", in the same response. Both now read this.
+   */
+  omittedAtRisk?: boolean;
   /**
    * Output that was TRIMMED AWAY before this call and cannot be returned.
    *

@@ -42,8 +42,14 @@ else — you say so, and they type it into the same terminal you are using.
    password prompt: elevation does not cross sessions (the sudo timestamp is
    per-tty), and `start` occupies a session for as long as its command runs.
    So: **one session for everything privileged, plus one more per long job you
-   want to run alongside it.** A typical audit is two — `work` and `bulk`.
-   Create them up front. Deciding later means a second prompt for the human.
+   want to run alongside it, plus a spare if you expect a credential prompt.**
+   A typical audit is three — `work`, `bulk`, and one to work in while `work` is
+   parked. Create them up front. Deciding later means a second prompt for the
+   human.
+   The spare is not padding. A session parked at a password prompt is blocked
+   for EVERYTHING, not just for privileged work — an agent followed the old
+   count of two, had `work` park on sudo while `bulk` ran its long job, and was
+   left with zero usable sessions in the middle of its audit.
 5. **Do not kill sessions you did not create**, unless asked.
 
 ## Which surface to use

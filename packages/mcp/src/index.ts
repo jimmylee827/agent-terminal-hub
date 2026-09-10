@@ -424,10 +424,27 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             : {
                 omitted_bytes: result.omittedBytes,
                 omitted_resume_from: result.omittedResumeFrom,
-                omitted_note:
-                  `${result.omittedBytes} bytes were left out of the middle to keep this ` +
-                  `readable. They are NOT lost — read them with since=${result.omittedResumeFrom}. ` +
-                  `Pass max_bytes: 0 if you want everything in one call.`,
+                // Reads the durability judgment; does not invent one.
+                //
+                // This was a flat string asserting the bytes are "NOT lost",
+                // while the inline marker in the SAME response — built in core,
+                // which knows the log size — said they were "likely to be
+                // DESTROYED". A reviewer received both at once, tested it, and
+                // found the prose right and the field wrong. That is the
+                // dangerous way round: the field is the machine-readable half
+                // an agent trusts. It also did not self-correct — the next read
+                // carried the same reassuring shape beside a correct
+                // `lost_bytes`.
+                ...(result.omittedAtRisk ? { omitted_at_risk: true } : {}),
+                omitted_note: result.omittedAtRisk
+                  ? `${result.omittedBytes} bytes were left out of the middle. This log is near ` +
+                    `its trim point, so since=${result.omittedResumeFrom} will PROBABLY return ` +
+                    `lost_bytes rather than output — do not plan to collect them later. Write ` +
+                    `this job's output to a file on the host instead.`
+                  : `${result.omittedBytes} bytes were left out of the middle to keep this ` +
+                    `readable. They are on disk as of this call — read them with ` +
+                    `since=${result.omittedResumeFrom}, or pass max_bytes: 0 for everything in ` +
+                    `one call. A later trim can still discard them.`,
               }),
           note: 'Pass next_offset as `since` on your next read to avoid re-reading this output.',
         });
