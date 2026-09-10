@@ -382,6 +382,24 @@ export interface PollResult {
    * Exactly the omission the `warning` field documents, one field over.
    */
   exitCodeCovers?: string;
+  /**
+   * How far in, as a NUMBER rather than something to derive.
+   *
+   * "Is it alive and how far in" is the question every long job raises, and the
+   * answer lived in two places a caller had to combine by hand: a climbing
+   * `nextOffset` and `elapsedSeconds`. Meanwhile the OUTPUT slot — where
+   * instinct reaches — returned a truncation marker and an arbitrary line from
+   * mid-stream, which says nothing about progress at all.
+   *
+   * A reviewer put it as the one thing they would change: "make progress
+   * watching a first-class operation … the information is all there; it's just
+   * not where instinct reaches for it." This is that.
+   *
+   * `bytes` counts what the command has produced since it started, not the
+   * whole log. Absent when the start offset is unknown, because a figure
+   * measured from the wrong origin is worse than none.
+   */
+  progress?: { bytes: number; seconds: number; bytesPerSecond: number };
   warning?: string;
 }
 

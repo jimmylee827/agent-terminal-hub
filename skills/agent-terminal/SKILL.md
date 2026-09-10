@@ -225,7 +225,7 @@ calling again is the right response.
 
 **A resize is reported to `poll` too, not just `run`.** A human attaching sets
 the pane size — usually to answer the prompt your job raised — and width-aware
-tools (`ps`, `docker ps`, `lsblk`) format themselves to it. `pane_width_changed`
+tools (`ps`, `docker ps`, `lsblk`) format themselves to it. `pane_width_changed` (its `explain` field is `true` the first time in a session, carrying the long note, and `false` after — the change is still reported, only the paragraph is dropped)
 now arrives on every poll while it differs, so you learn mid-job rather than
 after. The long explanation is given once per session; the short marker keeps
 coming.

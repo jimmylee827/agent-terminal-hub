@@ -1257,7 +1257,7 @@ chk "the manifest names the .trim sidecar" "yes" \
 # that had printed 72 MB and was told the command printed nothing. Their words:
 # "the sentence describes the command when it's really describing the window".
 chk "poll distinguishes an empty WINDOW" "yes" \
-    "$(grep -q "nothing new in this slice" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+    "$(grep -q 'no NEW output since your offset' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "and poll passes the window variant" "yes" \
     "$(grep -q "result.output, 'window'" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "while run still says the command"   "yes" \
@@ -1305,6 +1305,43 @@ chk "the doc points progress at poll"     "yes" \
     "$(grep -q 'poll\` is the instrument' "$SK" && echo yes || echo no)"
 chk "and no longer sells --tail 3 as progress" "yes" \
     "$(grep -q 'tail 3                      # progress' "$SK" && echo no || echo yes)"
+
+# ---- progress must be a field, not something to derive ----------------------
+#
+# "Is it alive and how far in" is the question every long job raises, and the
+# answer lived in two places a caller had to combine: a climbing next_offset and
+# running_for_seconds. Meanwhile the OUTPUT slot — where instinct reaches —
+# returned a truncation marker and one arbitrary line from mid-stream, which
+# says nothing about progress.
+#
+# A reviewer named it as the single thing they would change: "make progress
+# watching a first-class operation ... the information is all there; it's just
+# not where instinct reaches for it."
+PROG="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  await a.kill("pgx").catch(()=>{});
+  await a.create({name:"pgx",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("pgx").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const st=await a.start("pgx","for i in 1 2 3 4; do seq 1 300000; sleep 1; done");
+  await new Promise(r=>setTimeout(r,3000));
+  const p=await a.poll("pgx",st.handle,0,300);
+  const g=p.progress;
+  const ok = g && g.bytes>0 && g.seconds>0 && g.bytesPerSecond>0;
+  await a.sendKeys("pgx","C-c").catch(()=>{});
+  await a.kill("pgx").catch(()=>{});
+  process.stdout.write(ok?"hasProgress":"NOPROGRESS");
+})();
+' 2>/dev/null)"
+chk "poll reports progress as numbers" "yes" "$(printf '%s' "$PROG" | grep -q hasProgress && echo yes || echo no)"
+chk "and MCP publishes a readable summary" "yes" \
+    "$(grep -q 'bytes_per_second' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "progress is in the parity coverage"  "yes" \
+    "$(grep -q "\['poll', \['progress'\]\]" "$RP/scripts/parity.js" && echo yes || echo no)"
+
+# The empty-window sentence read as a statement about the command.
+chk "the empty-window message says WINDOW" "yes" \
+    "$(grep -q 'this is a window, not the whole command' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #

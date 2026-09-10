@@ -2812,6 +2812,19 @@ export async function poll(
     ...(done && session.lastCommand && compoundExitCaveat(session.lastCommand)
       ? { exitCodeCovers: compoundExitCaveat(session.lastCommand) }
       : {}),
+    // How far in, computed once here rather than left to the caller to derive
+    // from a climbing offset and an elapsed time.
+    ...(timing?.startOffset !== undefined && timing?.seconds !== undefined && timing.seconds > 0
+      ? {
+          progress: {
+            bytes: Math.max(0, at.logicalEnd - timing.startOffset),
+            seconds: timing.seconds,
+            bytesPerSecond: Math.round(
+              Math.max(0, at.logicalEnd - timing.startOffset) / timing.seconds,
+            ),
+          },
+        }
+      : {}),
     ...(staleSince
       ? {
           warning:

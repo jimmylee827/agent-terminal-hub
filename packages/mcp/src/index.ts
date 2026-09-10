@@ -141,7 +141,7 @@ function jsonWithOutput(
       type: 'text',
       text:
         emptyMeans === 'window'
-          ? '(nothing new in this slice — the command may have printed plenty outside it)\n'
+          ? '(no NEW output since your offset — this is a window, not the whole command; it may have printed a great deal before this point)\n'
           : '(no output — the command printed nothing)\n',
     });
   }
@@ -675,6 +675,24 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             `to a file on the host now.`;
         }
       }
+      // "Is it alive and how far in", as one field instead of two to combine.
+      //
+      // A reviewer named this as the single thing they would change: the answer
+      // lived in a climbing next_offset plus running_for_seconds, while the
+      // OUTPUT slot — where instinct reaches — returned a truncation marker and
+      // an arbitrary line from mid-stream. "The information is all there; it's
+      // just not where instinct reaches for it."
+      if (result.progress) {
+        const p = result.progress;
+        payload.progress = {
+          bytes: p.bytes,
+          seconds: p.seconds,
+          bytes_per_second: p.bytesPerSecond,
+          summary: `${fmtBytes(p.bytes)} produced in ${p.seconds}s (${fmtBytes(
+            p.bytesPerSecond,
+          )}/s)`,
+        };
+      }
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
       // Output that is GONE, said out loud.
       //
@@ -746,6 +764,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (result.elapsedSeconds !== undefined) {
         if (result.done) {
           payload.took_seconds = result.elapsedSeconds;
+        // Wall time, which for a command that PARKED includes however long the
+        // human took. A reviewer saw `took_seconds: 741` for `sudo -v` and
+        // called it "strange for a command that did nothing but wait" —
+        // correct, and worth saying rather than leaving them to work out why a
+        // one-second command took twelve minutes.
+        if (result.elapsedSeconds > 120 && /sudo|ssh|gpg|passphrase/i.test(String(args.command ?? ''))) {
+          payload.timing_note =
+            'Wall time, including any period this sat at a prompt waiting for a person. It is ' +
+            'not how long the command spent working.';
+        }
           if (result.elapsedExact) {
             payload.timing_note =
               'Measured by the shell that ran the command, not estimated by the hub.';
@@ -1379,6 +1407,15 @@ async function parallelHint(current: string): Promise<string> {
   } catch {
     return 'To run something alongside this, use a different session — this one is occupied until it finishes.';
   }
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const u = ['KiB', 'MiB', 'GiB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${u[i]}`;
 }
 
 async function logSizeBytes(session: string): Promise<number> {
