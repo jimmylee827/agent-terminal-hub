@@ -94,7 +94,24 @@ function widthNote(w: { from: number; to: number; seen?: number[]; explain?: boo
   );
 }
 
-function jsonWithOutput(value: Record<string, unknown>, output: string): ToolResult {
+function jsonWithOutput(
+  value: Record<string, unknown>,
+  output: string,
+  /**
+   * What an empty `output` MEANS here.
+   *
+   * 'command' — this is everything the command printed, and it printed nothing.
+   * 'window'  — this is what fell in the slice you asked for, and the slice was
+   *             empty; the command may have printed a great deal.
+   *
+   * They were the same sentence until a reviewer polled a job that had printed
+   * 72 MB and was told "(no output — the command printed nothing)". Literally
+   * true of the window, flatly false of the command, and they put the defect
+   * exactly: "the sentence describes the command when it's really describing
+   * the window".
+   */
+  emptyMeans: 'command' | 'window' = 'command',
+): ToolResult {
   // Output FIRST. An agent reported that "the thing I care about is never at
   // the top" — metadata is the smaller, more predictable half, so it reads
   // better underneath.
@@ -119,7 +136,13 @@ function jsonWithOutput(value: Record<string, unknown>, output: string): ToolRes
     //
     // It costs one line to make the negative affirmative, and a negative you
     // can read is the whole difference between a result and a guess.
-    blocks.push({ type: 'text', text: '(no output — the command printed nothing)\n' });
+    blocks.push({
+      type: 'text',
+      text:
+        emptyMeans === 'window'
+          ? '(nothing new in this slice — the command may have printed plenty outside it)\n'
+          : '(no output — the command printed nothing)\n',
+    });
   }
   blocks.push({ type: 'text', text: `--- ath ---\n${JSON.stringify(value, null, 2)}` });
   return { content: blocks };
@@ -208,11 +231,24 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           ...(askedFor.has(s.name) ? { asked_for_you: true } : {}),
           pinned: s.pinned,
           remote: s.remote,
-          // NOT necessarily humans. This is tmux's client count, and the VS
-          // Code panel attaches a real client per session it displays — so a
-          // session nobody has touched shows 1 whenever the editor is showing
-          // it. Labelled `attached_humans`, that read as "a person is here",
-          // and an agent reasonably could not account for the number.
+          // NOT a presence signal, in EITHER direction.
+          //
+          // This is tmux's client count. It over-reports: the VS Code panel
+          // attaches a real client per session it displays, so a session nobody
+          // has touched shows 1 whenever the editor is showing it. And it
+          // under-reports: answering a request from the editor's notification
+          // button attaches no tmux client at all, so a session someone
+          // demonstrably typed into can read 0 throughout.
+          //
+          // Three reviewers have now tried to read something into it. The third
+          // saw 0 while the human was typing a password into that very session,
+          // checked the documented caveat, and found it described only the
+          // over-count — "the field was uninformative in both directions and
+          // the documented caveat doesn't cover what I saw". They were right,
+          // and the caveat was half a caveat.
+          //
+          // What IS authoritative: the request outcome from `await_human`, and
+          // `sudo -n true` for elevation. Neither infers a person from a count.
           attached_clients: s.attached,
           // Reported because the docs warn that tmux truncates to this width
           // and then gave no way to see it. An agent found `MOUNTPOINT`
@@ -747,7 +783,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // Output as its own block, same as `run` — it was folded into the JSON
       // here, so a long job's output came back escaped while the identical
       // output from `run` came back raw.
-      return jsonWithOutput(payload, result.output);
+      return jsonWithOutput(payload, result.output, 'window');
     }
 
     case 'send': {

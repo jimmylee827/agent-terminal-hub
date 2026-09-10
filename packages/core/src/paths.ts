@@ -774,14 +774,33 @@ export async function rotateIfNeeded(
     await handle.close();
   }
 
+  // Start the kept tail at a LINE boundary.
+  //
+  // This kept a fixed byte count, so the surviving log began mid-line and the
+  // first thing any reader saw was a fragment of whatever had been running. A
+  // reviewer inferred it from arithmetic alone — the trim reported exactly
+  // 8,388,608 bytes, "which suggests it cuts mid-line" — and was right.
+  //
+  // The CAP already goes to some length to cut on newlines, for the reason
+  // written there: a line whole in neither half is loss wearing the shape of
+  // pagination. The trim, which destroys rather than elides, was doing the
+  // cruder thing. Costs at most one line out of 8 MiB.
+  //
+  // `discarded` is computed from the ALIGNED length, because every offset a
+  // caller holds is interpreted against it; using the pre-alignment number
+  // would shift every subsequent read by the length of one line.
+  const firstNewline = tail.indexOf(0x0a);
+  const aligned =
+    firstNewline >= 0 && firstNewline + 1 < tail.length ? tail.subarray(firstNewline + 1) : tail;
+
   // Truncate then write, rather than replacing the file, so the writer's fd
   // (held open by pipe-pane) continues to point at this same inode.
   await fs.truncate(file, 0);
-  await fs.writeFile(file, tail, { flag: 'r+' });
+  await fs.writeFile(file, aligned, { flag: 'r+' });
   // Count what was thrown away BEFORE returning, so no offset issued after
   // this point can be interpreted against the old file. See `discardedBytes`.
-  await addDiscardedBytes(name, size - keep);
-  return { rotated: true, from: size, to: keep };
+  await addDiscardedBytes(name, size - aligned.length);
+  return { rotated: true, from: size, to: aligned.length };
 }
 
 export interface PurgeResult {

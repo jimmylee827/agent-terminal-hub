@@ -1243,6 +1243,32 @@ chk "and the help documents it"              "yes" \
 chk "the manifest names the .trim sidecar" "yes" \
     "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'trim sidecar' && echo yes || echo no)"
 
+# ---- an empty result must say WHICH thing was empty ------------------------
+#
+# `jsonWithOutput` is shared by run, poll and read, and said the same sentence
+# for all three: "(no output — the command printed nothing)". True for `run`.
+# For `poll` it describes the WINDOW, not the command — a reviewer polled a job
+# that had printed 72 MB and was told the command printed nothing. Their words:
+# "the sentence describes the command when it's really describing the window".
+chk "poll distinguishes an empty WINDOW" "yes" \
+    "$(grep -q "nothing new in this slice" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and poll passes the window variant" "yes" \
+    "$(grep -q "result.output, 'window'" "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "while run still says the command"   "yes" \
+    "$(grep -q 'no output — the command printed nothing' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# The trim destroys; it should not also leave a fragment as the first line.
+chk "the trim starts on a line boundary" "yes" \
+    "$(grep -q 'const firstNewline = tail.indexOf' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "and discards the ALIGNED length"    "yes" \
+    "$(grep -q 'size - aligned.length' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+
+# attached_clients is wrong in BOTH directions; the caveat covered only one.
+chk "the caveat covers under-reporting too" "yes" \
+    "$(grep -q 'under-reports' "$SK" && echo yes || echo no)"
+chk "and names what IS authoritative"       "yes" \
+    "$(grep -q 'authoritative: the outcome from' "$SK" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

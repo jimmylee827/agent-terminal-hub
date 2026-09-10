@@ -581,10 +581,14 @@ in no file, and there is nothing to purge after a sudo handoff.
   has not been told. Relay it (step 1 above) and stop. Nothing you send can
   answer it: whatever you type lands in the password field as a failed login
   and consumes the prompt they were walking over to answer.
-- `attached` / `attached_clients` counts tmux CLIENTS, not people. The VS Code
-  panel attaches one per session it displays, so a session nobody has touched
-  commonly shows 1. Use it to know someone *could* be watching, never as proof
-  a human is present.
+- `attached` / `attached_clients` counts tmux CLIENTS, not people, and it is
+  wrong in BOTH directions. It over-reports: the VS Code panel attaches one per
+  session it displays, so a session nobody has touched commonly shows 1. It
+  under-reports: answering a request from the editor's notification button
+  attaches no tmux client at all, so a session someone demonstrably typed into
+  can read 0 the whole time. Do not infer presence from it either way. What is
+  authoritative: the outcome from `ath await` / `await_human` for "did they
+  answer", and `sudo -n true` for "am I still elevated".
 - Timing is measured by the shell, so it is exact and independent of your
   polling. Three earlier versions of this field were estimates and all three
   were badly wrong — a 47-second job reported as 256, and a 44-second job as
