@@ -996,6 +996,12 @@ chk "and it is ahead of log_offset"       "yes" "$(printf '%s' "$OFFS" | grep -q
 chk "reading from it does not re-read"    "yes" "$(printf '%s' "$OFFS" | grep -q noStaleReread && echo yes || echo no)"
 chk "MCP emits next_offset on run"        "yes" \
     "$(grep -q 'next_offset: result.nextOffset' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# Every run return, not just the completed one. The field was added to the happy
+# path only, so a shell-exit came back with logOffset and nothing pointing
+# forward — the same asymmetry it was added to remove, one code path over.
+# Caught by the prep smoke test rather than by a reviewer.
+chk "a shell-exiting command also gets one" "yes" \
+    "$($ATH_BIN run "$C" --json -- 'echo bye; exit 3' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);process.stdout.write(j.next_offset>j.log_offset?"yes":"no")}catch(e){process.stdout.write("no")}})')"
 
 # The cap must not fire when eliding saves almost nothing — three fragments and
 # a paragraph of prose in place of 762 bytes is friction, not pagination.

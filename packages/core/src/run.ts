@@ -1464,6 +1464,18 @@ async function runLocked(
   }
 
   /**
+   * Where output after this command starts, for the early returns.
+   *
+   * `nextOffset` was added to the completed path only, so a timeout or a
+   * shell-exit came back with `logOffset` and nothing pointing forward — the
+   * exact asymmetry the field was added to remove, one code path over. Found by
+   * the smoke test rather than by a reviewer, which is the argument for having
+   * one.
+   */
+  const nextOffsetNow = async (): Promise<number> =>
+    discarded + (await fs.stat(log).then((st) => st.size).catch(() => offset));
+
+  /**
    * What the command printed, for results that have no complete frame.
    *
    * Used by the timeout and shell-exited returns — cases where an end marker
@@ -1500,6 +1512,7 @@ async function runLocked(
       needsInput: false,
       state: 'dead',
       logOffset: discarded + offset,
+      nextOffset: await nextOffsetNow(),
       shellExited: true,
     };
   }
@@ -1553,6 +1566,7 @@ async function runLocked(
       state,
       ...(parkWidth ? { paneWidthChanged: parkWidth } : {}),
       logOffset: discarded + offset,
+      nextOffset: await nextOffsetNow(),
       handle: nonce,
       ...(parkedAsk ? { needsHuman: parkedAsk } : {}),
     };
@@ -1720,6 +1734,7 @@ async function runLocked(
       needsInput: true,
       state: 'needs-input',
       logOffset: discarded + offset,
+      nextOffset: await nextOffsetNow(),
       handle: nonce,
       needsHuman: parkedNow,
     };
