@@ -1805,6 +1805,24 @@ async function runLocked(
   const needsHuman = await raiseHumanWall(clean, command, fullOutput, nonce);
   const logSizeNow = await fs.stat(log).then((st) => st.size).catch(() => 0);
   const capped = capRunOutput(fullOutput, maxBytes, clean, discarded + offset, logSizeNow);
+  // The stderr/traversal warning is shown IN FULL once per session, then as a
+  // short marker — the same treatment `exit_code_caveat` already had.
+  //
+  // A reviewer noted the caveat "is shown once per session and it kept that
+  // promise", while the filesystem-walk warning "repeated in full on every
+  // matching call". Both are correct advice; only one of them had learned not
+  // to say it twenty times. The hazard still rides every affected command,
+  // because an agent joining mid-session has not seen the paragraph.
+  const rawBlindSpot =
+    (exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
+    traversalBlindSpot(command) ??
+    localPathBlindSpot(command, session.remote);
+  const blindSpotWarning = rawBlindSpot
+    ? (await firstCaveatFor(clean, 'warn'))
+      ? rawBlindSpot
+      : shortWarning(rawBlindSpot)
+    : undefined;
+
   const output = capped.text;
   // The pane can be resized by a human attaching — most often to answer the
   // very password prompt this command raised. Checked here, once per command,
@@ -1833,17 +1851,7 @@ async function runLocked(
     // — while it was looking at the SUDO_CACHED=yes the command had printed.
     // The traversal warning gets no such reprieve: `du` exits 0 while
     // under-reporting, which is the entire hazard.
-    ...(!needsHuman &&
-    ((exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
-      traversalBlindSpot(command) ??
-      localPathBlindSpot(command, session.remote))
-      ? {
-          warning:
-            (exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
-            traversalBlindSpot(command) ??
-            localPathBlindSpot(command, session.remote),
-        }
-      : {}),
+    ...(!needsHuman && blindSpotWarning ? { warning: blindSpotWarning } : {}),
     // Marked only when the number can actually MISLEAD, explained once.
     //
     // It used to mark every compound line. An agent that batches probes with
@@ -2376,6 +2384,22 @@ export async function start(name: string, command: string): Promise<StartResult>
       if (framed) await sendLine(clean, bare);
     }
     if (!framed) {
+      // Install the wrapper BEFORE using it, exactly as `run` already does.
+      //
+      // `run` checks `wrapperReady` and self-heals; `start` sent `__ath …`
+      // unconditionally, so a session whose helper had not finished installing
+      // answered `zsh: command not found: __ath` with `launched: false`. A
+      // reviewer hit that on the FIRST command after `new` on a remote host —
+      // reproduced here on all three of three concurrently created sessions —
+      // and was left to guess the recovery.
+      //
+      // Fixed HERE rather than at creation: arming every new session up front
+      // types the helper's source into the shared pane, which is what the
+      // "console clean" checks exist to prevent. That version was tried first
+      // and failed six of them.
+      if (!(await wrapperReady(clean))) {
+        await installHelper(clean, session.remote).catch(() => undefined);
+      }
       await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
     }
     await recordLast(clean, command, null);
@@ -2943,8 +2967,8 @@ function compoundExitCaveat(command: string): string | undefined {
  * always present and costs three words, and the explanation is shown once. The
  * hazard is never silent, and the paragraph never repeats.
  */
-async function firstCaveatFor(session: string): Promise<boolean> {
-  const flag = path.join(RC_DIR, `${session}.caveat`);
+async function firstCaveatFor(session: string, kind = 'caveat'): Promise<boolean> {
+  const flag = path.join(RC_DIR, `${session}.${kind}`);
   try {
     await fs.access(flag);
     return false;
@@ -3128,6 +3152,30 @@ function localPathBlindSpot(command: string, remote?: string): string | undefine
     `(your ordinary shell) to inspect hub state, and keep track of which host a question is ` +
     `about — the same slip one step out probes the wrong NETWORK.`
   );
+}
+
+/**
+ * The repeat form of a blind-spot warning: name the hazard, not the essay.
+ *
+ * The full paragraph is right the first time and noise the twentieth. A
+ * reviewer noticed the exit-code caveat "is shown once per session and it kept
+ * that promise" while the filesystem-walk warning "repeated in full on every
+ * matching call" — same advice, only one of which had learned not to repeat
+ * itself. The marker still rides every affected command, because an agent that
+ * joined mid-session never saw the paragraph.
+ */
+function shortWarning(full: string): string {
+  if (/discards stderr/.test(full)) {
+    return 'This walks a filesystem and discards stderr, so errors are invisible and the exit '  +
+      'code stays 0 — explained in full earlier this session.';
+  }
+  if (/references ~\/\.ath/.test(full)) {
+    return 'this references ~/.ath, which is on the machine driving the session, not the remote host — see the full note earlier this session.';
+  }
+  if (/sudo|credential/i.test(full)) {
+    return 'this command hides a credential prompt — see the full note earlier this session.';
+  }
+  return `${full.slice(0, 90).trimEnd()}… (explained in full earlier this session)`;
 }
 
 function traversalBlindSpot(command: string): string | undefined {

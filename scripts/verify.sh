@@ -1199,6 +1199,50 @@ chk "and the note reaches the payload"         "yes" \
 chk "it only fires when BOTH are passed"       "yes" \
     "$(grep -q 'args.since !== undefined && args.lines !== undefined' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
+# ---- a new session must be able to run its first command ---------------------
+#
+# `new` reported `state: idle` for a session that could not yet run anything. A
+# reviewer created three remote sessions in one batch and the first `start`
+# answered `zsh: command not found: __ath` with `launched: false`. Reproduced
+# here on ALL THREE, not just the one they reported.
+#
+# Their sentence is the standard: "a session reporting idle should be able to run
+# a command." Create waited 5 s for a readiness marker and, on silence, typed
+# NOTHING — right when ssh may be sitting on a password prompt, wrong when it is
+# not, because `start` does not self-heal the way `run` does. It now arms the
+# helper at creation when the pane is demonstrably not at a prompt.
+# Fixed in `start`, NOT at creation. Arming every new session up front types the
+# helper's source into the shared pane, which is what the "console clean" checks
+# exist to prevent — that version was tried first and failed six of them.
+chk "start self-heals before using the wrapper" "yes" \
+    "$(grep -q 'if (!(await wrapperReady(clean))) {' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and run still does the same"               "2" \
+    "$(grep -c 'await wrapperReady(clean)' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "launched:false names the recovery"       "yes" \
+    "$(grep -q 'TO RECOVER: run any trivial command here first' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "the doc lists the new-session cause"     "yes" \
+    "$(grep -q 'whose helper has not' "$SK" && echo yes || echo no)"
+
+# A repeated warning is a warning that gets skimmed.
+chk "the blind-spot warning shortens on repeat" "yes" \
+    "$(grep -q 'function shortWarning' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+# The marker keeps the phrase the human-facing check anchors on, so shortening
+# the repeat cannot silently break the "CLI shows the warning" assertion.
+chk "and still names the hazard every time"    "yes" \
+    "$(grep -q 'discards stderr, so errors are invisible' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the .warn sentinel is reaped"             "yes" \
+    "$(grep -q "'.warn'" "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+
+# The two surfaces named the same timeout differently and an agent invented a third.
+chk "ath await accepts the MCP spelling too" "yes" \
+    "$(grep -q "flags\['timeout-seconds'\]" "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and the help documents it"              "yes" \
+    "$($ATH_BIN --help 2>&1 | grep -q 'timeout-seconds also accepted' && echo yes || echo no)"
+
+# doctor's manifest is presented as exhaustive, so it must be.
+chk "the manifest names the .trim sidecar" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'trim sidecar' && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
@@ -1218,8 +1262,11 @@ chk "the local-path warning exists"        "yes" \
     "$(grep -q 'function localPathBlindSpot' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "it is wired into run"                 "yes" \
     "$(grep -q 'localPathBlindSpot(command, session.remote)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
-chk "it is wired into run AND start"       "3" \
-    "$(grep -c 'localPathBlindSpot(command, session.remote)' "$RP/packages/core/src/run.ts")"
+# Asserted as a PROPERTY, not a count. It was "3" and the refactor that gave the
+# warning its once-per-session form computes it once instead of twice — the
+# check was measuring the shape of the code rather than whether both paths warn.
+chk "it is wired into run AND start"       "yes" \
+    "$(grep -q 'rawBlindSpot' "$RP/packages/core/src/run.ts" && grep -q 'startWarning' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "skill states the hub runs locally"    "yes" \
     "$(grep -q 'The hub runs HERE, not on the remote host' "$SK" && echo yes || echo no)"
 chk "skill warns a missing path reads empty" "yes" \

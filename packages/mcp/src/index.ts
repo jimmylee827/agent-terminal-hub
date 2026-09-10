@@ -583,10 +583,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           ? {
               what_to_do:
                 'The command was sent but its frame never opened, so it may not be running. ' +
-                'Read the session (`read` with a small `lines`) to see what actually happened ' +
-                'before you poll — this handle may never complete. Do NOT just send it again: ' +
-                'if the session was only slow, the command is queued and re-sending runs it ' +
-                'twice.',
+                'Do NOT just send it again: if the session was only slow, the command is ' +
+                'queued and re-sending runs it twice. ' +
+                'TO RECOVER: run any trivial command here first (`run` with `echo ok`) — that ' +
+                're-arms the helper and tells you whether the shell is healthy — then re-issue ' +
+                'this start. If that `run` also misbehaves, `read` the session to see what the ' +
+                'pane is actually showing.',
             }
           : {}),
         ...(started.warning ? { warning: started.warning } : {}),

@@ -121,6 +121,7 @@ ${c.bold('Driving a session')}
   ath requests [--clear]           what the hub needs a human for
   ath await <name> [--handle H]    BLOCK until the human answers (for callbacks)
        [--text]                    send literal text plus Enter instead
+       [--timeout SEC]             default 1800; --timeout-seconds also accepted
   ath read <name> [--tail N] [--since N] [--max-bytes N] [--json]
   ath wait <name> [--timeout SEC] [--handle H]
 
@@ -755,7 +756,16 @@ async function main(): Promise<number> {
       // callback, with no polling in the agent's own turn and nothing for it to
       // remember.
       const name = requireName(positional[0]);
-      const deadline = Date.now() + flagNumber(flags, 'timeout', 1800) * 1000;
+      // Both spellings, because the two surfaces named the same thing
+      // differently and an agent invented a third. MCP's `await_human` takes
+      // `timeout_seconds`; this took `--timeout` and documented neither, so a
+      // reviewer guessed `--timeout-seconds` and fell back to a bare `ath await`
+      // when it was rejected. Accepting the MCP name costs nothing.
+      const timeoutSecs =
+        flags['timeout-seconds'] !== undefined
+          ? flagNumber(flags, 'timeout-seconds', 1800)
+          : flagNumber(flags, 'timeout', 1800);
+      const deadline = Date.now() + timeoutSecs * 1000;
       let handle = flagString(flags, 'handle');
       if (!handle) {
         const open = (await listRequests()).filter((r) => r.session === name && r.handle);

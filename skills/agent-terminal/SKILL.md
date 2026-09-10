@@ -112,14 +112,18 @@ ath poll web --handle <h> --since <n> --json
 # -> { done, exitCode, output, nextOffset }
 ```
 
-**Check that it started.** A shell without the hub's helper — a nested shell,
-a reconnected remote — answers the wrapper with `__ath: command not found`,
+**Check that it started.** A shell without the hub's helper — a nested shell, a
+reconnected remote, or a session created seconds ago whose helper has not
+finished installing (the most likely case: your very FIRST command after `new`
+on a remote host) — answers the wrapper with `__ath: command not found`,
 and the command never runs. `start` used to hand back a handle anyway, so that
 looked exactly like success and the handle could never complete. It now
 reports `launched: false` (the CLI prints `sent … (unconfirmed)` instead of
 `started`). If you see it, read the session before polling — and do **not**
 just send it again: if the session was merely slow, the command is queued and
-re-sending runs it twice.
+re-sending runs it twice. To recover, run any trivial command in that session
+first — `echo ok` — which re-arms the helper and tells you the shell is healthy,
+then re-issue the `start`.
 
 Pass the previous `next_offset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the

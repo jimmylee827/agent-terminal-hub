@@ -73,7 +73,9 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     // Labelled `log/<session>.log` it read as one file while showing the total
     // for all of them — a number that silently answered a different question.
     absolute: LOG_DIR,
-    holds: 'one <session>.log per session — every command run, and every byte it printed',
+    holds:
+      'one <session>.log per session — every command run and every byte it printed, plus a ' +
+      'tiny <session>.trim sidecar recording how much a trim discarded',
     purged: true,
     sensitive: true,
     // Says "each file" because the size printed beside it is the DIRECTORY's.
@@ -826,7 +828,7 @@ export async function purgeLog(name: string): Promise<PurgeResult> {
  * 241 and the oldest survivor was four days old. Adding state without adding
  * it here is the bug this comment exists to prevent.
  */
-const RC_SUFFIXES = ['.rc', '.t', '.caveat', '.boot', '.width', '.wnote'] as const;
+const RC_SUFFIXES = ['.rc', '.t', '.caveat', '.warn', '.boot', '.width', '.wnote'] as const;
 
 /** Remove sentinels left behind by commands that never completed. */
 export async function reapStaleRc(maxAgeMs = 6 * 60 * 60 * 1000): Promise<number> {
