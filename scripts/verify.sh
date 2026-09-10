@@ -935,6 +935,39 @@ chk "and still reports its exit code" "0" \
     "$($ATH_BIN run "$C" --json -- 'echo stillzero' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(String(JSON.parse(d).exit_code))}catch(e){process.stdout.write("x")}})')"
 
 
+# ---- a partial capture must still return what the command printed ------------
+#
+# The timeout and shell-exited returns call `partial()`, and it used
+# `extractBetweenMarkers` — which requires BOTH markers and answers '' when
+# either is missing. But those are exactly the results that have no end marker
+# BY DEFINITION: the command never got to write one. So every one of them threw
+# away output that was sitting in the log. `echo hello; exit 3` came back with
+# exit 3, shell_exited true, and nothing printed.
+#
+# Same family as every other silent-empty finding, reached from a different
+# direction, and found by smoke-testing after a cleanup rather than by a review.
+PART="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const o=[];
+(async()=>{
+  await a.create({name:"pt",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("pt").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const e3=await a.run("pt","echo hello; exit 3",{timeoutMs:20000});
+  o.push(e3.output==="hello"?"keepsOutputOnExit":"LOSTONEXIT");
+  o.push(e3.exitCode===3?"keepsCode":"CODEWRONG");
+  await new Promise(r=>setTimeout(r,2000));
+  const silent=await a.run("pt","true",{timeoutMs:20000});
+  o.push(silent.output===""?"silentStaysEmpty":"INVENTEDOUTPUT");
+  await a.kill("pt").catch(()=>{});
+  process.stdout.write(o.join(" "));
+})();
+' 2>/dev/null)"
+chk "output survives a shell-exiting command" "yes" "$(printf '%s' "$PART" | grep -q keepsOutputOnExit && echo yes || echo no)"
+chk "and its exit code is still exact"        "yes" "$(printf '%s' "$PART" | grep -q keepsCode         && echo yes || echo no)"
+chk "a silent command still returns empty"    "yes" "$(printf '%s' "$PART" | grep -q silentStaysEmpty  && echo yes || echo no)"
+chk "partial uses the lenient extractor"      "yes" \
+    "$(grep -q 'cleanSlice(trimToCommandWindow(await readLogFrom' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

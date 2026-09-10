@@ -1448,8 +1448,22 @@ async function runLocked(
     );
   }
 
+  /**
+   * What the command printed, for results that have no complete frame.
+   *
+   * Used by the timeout and shell-exited returns — cases where an end marker
+   * does not exist BY DEFINITION, because the command never got to write one.
+   * It called `extractBetweenMarkers`, which requires both markers and answers
+   * '' when either is missing, so every one of these results discarded output
+   * that was sitting in the log: `echo hello; exit 3` came back with exit 3,
+   * `shell_exited: true`, and nothing printed.
+   *
+   * `trimToCommandWindow` exists for exactly this — it cuts at whichever
+   * markers ARE present and tolerates the absent one. Demanding a complete
+   * frame from a capture defined as incomplete was the error.
+   */
   const partial = async (): Promise<string> =>
-    extractBetweenMarkers(await readLogFrom(log, offset), nonce, command);
+    cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
 
   if (completion.kind === 'lost') {
     throw new AthError(
