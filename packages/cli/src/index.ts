@@ -1094,6 +1094,20 @@ async function main(): Promise<number> {
           `\n  ${c.dim('ath purge <name>')} clears the lines marked "purged", and only for that session.`,
         );
 
+        // Said BEFORE the "nothing is written" line, not after it.
+        //
+        // A reviewer read the remote paragraph's headline — "nothing is
+        // written. No files, no directories" — having just written five files
+        // to that host's /tmp. The paragraph does cover it two lines later, but
+        // they put the risk exactly: the headline "is the sentence a skimming
+        // agent would quote back to you as 'I left nothing behind'".
+        console.log(
+          `\n${c.bold('On a remote host')} ${c.dim('(ath new --remote HOST)')} — this covers the HUB only.`,
+        );
+        console.log(
+          `  ${c.dim('Whatever YOUR commands wrote there is yours, and is not listed here.')}`,
+        );
+
         // The remote side, because that is the question people actually ask.
         //
         // This whole command answers "what did this leave on MY machine?" while
@@ -1103,9 +1117,8 @@ async function main(): Promise<number> {
         // obtainable from any surface. Absence is worth printing: unverifiable
         // absence is indistinguishable from something overlooked, and an
         // auditor who cannot show a host is clean has to assume it is not.
-        console.log(`\n${c.bold('On a remote host')} ${c.dim('(ath new --remote HOST)')}`);
         for (const line of [
-          'nothing is written. No files, no directories, no rc-file edits.',
+          'The hub writes nothing. No files, no directories, no rc-file edits.',
           'The shell helper is TYPED into the pane — functions in memory only,',
           'gone when the shell exits. tmux, the transcript and every file above',
           'live on THIS machine; ssh carries only the connection.',

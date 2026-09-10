@@ -422,6 +422,30 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
 
     case 'read': {
       const session = String(args.session ?? '');
+      // `since` and `lines` are different modes, and passing both silently
+      // discarded one of them.
+      //
+      // A reviewer asked for `lines: 2, since: N` expecting two lines of
+      // progress. `since` won, `lines` was ignored, the 64 KiB cap applied, and
+      // 65,927 characters came back — enough to break their harness. The hub
+      // emitted NOTHING; the only error came from their caller, about token
+      // count. Their words: it "did something other than what I asked and said
+      // nothing", and it is the one place in the session they were left
+      // guessing.
+      //
+      // Precedence is kept — changing which mode wins would break callers that
+      // rely on today's behaviour — but it is now stated, in the result, at the
+      // moment it happens.
+      const bothModes = args.since !== undefined && args.lines !== undefined;
+      const modeNote = bothModes
+        ? {
+            note:
+              'You passed BOTH `since` and `lines`. They are different modes and `since` won: ' +
+              '`lines` was ignored and this is incremental output from that offset, not a tail. ' +
+              'Use `lines` alone for a tail window, or keep `since` and cap the volume with ' +
+              '`max_bytes`.',
+          }
+        : {};
       if (args.since !== undefined) {
         const result = await readSince(
           session,
@@ -438,6 +462,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // watch a big job the one that would not warn you it was eating itself.
         const nearTrim = logNearTrim(await logSizeBytes(session).catch(() => 0));
         return json({
+          ...modeNote,
           session,
           output: result.output,
           next_offset: result.nextOffset,

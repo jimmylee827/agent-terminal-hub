@@ -351,8 +351,19 @@ chk "doctor marks requests/ as purged" "purged" \
 # hand. Absence that cannot be shown is indistinguishable from an oversight.
 chk "doctor states the remote footprint" "yes" \
     "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'On a remote host' && echo yes || echo no)"
-chk "doctor says nothing is written remotely" "yes" \
-    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'nothing is written' && echo yes || echo no)"
+# The caveat comes BEFORE the headline, not two lines after it. A reviewer read
+# "nothing is written. No files, no directories" having just written five files
+# to that host, and put the risk exactly: that headline "is the sentence a
+# skimming agent would quote back to you as 'I left nothing behind'".
+chk "and scopes it to the HUB before saying nothing" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'this covers the HUB only' && echo yes || echo no)"
+chk "and names your own writes first"               "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'Whatever YOUR commands wrote there' && echo yes || echo no)"
+# Wording changed when the HUB-only scoping moved above the headline; the
+# invariant is unchanged — doctor must still state the hub's remote footprint is
+# empty.
+chk "doctor says the hub writes nothing remotely" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'The hub writes nothing' && echo yes || echo no)"
 
 # log/ must not advertise a per-file bound as though it bounded the directory.
 chk "log/ says the directory has no ceiling" "yes" \
@@ -1169,6 +1180,24 @@ chk "the threshold is shared, not duplicated"  "yes" \
 # The doc must not deny MCP tools that exist.
 chk "the skill no longer denies MCP purge/doctor" "yes" \
     "$(grep -q 'purge\` and \`doctor\` exist on' "$SK" && echo yes || echo no)"
+
+# ---- read must say when it ignored one of your arguments --------------------
+#
+# `since` and `lines` are different modes. Passing both silently discarded one:
+# a reviewer asked for `lines: 2, since: N` expecting two lines of progress, got
+# 65,927 characters back — enough to break their harness — and the hub emitted
+# NOTHING. The only error came from their caller, about token count. Their
+# words: it "did something other than what I asked and said nothing", and it was
+# the one place in the whole session they were left guessing.
+#
+# Precedence is unchanged, because changing which mode wins would break callers
+# relying on today s behaviour. It is now STATED, in the result, when it happens.
+chk "read explains the since/lines precedence" "yes" \
+    "$(grep -q 'You passed BOTH .since. and .lines.' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and the note reaches the payload"         "yes" \
+    "$(grep -q '\.\.\.modeNote' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "it only fires when BOTH are passed"       "yes" \
+    "$(grep -q 'args.since !== undefined && args.lines !== undefined' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
