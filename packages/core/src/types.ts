@@ -133,7 +133,25 @@ export interface RunResult {
   needsInput: boolean;
   state: SessionState;
   /** Byte offset in the log where this command's output began. */
+  /**
+   * Where this command's own block BEGINS in the session log.
+   *
+   * NOT a resume point, and named closely enough to `next_offset` that a
+   * reviewer assumed it was one: feeding it to `read --since` re-returns the
+   * command you just ran. It was in every `run` result and documented nowhere,
+   * so the only way to learn the difference was to burn calls proving it.
+   * `nextOffset` below is the one to pass forward.
+   */
   logOffset: number;
+  /**
+   * Where output AFTER this command starts — the offset to pass to `read
+   * --since` or `poll` to see what happens next.
+   *
+   * `read` and `poll` both returned this and `run` did not, which left the
+   * similarly-named `logOffset` as the only offset a `run` caller had, and it
+   * points the opposite way.
+   */
+  nextOffset?: number;
   /**
    * The command ended the session's shell (it contained `exit`, or killed the
    * shell some other way). Commands run in the session's own shell so that

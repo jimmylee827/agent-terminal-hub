@@ -99,6 +99,9 @@ const MAX_RETURN_BYTES = 64 * 1024;
  */
 const CAP_HEAD_FRACTION = 0.25;
 
+/** Below this, eliding costs the reader more than the bytes would. */
+const CAP_MIN_OMISSION = 4096;
+
 /** How much of a log `readTail` looks at. Bounded so cost is independent of log size. */
 const TAIL_WINDOW_BYTES = 256 * 1024;
 
@@ -566,6 +569,18 @@ async function readLogCapped(
 
   // Alignment ate the whole gap; there is nothing to omit, so do not pretend.
   if (tailFrom <= resumeFrom) return { raw: await readLogFrom(file, start) };
+  // Nor when the saving is trivial.
+  //
+  // The cap fired on any overshoot at all, so asking for 600 bytes of a 762-byte
+  // range returned a 40-byte head, an omission marker, and a tail — three
+  // fragments and a paragraph of prose in place of 762 bytes. A reviewer called
+  // it friction on "the small confirmatory reads that make up most of an audit",
+  // and it made their own offset experiment inconclusive by eliding exactly the
+  // discriminating bytes. Head-plus-tail earns its keep on megabytes; below a
+  // few KiB the marker costs more comprehension than the bytes cost context.
+  if (tailFrom - resumeFrom < CAP_MIN_OMISSION) {
+    return { raw: dropLeadingMarkerFragment(await readLogFrom(file, start)) };
+  }
 
   const head = headBuf.subarray(0, headBytes).toString('utf8');
   const tail = tailBuf.subarray(tailSkip).toString('utf8');
@@ -1823,6 +1838,9 @@ async function runLocked(
     state,
     ...(widthChange ? { paneWidthChanged: widthChange } : {}),
     logOffset: discarded + offset,
+    // The END of this command's region, so a caller has an offset that points
+    // FORWARD. `logOffset` points at the start and reads as a resume point.
+    nextOffset: discarded + offset + Buffer.byteLength(raw, 'utf8'),
     ...(trimmedBytes ? { logTrimmedBytes: trimmedBytes } : {}),
     // Every command HAS a handle; only some results used to carry one.
     //

@@ -4,6 +4,7 @@ import { promises as fsp } from 'node:fs';
 import {
   augmentRequestReason,
   assertRemoteConnected,
+  ancestorPids,
   attachedClientsNote,
   AthError,
   commandOutcome,
@@ -268,6 +269,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // agent working here could not find what it had been promised — the
         // same shape of gap as a doc naming a field in the wrong spelling.
         log_offset: result.logOffset,
+        // And the one that points FORWARD. Without it `log_offset` was the only
+        // offset a run caller had, and it marks where this command STARTED — a
+        // reviewer fed it to `read --since` and re-read the command it had just
+        // run, then had to establish the difference empirically because nothing
+        // documented it.
+        ...(result.nextOffset !== undefined ? { next_offset: result.nextOffset } : {}),
       };
 
       // The only silent-corruption path in the tool, finally given a voice.
@@ -1104,18 +1111,46 @@ async function parallelHint(current: string): Promise<string> {
     // than a leaked keystroke — but a suggestion that has to be rescued by a
     // downstream guard should not be made.)
     const asked = new Set((await listRequests().catch(() => [])).map((r) => r.session));
-    const free = (await list())
-      .filter(
-        (s) => s.name !== current && s.state === 'idle' && !s.paneDead && !asked.has(s.name),
-      )
-      .map((s) => s.name);
-    if (free.length === 0) {
+    const freeSessions = (await list()).filter(
+      (s) => s.name !== current && s.state === 'idle' && !s.paneDead && !asked.has(s.name),
+    );
+    // Whose session is this? Offering someone ELSE'S as your workspace is advice
+    // that contradicts the tool's own rule about not touching sessions you did
+    // not create.
+    //
+    // A reviewer was told to work alongside in `zz-load` and `zz-probe` —
+    // neither of which it created, both belonging to a concurrent load test
+    // running a near-identical job against the same host. It declined, and said
+    // the field "should filter to sessions the caller created, or at minimum
+    // mark provenance". Taking the suggestion would have landed its audit
+    // commands inside another run.
+    //
+    // `creatorPids` is the ancestor chain recorded at creation, so a shared pid
+    // means the same process tree made it. Ours are offered; anything else is
+    // named but flagged, because "no session is free" would be its own lie when
+    // one plainly is.
+    const mine = new Set(ancestorPids());
+    const isOurs = (s: { creatorPids?: number[] }): boolean =>
+      (s.creatorPids ?? []).some((pid) => mine.has(pid));
+    const ours = freeSessions.filter(isOurs).map((s) => s.name);
+    const theirs = freeSessions.filter((s) => !isOurs(s)).map((s) => s.name);
+    if (ours.length === 0 && theirs.length === 0) {
       return `No other session is free. To run something ALONGSIDE this, create one first (\`new\`) — reusing "${current}" will be refused until this finishes.`;
     }
+    if (ours.length === 0) {
+      return (
+        `No session of YOURS is free. ${theirs.slice(0, 3).join(', ')} ` +
+        `${theirs.length === 1 ? 'is' : 'are'} idle but belong to someone else — ` +
+        `do not run your work there. Create your own with \`new\`.`
+      );
+    }
     return (
-      `Idle as of this call, for work alongside this: ${free.slice(0, 4).join(', ')}` +
-      `${free.length > 4 ? `, +${free.length - 4} more` : ''}. ` +
-      `A session can park on a prompt between now and your next call; that is refused, not typed into.`
+      `Idle as of this call, for work alongside this: ${ours.slice(0, 4).join(', ')}` +
+      `${ours.length > 4 ? `, +${ours.length - 4} more` : ''}. ` +
+      `A session can park on a prompt between now and your next call; that is refused, not typed into.` +
+      (theirs.length > 0
+        ? ` (${theirs.length} other idle session(s) belong to someone else and are not offered.)`
+        : '')
     );
   } catch {
     return 'To run something alongside this, use a different session — this one is occupied until it finishes.';

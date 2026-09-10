@@ -968,6 +968,48 @@ chk "a silent command still returns empty"    "yes" "$(printf '%s' "$PART" | gre
 chk "partial uses the lenient extractor"      "yes" \
     "$(grep -q 'cleanSlice(trimToCommandWindow(await readLogFrom' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 
+# ---- run must offer an offset that points FORWARD ---------------------------
+#
+# `run` returned `log_offset` and nothing else, and that marks where the command
+# BEGAN. A reviewer read the doc's "pass back whatever you were last given",
+# fed it to `read --since`, and got the command it had just run — then had to
+# establish the difference empirically because `log_offset` appeared in every
+# run result and was documented nowhere. Two offsets, opposite meanings, near
+# identical names, one of them undocumented.
+OFFS="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const o=[];
+(async()=>{
+  await a.create({name:"of",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("of").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  const r=await a.run("of","echo UNIQUE_XYZ",{timeoutMs:20000});
+  o.push(typeof r.nextOffset==="number"?"hasNext":"NONEXT");
+  o.push(r.nextOffset>r.logOffset?"pointsForward":"BACKWARDS");
+  const back=await a.readSince("of",r.nextOffset,0);
+  o.push((back.output||"").indexOf("UNIQUE_XYZ")<0?"noStaleReread":"REREADSOLD");
+  await a.kill("of").catch(()=>{});
+  process.stdout.write(o.join(" "));
+})();
+' 2>/dev/null)"
+chk "run returns a forward offset"        "yes" "$(printf '%s' "$OFFS" | grep -q hasNext       && echo yes || echo no)"
+chk "and it is ahead of log_offset"       "yes" "$(printf '%s' "$OFFS" | grep -q pointsForward && echo yes || echo no)"
+chk "reading from it does not re-read"    "yes" "$(printf '%s' "$OFFS" | grep -q noStaleReread && echo yes || echo no)"
+chk "MCP emits next_offset on run"        "yes" \
+    "$(grep -q 'next_offset: result.nextOffset' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# The cap must not fire when eliding saves almost nothing — three fragments and
+# a paragraph of prose in place of 762 bytes is friction, not pagination.
+chk "a small over-cap read is not elided" "0" \
+    "$($ATH_BIN read "$C" --since 0 --max-bytes 600 2>/dev/null | grep -c '\[ath:' | tr -d ' ')"
+chk "the omission floor exists"           "yes" \
+    "$(grep -q 'CAP_MIN_OMISSION' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# parallel_work must not offer sessions the caller did not create.
+chk "parallel_work checks provenance"     "yes" \
+    "$(grep -q 'creatorPids ?? \[\]' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and says so when only others are free" "yes" \
+    "$(grep -q 'belong to someone else' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
