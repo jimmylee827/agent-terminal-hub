@@ -1612,7 +1612,24 @@ async function runLocked(
   // empty guess is the dangerous one. SAY the capture is incomplete rather
   // than presenting it as the command's output — "printed nothing" and "I
   // could not find what it printed" must not look the same.
-  const captureIncomplete = !capture.framed;
+  //
+  // An empty result is ALSO in doubt when the framing was rebuilt mid-command.
+  //
+  // `enteredUnknownShell` means the tag went unacknowledged, the framing
+  // metadata was torn down and the helper re-injected while this very command
+  // was in flight. Under heavy load that happened and the capture came back
+  // empty for an `echo` that plainly printed — framed enough to satisfy the
+  // marker check, with nothing between the markers. `fallback_shell` said the
+  // shell was rebuilt, but nothing said the OUTPUT was unreliable, and those are
+  // different claims: one is about the session, one is about this result.
+  //
+  // Seen on probe 7 of 8 under three concurrent filesystem walks — the load the
+  // widened ack window was meant to survive, exceeded.
+  //
+  // Scoped to the empty case on purpose. A fallback that still captured output
+  // is not in doubt, and flagging it would put a "re-read this" on results that
+  // are fine — which is how a flag stops being read.
+  const captureIncomplete = !capture.framed || (enteredUnknownShell && capture.output === '');
 
   const exitCode = completion.exitCode;
   await recordLast(clean, command, exitCode);

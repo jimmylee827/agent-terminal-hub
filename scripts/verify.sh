@@ -1052,6 +1052,25 @@ chk "the requested width is recorded at create"  "yes" \
 chk "the skill explains the two offsets"         "yes" \
     "$(grep -q 'Two offsets, and they point opposite ways' "$SK" && echo yes || echo no)"
 
+# ---- an empty result after a mid-command fallback is in doubt ---------------
+#
+# `enteredUnknownShell` means the tag went unacknowledged, the framing metadata
+# was torn down, and the helper was re-injected WHILE this command was in
+# flight. Under three concurrent filesystem walks that happened and the capture
+# came back empty for an `echo` that plainly printed — framed enough to satisfy
+# the marker check, with nothing between the markers. `fallback_shell` said the
+# SHELL was rebuilt; nothing said this RESULT was unreliable, and those are
+# different claims.
+#
+# Found by running a load test beside a live audit, at a load heavier than the
+# widened ack window survives. Scoped to the empty case: a fallback that still
+# captured output is not in doubt, and flagging it would put "re-read this" on
+# results that are fine, which is how a flag stops being read.
+chk "empty + fallback is flagged incomplete" "yes" \
+    "$(grep -q "enteredUnknownShell && capture.output === ''" "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "a silent command with no fallback is not" "" \
+    "$($ATH_BIN run "$C" --json -- 'true' 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const j=JSON.parse(d);process.stdout.write(j.capture_incomplete?"FLAGGED":"")}catch(e){process.stdout.write("x")}})')"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
