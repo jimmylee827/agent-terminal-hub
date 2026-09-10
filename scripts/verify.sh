@@ -1013,6 +1013,24 @@ chk "the omission floor exists"           "yes" \
 # parallel_work must not offer sessions the caller did not create.
 chk "parallel_work checks provenance"     "yes" \
     "$(grep -q 'creatorPids ?? \[\]' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# ...and ignores the outermost ancestors, which every process under one editor
+# or login shell shares. Matching on ANY shared pid classified a concurrent
+# agent's sessions as mine — the two chains intersected only at the editor host
+# — so the filter written to stop offering other people's sessions would have
+# gone on offering them. Only visible with two agents running at once.
+chk "and ignores the shared root ancestors" "yes" \
+    "$(grep -q 'chain.length - 2' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+PROV="$(node -e "
+const c=[29623,29621,54680,54436,67739];
+const mine=new Set(c.slice(0,c.length-2));
+const theirs=[20620,20488,20129,67739];
+const ours=[22892,22890,54680,54436,67739];
+const r=(a)=>a.some(p=>mine.has(p))?'MINE':'THEIRS';
+process.stdout.write(r(theirs)+' '+r(ours));
+" 2>/dev/null)"
+chk "two unrelated chains do not match" "THEIRS" "$(printf '%s' "$PROV" | awk '{print $1}')"
+chk "a related chain still matches"     "MINE"   "$(printf '%s' "$PROV" | awk '{print $2}')"
+
 chk "and says so when only others are free" "yes" \
     "$(grep -q 'belong to someone else' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 

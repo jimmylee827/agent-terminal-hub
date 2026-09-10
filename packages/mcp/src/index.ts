@@ -1129,7 +1129,23 @@ async function parallelHint(current: string): Promise<string> {
     // means the same process tree made it. Ours are offered; anything else is
     // named but flagged, because "no session is free" would be its own lie when
     // one plainly is.
-    const mine = new Set(ancestorPids());
+    // The OUTERMOST ancestors are shared by everything and prove nothing.
+    //
+    // Matching on any shared pid classified a concurrent agent's sessions as
+    // mine, because both process trees descend from the same editor host —
+    // their chain was 20620,20488,20129,67739 and mine 29623,29621,54680,54436,
+    // 67739, intersecting only at that last entry. So the first version of this
+    // filter, written to stop offering other people's sessions, would have gone
+    // on offering them. Caught by running two agents at once rather than by a
+    // test, because a single-agent test has nothing to confuse it with.
+    //
+    // Dropping the outermost two leaves the levels that actually identify a
+    // session's creator (a `claude` process and its immediate parent) and
+    // discards the shared root. The bias is deliberate: a false "not yours"
+    // costs a suggestion, a false "yours" steers an agent into someone else's
+    // work, so when the evidence is thin this must answer no.
+    const chain = ancestorPids();
+    const mine = new Set(chain.slice(0, Math.max(1, chain.length - 2)));
     const isOurs = (s: { creatorPids?: number[] }): boolean =>
       (s.creatorPids ?? []).some((pid) => mine.has(pid));
     const ours = freeSessions.filter(isOurs).map((s) => s.name);
