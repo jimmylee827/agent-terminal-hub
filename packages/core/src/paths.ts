@@ -98,7 +98,12 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     holds: 'per-command sentinels — exit codes, timing, first-run flags. No command text',
     purged: false,
     sensitive: true,
-    bounded: 'reaped after 6h',
+    // "reaped after 6h" was a shade stronger than the code. The sweep runs when
+    // a session is CREATED, so entries older than six hours survive until the
+    // next `new` — which, on a machine sitting idle, can be a while. Measured
+    // right after a cleanup: 3 sentinels past six hours with no session left to
+    // trigger the sweep. Saying when it happens costs four words.
+    bounded: 'older than 6h, swept when a session is next created',
   },
   {
     name: 'requests/',

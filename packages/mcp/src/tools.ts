@@ -407,7 +407,8 @@ export const TOOL_DEFINITIONS = [
       '`kill`. Use this when you were told to leave nothing behind, or when something sensitive ' +
       'was printed. It clears the transcript ONLY: ~/.ath/requests/ still holds the reason text ' +
       'of any human request, which quotes the command, and ~/.ath/rc/ holds exit codes and ' +
-      'timings for about 6 hours. Run `doctor` for the full list of what is left.',
+      'timings until a sweep clears them, which happens when a session is next created and ' +
+      'removes anything older than six hours. Run `doctor` for the full list of what is left.',
     inputSchema: {
       type: 'object',
       properties: {

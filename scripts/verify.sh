@@ -1438,6 +1438,11 @@ chk "rc reaping runs without ath gc"         "yes" \
     "$(grep -q 'await reapStaleRc()' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
 chk "and not only from gc"                   "yes" \
     "$(grep -q 'reapStaleRc' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
+# ...and the wording says WHEN, because the sweep is triggered by creation
+# rather than by the clock. Measured after a cleanup: 3 sentinels past six hours
+# with no session left to trigger it.
+chk "the bound says when it is swept"        "yes" \
+    "$(grep -q 'swept when a session is next created' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
 
 chk "a current build reports nothing"        "yes" \
     "$(node -e 'const c=require("'"$RP"'/packages/core/dist/index.js");process.stdout.write(c.buildStaleness()?"no":"yes")' 2>/dev/null)"
