@@ -1349,6 +1349,71 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- a constant is stated once, not once per session ------------------------
+#
+# The stale-server block ran in full on every `new`. A reviewer creating four
+# sessions got the same ~400-word warning four times: "four times is three times
+# too many". It describes THIS PROCESS and cannot change between sessions.
+#
+# The first version of the latch was racy — checked, awaited, then set — so two
+# concurrent `new` calls both announced. Driven here with three at once.
+NOISE="$(node "$RP/scripts/noiseonce.js" 2>/dev/null)"
+chk "three sessions were created"            "yes" "$(printf '%s' "$NOISE" | grep -q threeCreated && echo yes || echo no)"
+chk "the stale block is said at most once"   "yes" "$(printf '%s' "$NOISE" | grep -q staleSaidAtMostOnce && echo yes || echo no)"
+chk "but identity rides every call"          "yes" "$(printf '%s' "$NOISE" | grep -q identityEveryCall && echo yes || echo no)"
+chk "the latch is claimed before awaiting"   "yes" \
+    "$(grep -q 'staleServersAnnounced = true;' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and released when nothing was stale"    "yes" \
+    "$(grep -q 'newStaleServers.length === 0) staleServersAnnounced = false' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- two identical paths on two different machines --------------------------
+#
+# `cwd` is the remote path and `local_cwd` the local one — indistinguishable
+# once the same username exists on both hosts, which is the ordinary case. "I
+# genuinely cannot distinguish them from the output... here created by the field
+# values rather than caught by them."
+chk "remote rows name the host of each path" "yes" \
+    "$(grep -q 'cwd_host' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "on new and on list"                     "2" \
+    "$(grep -c 'local_cwd_host' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "and warn only when they collide"        "yes" \
+    "$(grep -q 'Same string, DIFFERENT machines' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- a warning that can say what changed, should ---------------------------
+#
+# "It's a warning that something might be silently wrong, admits it can't say
+# what." Pointing at `git log --since` left the work with the reader. When the
+# install is a git checkout the answer is a subprocess away.
+chk "the stale report enumerates changes"    "yes" \
+    "$(grep -q 'export async function staleServersReport' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "and every surface uses it"              "3" \
+    "$(cat "$RP/packages/mcp/src/index.ts" "$RP/packages/cli/src/index.ts" | grep -c 'staleServersReport(' | tr -d ' ')"
+
+# ---- zsh furniture is not output --------------------------------------------
+#
+# A reviewer reading a tail for one line got zsh's partial-line marker in the
+# middle of it — a reverse-video `%` padded to the pane width. The padding is
+# what makes it safe to drop; a command printing "%" does not pad it.
+ZSHF="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  const n="zt"+process.pid;
+  await a.create({name:n,cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get(n).catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,600));}
+  await a.run(n,"printf \"NOEOL\"");
+  const t1=await a.readTail(n,10);
+  await a.run(n,"echo \"%\"");
+  const t2=await a.readTail(n,10);
+  const out=[];
+  out.push(/^%[ \t]{2,}$/m.test(t1.output)?"MARKERKEPT":"markerStripped");
+  out.push(/^%$/m.test(t2.output)?"literalKept":"LITERALSTRIPPED");
+  await a.kill(n).catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "the zsh partial-line marker is dropped" "yes" "$(printf '%s' "$ZSHF" | grep -q markerStripped && echo yes || echo no)"
+chk "a literal % still comes through"        "yes" "$(printf '%s' "$ZSHF" | grep -q literalKept && echo yes || echo no)"
+
 # ---- the trim claim is made in ONE place now --------------------------------
 #
 # Three sites made it and I fixed one. A reviewer got both versions in a SINGLE

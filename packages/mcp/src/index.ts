@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { promises as fsp } from 'node:fs';
+import { hostname } from 'node:os';
 
 import {
   augmentRequestReason,
@@ -33,6 +34,7 @@ import {
   staleServers,
   thisServer,
   staleServersNote,
+  staleServersReport,
   logDirBytes,
   LOG_DIR_NOTICE_BYTES,
   logNearTrimNote,
@@ -50,6 +52,12 @@ import {
   effectiveCwd,} from '@ath/core';
 
 import { TOOL_DEFINITIONS } from './tools';
+
+/**
+ * Said once per server lifetime. See its use in `new`: the staleness block
+ * describes THIS PROCESS, so repeating it per session is repeating a constant.
+ */
+let staleServersAnnounced = false;
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
@@ -235,6 +243,20 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // where anything runs.
           cwd: effectiveCwd(s),
           local_cwd: s.remote ? s.cwd : undefined,
+          // Which HOST each path is on. The reviewer who could not tell them
+          // apart was reading a listing, not a creation result: by the time the
+          // remote shell has reported its cwd, both fields can be the very same
+          // string — `/Users/<name>` on two machines that share a username.
+          // The pair is only ambiguous when they match, so the warning fires
+          // only then and the labels ride every remote row.
+          cwd_host: s.remote ? s.remote : undefined,
+          local_cwd_host: s.remote ? hostname() : undefined,
+          cwd_note:
+            s.remote && effectiveCwd(s) === s.cwd
+              ? `Same string, DIFFERENT machines: this path is on ${s.remote} for \`cwd\` ` +
+                `and on ${hostname()} for \`local_cwd\`. Matching paths are normal when the ` +
+                `username matches on both.`
+              : undefined,
           // Omitted for a remote session, where it is always "ssh".
           //
           // It is tmux's `pane_current_command`, and for a remote session that
@@ -344,14 +366,38 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // reason to run unless it's specifically asked what the tool leaves
       // behind". So ask about OTHER servers here, at session creation, which is
       // the first call an agent makes and the one it cannot skip.
-      const newStaleServers = await staleServers().catch(() => []);
+      // Once per SERVER, not once per session.
+      //
+      // This is a fact about this process, and it repeated in full on every
+      // `new`. A reviewer creating four sessions got the same ~400-word block
+      // four times and put it plainly: "four times is three times too many".
+      // The session-scoped throttle used for caveats is the wrong grain here —
+      // the thing being described does not change between sessions.
+      //
+      // `doctor` still reports it every time, because that is the call you make
+      // when you have gone looking for it.
+      // The latch is claimed SYNCHRONOUSLY, before the await.
+      //
+      // Checking it, awaiting, then setting it is a race: two `new` calls in
+      // flight together both read `false`, both await, and both announce —
+      // which is exactly what happened the first time this was tested, with two
+      // requests piped in at once. MCP calls may legally overlap.
+      //
+      // If nothing turns out to be stale the latch is released again, so a
+      // rebuild later in this process's life is still announced once.
+      const announce = !staleServersAnnounced;
+      staleServersAnnounced = true;
+      const newStaleServers = announce ? await staleServers().catch(() => []) : [];
+      if (announce && newStaleServers.length === 0) staleServersAnnounced = false;
       return json({
         name: session.name,
         // Said HERE as well as in `doctor`, because by the time someone thinks
         // to run a diagnostic they have already been misled once. This is the
         // first call of a session.
         ...(newStale ? { stale_build: staleBuildNote(newStale) } : {}),
-        ...(newStaleServers.length ? { stale_servers: staleServersNote(newStaleServers) } : {}),
+        ...(newStaleServers.length
+          ? { stale_servers: await staleServersReport(newStaleServers) }
+          : {}),
         // Stated positively, on the first call of every session. Silence could
         // never distinguish "current" from "too old to know".
         this_server: thisServer(),
@@ -380,6 +426,33 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // session's shell sits in the remote home, so say that.
         cwd: session.remote ? (session.remoteCwd ?? '~') : effectiveCwd(session),
         ...(session.remote ? { remote: session.remote, local_cwd: session.cwd } : {}),
+        // Name the HOST each path belongs to, and say so loudly when the two
+        // strings are identical.
+        //
+        // `cwd` is the remote path and `local_cwd` the local one — which is
+        // clear until the same username exists on both machines, and then both
+        // read `/Users/jimmylee827` and nothing distinguishes them. A reviewer
+        // hit exactly that: "I genuinely cannot distinguish them from the
+        // output, and this is exactly the 'which host am I speaking as'
+        // confusion the docs warn about — here created by the field values
+        // rather than caught by them."
+        ...(session.remote
+          ? {
+              cwd_host: session.remote,
+              local_cwd_host: hostname(),
+              ...((session.remoteCwd ?? '~') === session.cwd
+                ? {
+                    cwd_note:
+                      `\`cwd\` and \`local_cwd\` are the same string here, and they are ` +
+                      `DIFFERENT machines: \`cwd\` is ${session.cwd} on ${session.remote}, ` +
+                      `where your commands run; \`local_cwd\` is ${session.cwd} on ` +
+                      `${hostname()}, where the hub runs. Identical paths on two hosts is ` +
+                      `normal when the username matches — do not read the match as meaning ` +
+                      `they are one directory.`,
+                  }
+                : {}),
+            }
+          : {}),
         state: session.state,
         note: 'This session persists between your calls. Reuse it rather than creating another.',
         human_can_join_with: `ath attach ${session.name}`,
@@ -1516,7 +1589,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       const doctorServers = await staleServers();
       return json({
         ...(doctorStale ? { stale_build: staleBuildNote(doctorStale) } : {}),
-        ...(doctorServers.length ? { stale_servers: staleServersNote(doctorServers) } : {}),
+        ...(doctorServers.length ? { stale_servers: await staleServersReport(doctorServers) } : {}),
         this_server: thisServer(),
         root: ATH_HOME,
         artifacts: rows,

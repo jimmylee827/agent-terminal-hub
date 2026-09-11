@@ -46,6 +46,7 @@ import {
   staleServers,
   thisServer,
   staleServersNote,
+  staleServersReport,
   LOG_DIR_NOTICE_BYTES,
   rename,
   run,
@@ -1224,7 +1225,7 @@ async function main(): Promise<number> {
         // spent twenty minutes reading `ps` start times to discover exactly
         // that. One call now.
         const servers = await staleServers();
-        if (servers.length) console.error(c.yellow(`[ath] ${staleServersNote(servers)}\n`));
+        if (servers.length) console.error(c.yellow(`[ath] ${await staleServersReport(servers)}\n`));
         // Say which build is answering, positively. Silence cannot distinguish
         // "current" from "too old to know the question exists".
         const me = thisServer();

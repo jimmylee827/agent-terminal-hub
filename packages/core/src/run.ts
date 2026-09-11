@@ -3697,6 +3697,24 @@ export const EMPTY_TAIL_ADVICE =
   'learn whether a job is still running and how far in, use `poll` with its ' +
   'handle: it returns a `progress` block, which a tail cannot give you.';
 
+/**
+ * zsh's partial-line marker, which is furniture and not output.
+ *
+ * When a command's last line has no trailing newline, zsh prints a reverse-video
+ * `%` and pads it to the pane width so the prompt starts cleanly. It lands in
+ * the transcript between the content and the prompt, and a reviewer reading a
+ * tail for one specific line got it wrapped in exactly this:
+ *
+ *     HOSTCLOCK_ELAPSED=118s LINES=  214736 ERRLINES=      33
+ *     %
+ *
+ *     jimmylee827@host audit-run %
+ *
+ * The padding is what makes it safe to drop: a command that genuinely prints
+ * "%" does not follow it with a screen's worth of spaces.
+ */
+const ZSH_EOL_MARK_RE = /^%[ \t]{2,}$/;
+
 export async function readTail(
   name: string,
   lines = 200,
@@ -3715,7 +3733,9 @@ export async function readTail(
     const pane = await capturePane(clean, lines);
     return { output: pane, nextOffset, ...(tailIsAllFurniture(pane) ? { emptyTail: true } : {}) };
   }
-  const all = trimBlankEdges(toLines(raw).filter((line) => !MARKER_LINE_RE.test(line)));
+  const all = trimBlankEdges(
+    toLines(raw).filter((line) => !MARKER_LINE_RE.test(line) && !ZSH_EOL_MARK_RE.test(line)),
+  );
   const output = all.slice(Math.max(0, all.length - lines)).join('\n');
   return { output, nextOffset, ...(tailIsAllFurniture(output) ? { emptyTail: true } : {}) };
 }

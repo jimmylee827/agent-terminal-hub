@@ -324,6 +324,58 @@ export async function staleServers(): Promise<StaleServer[]> {
   return stale.sort((a, b) => a.startedMs - b.startedMs);
 }
 
+/**
+ * What actually changed since a stale server booted.
+ *
+ * The notice told a reviewer something might be silently wrong and then said it
+ * could not say what: "it's a warning that something might be silently wrong,
+ * admits it can't say what". Pointing at `git log --since` was honest but left
+ * the work with them, and an agent mid-audit is not going to go and run it.
+ *
+ * When the install IS a git checkout — which it is on the machine where this
+ * matters, a developer's — the answer is a subprocess away. Subjects only, and
+ * capped: enough to judge whether the gap touches anything you rely on.
+ */
+async function changesSince(ms: number): Promise<string[]> {
+  const root = path.join(__dirname, '..', '..', '..');
+  try {
+    statSync(path.join(root, '.git'));
+  } catch {
+    return [];
+  }
+  const { execFile } = await import('node:child_process');
+  const iso = new Date(ms).toISOString();
+  return new Promise<string[]>((resolve) => {
+    execFile(
+      'git',
+      ['-C', root, 'log', '--since', iso, '--pretty=format:%s', '--no-merges'],
+      { timeout: 3000, maxBuffer: 1 << 20 },
+      (err, stdout) => {
+        if (err) return resolve([]);
+        resolve(
+          stdout
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean)
+            .slice(0, 8),
+        );
+      },
+    );
+  });
+}
+
+/** The note, with what changed when that can be established. */
+export async function staleServersReport(servers: StaleServer[]): Promise<string> {
+  const base = staleServersNote(servers);
+  const oldest = servers.reduce((a, b) => (a.startedMs < b.startedMs ? a : b));
+  const changes = await changesSince(oldest.startedMs).catch(() => []);
+  if (!changes.length) return base;
+  return (
+    `${base}\n\nWhat landed since the oldest of those started, newest first:\n` +
+    changes.map((c) => `  - ${c}`).join('\n')
+  );
+}
+
 /** What to say about them. Shared wording, like every other notice here. */
 /**
  * Who is answering, and whether that process is current.
@@ -397,9 +449,8 @@ export function staleServersNote(servers: StaleServer[]): string {
     `then — an agent using the MCP tools will see the old behaviour while this CLI shows the ` +
     `new one. ` +
     (built ? `The build on disk is from ${when(built)} UTC; ` : '') +
-    `what changed in between is whatever landed in the project since each start time above — ` +
-    `"git log --since" over that window is the honest answer, because this cannot enumerate ` +
-    `behaviours. Restart the client that launched each server to pick the build up.`
+    `what changed in between is whatever landed in the project since each start time above. ` +
+    `Restart the client that launched each server to pick the build up.`
   );
 }
 
