@@ -1029,6 +1029,29 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             {
               outcome: answered ? 'done' : interrupted ? 'interrupted' : 'finished_nonzero',
               exit_code: code,
+              // The resize a human caused by attaching, surfaced HERE.
+              //
+              // This call runs `poll` internally, and `poll` CONSUMES the width
+              // notice once the command is done. `await_human` did not publish
+              // it, so the one call that follows a human attaching swallowed the
+              // very signal that a human attached — and every later `run` saw an
+              // already-settled baseline and said nothing.
+              //
+              // Four reviewers reported the silence. The mechanism tested clean
+              // every time I checked it in isolation, because in isolation
+              // nothing had eaten the notice first. The sequence that breaks it
+              // is the ordinary one: park on sudo, human attaches and answers,
+              // call await_human, then keep working.
+              ...(res.paneWidthChanged ? { pane_width_changed: res.paneWidthChanged } : {}),
+              ...(res.paneWidthChanged
+                ? {
+                    width_note:
+                      `The pane was resized from ${res.paneWidthChanged.from} to ` +
+                      `${res.paneWidthChanged.to} columns — attaching does that. Anything you ` +
+                      `parse by COLUMN position from here on is being formatted to the new ` +
+                      `width; prefer whitespace-splitting or an explicit --width.`,
+                  }
+                : {}),
               session,
               handle,
               handle_from: handleSource,

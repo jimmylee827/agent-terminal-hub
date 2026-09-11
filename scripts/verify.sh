@@ -1373,6 +1373,25 @@ chk "and the omission is recorded as deliberate" "yes" \
 chk "progress.bytes says what it counts" "yes" \
     "$(grep -q 'counts PANE bytes' "$RP/packages/core/src/types.ts" && echo yes || echo no)"
 
+# ---- a consumed notice must be published by whoever consumed it -------------
+#
+# `pane_width_changed` is consumed once, deliberately, so it is not repeated on
+# every later call. `await_human` runs `poll` internally, `poll` consumes the
+# notice when the command is done, and `await_human` did not publish it — so the
+# ONE call that follows a human attaching swallowed the very signal that a human
+# attached. Every subsequent `run` then saw a settled baseline and said nothing.
+#
+# Four reviewers reported that silence. It tested clean every time in isolation,
+# because in isolation nothing had eaten the notice first. The breaking sequence
+# is the ordinary one: park on sudo, human attaches and answers, call
+# await_human, keep working.
+chk "await_human publishes the resize it consumes" "yes" \
+    "$(grep -q 'pane_width_changed: res.paneWidthChanged' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and explains what the new width means"        "yes" \
+    "$(grep -q 'parse by COLUMN position from here on' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "await_human is in the parity coverage"        "yes" \
+    "$(grep -q "await_human', \['pane_width_changed'\]" "$RP/scripts/parity.js" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So
