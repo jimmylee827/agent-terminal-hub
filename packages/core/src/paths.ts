@@ -203,6 +203,29 @@ export interface DeadLogSweep {
  * asking it for the list here would be a cycle. Same reason, same shape, as
  * `pruneRequests`.
  */
+/**
+ * Total bytes under log/, for surfacing growth BEFORE someone goes looking.
+ *
+ * Each transcript is trimmed; the directory is not, and sessions are never
+ * reaped because `kill` keeps the transcript on purpose. So it only grows.
+ * `doctor` has always said so plainly, which is exactly the problem a reviewer
+ * named: "it accumulates silently and nothing surfaces it until you go
+ * looking." They found 274 MiB, of which ~250 MiB belonged to sessions that no
+ * longer existed, and had to call `doctor` out of curiosity to learn it.
+ */
+export async function logDirBytes(): Promise<number> {
+  const names = await fs.readdir(LOG_DIR).catch(() => [] as string[]);
+  let total = 0;
+  for (const n of names) {
+    const st = await fs.stat(path.join(LOG_DIR, n)).catch(() => undefined);
+    if (st?.isFile()) total += st.size;
+  }
+  return total;
+}
+
+/** Past this, `new` says so once. Chosen to sit under the 274 MiB a reviewer met. */
+export const LOG_DIR_NOTICE_BYTES = 192 * 1024 * 1024;
+
 export async function reapDeadLogs(liveSessions: Set<string>): Promise<DeadLogSweep> {
   const sweep: DeadLogSweep = { removed: 0, bytes: 0, live: 0 };
   let entries: string[];

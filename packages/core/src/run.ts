@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
 import { withSessionLock } from './lock';
@@ -1818,7 +1819,8 @@ async function runLocked(
   const rawBlindSpot =
     (exitCode !== 0 ? credentialBlindSpot(command) : undefined) ??
     traversalBlindSpot(command) ??
-    localPathBlindSpot(command, session.remote);
+    localPathBlindSpot(command, session.remote) ??
+    networkBlindSpot(command, session.remote);
   const blindSpotWarning = rawBlindSpot
     ? (await firstCaveatFor(clean, 'warn'))
       ? rawBlindSpot
@@ -2413,7 +2415,8 @@ export async function start(name: string, command: string): Promise<StartResult>
     const startWarning =
       credentialBlindSpot(command) ??
       traversalBlindSpot(command) ??
-      localPathBlindSpot(command, session.remote);
+      localPathBlindSpot(command, session.remote) ??
+      networkBlindSpot(command, session.remote);
 
     // Confirm the frame actually opened, because `start` could not fail.
     //
@@ -2661,6 +2664,18 @@ export async function poll(
   handle: string,
   since = 0,
   maxBytes = MAX_RETURN_BYTES,
+  /**
+   * Set `consumeNotices: false` for an INCIDENTAL peek — a call made to read
+   * one derived fact (a progress figure, an exit code for a listing) rather
+   * than to report output to somebody.
+   *
+   * Such a call must not settle the consume-once width notice. `requests` polls
+   * every open handle just to fill in a status column, and in doing so quietly
+   * settled the resize for each of those sessions; nobody printed it, so nobody
+   * ever saw it. A read-only listing that destroys a signal is the worst
+   * version of this bug, because nothing about calling it looks destructive.
+   */
+  opts: { consumeNotices?: boolean } = {},
 ): Promise<PollResult> {
   const clean = validateName(name);
   const log = logPath(clean);
@@ -2765,7 +2780,11 @@ export async function poll(
   // job driven by start/poll is exactly when a human attaches — usually to
   // answer the password prompt that job raised. Consumed only on the poll that
   // reports `done`, so a polling loop cannot swallow it before a later `run`.
-  const widthChange = await observeWidth(clean, session.paneWidth, done).catch(() => undefined);
+  const widthChange = await observeWidth(
+    clean,
+    session.paneWidth,
+    done && opts.consumeNotices !== false,
+  ).catch(() => undefined);
 
   const timing = await timingFor(handle, done, end?.measuredSeconds);
   // Offsets are per SESSION, so `since` from an earlier job is silently valid
@@ -3197,6 +3216,77 @@ function credentialBlindSpot(command: string): string | undefined {
  * warnings in this family get skimmed the moment they cry wolf.
  */
 const ATH_PATH_RE = /(^|[\s"'`=(])(~|\$HOME)?\/?\.ath\b/;
+
+/**
+ * Probing a private address from a machine that is not on that network.
+ *
+ * The failure is silent and inverted, which is the worst combination: every
+ * port on an unreachable LAN reads as closed, so a host with both firewalls
+ * OFF is reported as locked down. Nothing errors. Nothing is empty. The
+ * numbers look like an answer.
+ *
+ * A reviewer came within one command of exactly that — about to probe
+ * 192.168.x.x from a machine sitting on 172.16.x.x — and was saved by a
+ * sentence in the doc, which they rightly called a warning rather than a
+ * guardrail: "the tool has all the information needed to detect the mismatch
+ * and says nothing at the moment it matters." It does have it. `os.networkInterfaces()`
+ * is free and local.
+ *
+ * Deliberately narrow, because a warning that cries wolf is the noise earlier
+ * rounds complained about: it fires only for an RFC1918 literal, only in a
+ * LOCAL session, and only when that address is outside every subnet this
+ * machine actually holds. A remote session is left alone — its commands run on
+ * the far host, whose interfaces are its own business.
+ */
+function networkBlindSpot(command: string, remote?: string): string | undefined {
+  if (remote) return undefined;
+  const targets = command.match(/\b(?:10|172|192)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g);
+  if (!targets) return undefined;
+
+  const isPrivate = (ip: number[]): boolean =>
+    ip[0] === 10 ||
+    (ip[0] === 172 && (ip[1] ?? 0) >= 16 && (ip[1] ?? 0) <= 31) ||
+    (ip[0] === 192 && ip[1] === 168);
+
+  const packed = (dotted: string): number | undefined => {
+    const p = dotted.split('.').map(Number);
+    if (p.length !== 4 || p.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return undefined;
+    return (((p[0] ?? 0) << 24) | ((p[1] ?? 0) << 16) | ((p[2] ?? 0) << 8) | (p[3] ?? 0)) >>> 0;
+  };
+
+  const mine: { net: number; mask: number }[] = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const i of list ?? []) {
+      if (i.family !== 'IPv4' || i.internal) continue;
+      const n = packed(i.address);
+      const k = packed(i.netmask ?? '255.255.255.0');
+      if (n === undefined || k === undefined) continue;
+      mine.push({ net: (n & k) >>> 0, mask: k });
+    }
+  }
+  if (!mine.length) return undefined;
+
+  for (const t of targets) {
+    const ip = t.split('.').map(Number);
+    const n = packed(t);
+    if (n === undefined || !isPrivate(ip)) continue;
+    if (mine.some((s) => ((n & s.mask) >>> 0) === s.net)) continue;
+    const here = mine.map((s) =>
+      [(s.net >>> 24) & 255, (s.net >>> 16) & 255, (s.net >>> 8) & 255, s.net & 255].join('.'),
+    );
+    return (
+      `${t} is a private address on a network this machine is not on — its own IPv4 ` +
+      `subnets are ${[...new Set(here)].join(', ')}. This session is LOCAL, so the command ` +
+      `runs here, and an unreachable LAN answers every probe the same way an armoured host ` +
+      `does: closed, filtered, no route. A "nothing is open" result from this would be ` +
+      `INDISTINGUISHABLE from a firewall, and reporting it as one inverts the truth. If you ` +
+      `mean to ask about a machine over there, run the command IN a --remote session on it, ` +
+      `or use an address this host can actually reach (a VPN or tunnel address). If you ` +
+      `already reach ${t} by a route or VPN not visible as an interface, ignore this.`
+    );
+  }
+  return undefined;
+}
 
 function localPathBlindSpot(command: string, remote?: string): string | undefined {
   if (!remote || !ATH_PATH_RE.test(command)) return undefined;

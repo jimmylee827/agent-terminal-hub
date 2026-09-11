@@ -21,6 +21,8 @@ export {
   rotateNotifyLog,
   purgeLog,
   reapDeadLogs,
+  logDirBytes,
+  LOG_DIR_NOTICE_BYTES,
   LOG_MAX_BYTES,
   NOTIFY_MAX_BYTES,
   tmuxName,

@@ -687,9 +687,24 @@ const out=[];
   // while the identical command over ssh said true because the link throttled
   // it. Run it twice: the old code failed this consistently, not flakily.
   for(let i=0;i<2;i++){
-    const loud=await a.start("lp","seq 1 5000000");
+    // 1M lines (~7 MiB), not 5M. The property is that output buries the start
+    // marker, and 7 MiB overruns the 32 KiB scan window 200 times over — the
+    // pre-fix build still reports launched:false on this, 3 of 3. The 5M
+    // version proved the same thing while writing 114 MiB across two
+    // iterations, which perturbed the TIMING checks that run after it: a 5s
+    // job measured 12s on a machine still digesting that. A test that
+    // destabilises its neighbours costs more than it proves.
+    const loud=await a.start("lp","seq 1 1000000");
     out.push(loud.launched===true?"loudStartSeen":"LOUDSTARTMISSED");
-    await new Promise(r=>setTimeout(r,6000));
+    // WAIT FOR IDLE, never a guessed sleep. A fixed 6s was too short for a job
+    // that writes ~57 MiB through pipe-pane, so the second iteration hit
+    // "session is already running" and threw — taking every result in this
+    // block with it, including three checks that had already passed.
+    for(let k=0;k<60;k++){
+      const st=await a.get("lp").catch(()=>null);
+      if(st&&st.state==="idle")break;
+      await new Promise(r=>setTimeout(r,700));
+    }
   }
   // Now a shell with neither hooks nor wrapper.
   await a.sendLine("lp","exec env -i PATH=/usr/bin:/bin bash --norc --noprofile");
@@ -698,8 +713,12 @@ const out=[];
   out.push(bad.launched===false?"unlaunchedFlagged":"SILENTSUCCESS");
   out.push(typeof bad.handle==="string"&&bad.handle.length===12?"handleStillGiven":"NOHANDLE");
   await a.kill("lp").catch(()=>{});
+})().catch((e)=>{out.push("THREW:"+e.message.slice(0,40))}).finally(()=>{
+  // Emit whatever was established. A probe that writes only on success turns
+  // one broken assertion into five silent ones, which is how a test-harness bug
+  // came to look like five product regressions.
   process.stdout.write(out.join(" "));
-})();
+});
 ' 2>/dev/null)"
 chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyNotFlagged && echo yes || echo no)"
 chk "and states success positively"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyStatesSuccess && echo yes || echo no)"
@@ -1163,6 +1182,66 @@ chk "and says a parked session blocks all work" "yes" \
 # first time found four more, and a second pass found three beyond that.
 chk "every result field reaches its surface" "0" \
     "$(node "$RP/scripts/parity.js" 2>/dev/null | sed -n 's/.*, \([0-9]*\) missing/\1/p')"
+
+# ---- nobody may EAT a consume-once notice -----------------------------------
+#
+# `pane_width_changed` is consumed once by design, so every reader of it is a
+# potential black hole: whoever consumes and does not publish has not suppressed
+# a duplicate, it has performed a DELETION, and the next caller is told nothing
+# forever. Reported in rounds G, L, Q, W and Y; fixed twice, both times at the
+# surface that happened to be in the report. W fixed MCP's `await_human`; Y then
+# used the CLI's `ath await`, which had the identical hole.
+#
+# So this stopped being a bug to fix and became a rule to enforce. The script
+# found three more holes the moment it was written — CLI `poll`, MCP `requests`,
+# MCP `wait` — none of which anyone had reported yet.
+chk "no handler swallows a width notice"     "0" \
+    "$(node "$RP/scripts/consumers.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+chk "the CLI await publishes the resize"     "yes" \
+    "$(grep -q 'keyboard. Output from width-aware' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and the CLI poll does too"              "yes" \
+    "$(grep -q 'columns while this ran' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+# A listing must not settle a notice it will never print.
+chk "requests peeks without consuming"       "2" \
+    "$(grep -c 'consumeNotices: false' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "core honours the decline"               "yes" \
+    "$(grep -q 'done && opts.consumeNotices !== false' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# ---- probing a LAN this machine is not on -----------------------------------
+#
+# The failure is silent AND inverted: every port of an unreachable network reads
+# as closed, so a host with both firewalls off reports as locked down. A reviewer
+# came one command from exactly that and was saved by a paragraph of prose, which
+# they fairly called a warning rather than a guardrail — "the tool has all the
+# information needed to detect the mismatch and says nothing at the moment it
+# matters". os.networkInterfaces() is free and local; now it is consulted.
+chk "a LAN mismatch is detected, not just documented" "yes" \
+    "$(grep -q 'function networkBlindSpot' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and it rides both warning chains"       "2" \
+    "$(grep -c 'networkBlindSpot(command, session.remote)' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "it stays off REMOTE sessions"           "yes" \
+    "$(grep -q 'if (remote) return undefined;' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+# Precision matters more than presence: a warning that fires on every address is
+# the noise earlier rounds complained about. Driven against this machine's REAL
+# interfaces — an off-subnet RFC1918 address must warn, and a public address, a
+# CGNAT/VPN address and a plain command must not.
+NETW="$(node "$RP/scripts/netcheck.js" 2>/dev/null)"
+chk "an off-subnet LAN probe warns"          "yes" "$(printf '%s' "$NETW" | grep -q offSubnetWarns && echo yes || echo no)"
+chk "a public address does not"              "yes" "$(printf '%s' "$NETW" | grep -q publicQuiet   && echo yes || echo no)"
+chk "a VPN/CGNAT address does not"           "yes" "$(printf '%s' "$NETW" | grep -q cgnatQuiet    && echo yes || echo no)"
+chk "a command with no address does not"     "yes" "$(printf '%s' "$NETW" | grep -q noIpQuiet     && echo yes || echo no)"
+chk "this machine's OWN address does not"    "yes" "$(printf '%s' "$NETW" | grep -q ownAddrQuiet  && echo yes || echo no)"
+
+# ---- the transcript directory says its own size -----------------------------
+#
+# Per-file bounded, directory unbounded, and `kill` keeps transcripts on purpose
+# so dead sessions accumulate forever. A reviewer found 274 MiB, ~250 MiB of it
+# from sessions that no longer existed, and learned it only by calling `doctor`
+# out of curiosity. Said at creation now — the moment you add to it.
+chk "new surfaces a large log directory"     "yes" \
+    "$(grep -q 'log_dir_note' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and names the command that reclaims it" "yes" \
+    "$(grep -q 'reclaims the ones whose sessions are gone' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "MCP purge clears request records too"   "yes" \
     "$(grep -q 'purgeSessionRequests(session)' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "and no longer says transcript only"     "0" \
@@ -1250,6 +1329,18 @@ chk "the doc lists the new-session cause"     "yes" \
 # command after new on a remote host". A reviewer hit launched:false on a LOCAL
 # session already armed with echo ok, and said the framing did not cover it.
 # It now leads with what the flag means rather than with one way to earn it.
+# The layout rule is the only one that cannot be applied late, and a reviewer
+# called it "the single highest-value paragraph in the documentation", buried at
+# rule 4. Ordering is the cheapest fix there is.
+chk "session layout is the FIRST core rule"  "yes" \
+    "$(grep -q '^1\. \*\*Plan the session layout' "$SK" && echo yes || echo no)"
+# Three questions reviewers listed as unanswerable from the docs.
+chk "the doc explains what owner means"      "yes" \
+    "$(grep -q 'says who CREATED the session' "$SK" && echo yes || echo no)"
+chk "and that a noisy prompt is not detected" "yes" \
+    "$(grep -q 'must go QUIET to be detected' "$SK" && echo yes || echo no)"
+chk "and that one ssh link carries them all" "yes" \
+    "$(grep -q 'share one ssh connection' "$SK" && echo yes || echo no)"
 chk "the doc separates unconfirmed from unrun" "yes" \
     "$(grep -q 'which is not the same as \*did not' "$SK" && echo yes || echo no)"
 chk "and says to look before re-sending"       "yes" \

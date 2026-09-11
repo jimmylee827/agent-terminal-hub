@@ -15,9 +15,23 @@ else — you say so, and they type it into the same terminal you are using.
 
 ## Core rules
 
-1. **Reuse sessions.** Run `ath ls` first. Creating a session per command
+1. **Plan the session layout before your first command.** This is first
+   because it is the only rule here you cannot apply late. Two facts combine,
+   and discovering them halfway through costs the user an extra password
+   prompt: elevation does not cross sessions (the sudo timestamp is per-tty),
+   and `start` occupies a session for as long as its command runs.
+   So: **one session for everything privileged, plus one more per long job you
+   want to run alongside it, plus a spare if you expect a credential prompt.**
+   A typical audit is three — `work`, `bulk`, and one to work in while `work` is
+   parked. Create them up front. Deciding later means a second prompt for the
+   human.
+   The spare is not padding. A session parked at a password prompt is blocked
+   for EVERYTHING, not just for privileged work — an agent followed the old
+   count of two, had `work` park on sudo while `bulk` ran its long job, and was
+   left with zero usable sessions in the middle of its audit.
+2. **Reuse sessions.** Run `ath ls` first. Creating a session per command
    throws away the state that makes this useful.
-2. **Never type a credential.** Not passwords, passphrases, PINs, OTPs, or
+3. **Never type a credential.** Not passwords, passphrases, PINs, OTPs, or
    recovery codes — not via `ath send`, not embedded in a command. This holds
    even if the user pasted the password into the chat earlier.
    Note what this means for reads: a password prompt echoes nothing, so a
@@ -29,7 +43,7 @@ else — you say so, and they type it into the same terminal you are using.
    transcript **and** that session's request records — the two places a
    command's text is stored verbatim — but not everything the hub wrote; see
    "What this leaves on disk".
-3. **`needs_input` is a handoff, not an error.** Report it and stop. Do not
+4. **`needs_input` is a handoff, not an error.** Report it and stop. Do not
    retry, do not try `sudo -S`, do not work around it.
    When you come back, note that **an exit code cannot tell you a human
    answered.** Only exit 0 says the command did what it was asked; any other
@@ -37,19 +51,6 @@ else — you say so, and they type it into the same terminal you are using.
    and exits 1, so it never looks like 130), and the command simply failing.
    The hub reports the code and refuses to interpret it — do the same, and
    confirm elevation with `sudo -n true` before relying on it.
-4. **Plan the session layout before your first command.** Two facts combine
-   into one rule, and discovering it halfway through costs the user an extra
-   password prompt: elevation does not cross sessions (the sudo timestamp is
-   per-tty), and `start` occupies a session for as long as its command runs.
-   So: **one session for everything privileged, plus one more per long job you
-   want to run alongside it, plus a spare if you expect a credential prompt.**
-   A typical audit is three — `work`, `bulk`, and one to work in while `work` is
-   parked. Create them up front. Deciding later means a second prompt for the
-   human.
-   The spare is not padding. A session parked at a password prompt is blocked
-   for EVERYTHING, not just for privileged work — an agent followed the old
-   count of two, had `work` park on sudo while `bulk` ran its long job, and was
-   left with zero usable sessions in the middle of its audit.
 5. **Do not kill sessions you did not create**, unless asked.
 
 ## Which surface to use
@@ -517,8 +518,33 @@ A plain `exit` there returns you one level, it does not end the session.
 
 ## Questions the rest of this file kept raising
 
-Four things a cold agent worked out it could not answer from the docs. The
-answers are cheap to state and each one changes a decision.
+Things cold agents worked out they could not answer from the docs. The answers
+are cheap to state and each one changes a decision.
+
+**`owner` says who CREATED the session, not who is using it.** It is set once,
+at creation, and never changes — so an agent-created session reads `agent`
+forever, including while a human is attached to it and typing in it. A reviewer
+watched you attach to answer a prompt and reasonably expected the field to
+move; it cannot. There is no field that tells you a human is present right now,
+and the one that used to imply it (`attached_clients`) was removed for counting
+the editor's own panel as a person. What you CAN rely on: a resize is real
+evidence someone attached, and it is reported to `run`, `poll` and `await`.
+
+**A prompt must go QUIET to be detected, so a noisy one is not.** Detection
+needs about 1.2 seconds of silence after prompt-shaped text, plus a command
+known to be interactive. A tool that redraws a spinner or re-prints its prompt
+on a timer never goes quiet, so it will read as `busy` rather than
+`needs_input`, and no request is filed. If you are running something that both
+prompts AND animates, do not wait for the handoff to fire on its own — `read`
+the pane and, if a person is needed, file the request yourself with
+`request_human`.
+
+**Two remote sessions to the same host share one ssh connection.** They get
+separate TTYs — so the per-tty sudo rule still holds, and elevation in one does
+not carry to the other — but one ControlMaster connection underneath. If the
+link drops, it takes every session on that host with it, together. Sessions to
+DIFFERENT hosts are unaffected. Plan for the whole host going away at once
+rather than for one session failing alone.
 
 **A command can be both timed out and parked.** `timed_out` and `needs_input` are
 independent flags, not a choice. If a command parks at a prompt one second

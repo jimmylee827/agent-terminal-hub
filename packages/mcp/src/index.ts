@@ -28,6 +28,8 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  logDirBytes,
+  LOG_DIR_NOTICE_BYTES,
   logNearTrimNote,
   purgeLog,
   purgeSessionRequests,
@@ -284,8 +286,32 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         width: args.width === undefined ? undefined : Number(args.width),
         owner: 'agent',
       });
+      // The transcript directory only grows, and nothing ever said so unprompted.
+      //
+      // Each log is trimmed; the DIRECTORY has no ceiling, and `kill` keeps the
+      // transcript on purpose, so dead sessions accumulate forever. A reviewer
+      // found 274 MiB here — ~250 MiB of it belonging to sessions that no
+      // longer existed — and only learned it by calling `doctor` out of
+      // curiosity after their audit was done. `doctor` has always stated this
+      // plainly, which is precisely the complaint: you had to go looking.
+      //
+      // Said at CREATION because that is the moment you are about to add to it,
+      // and because `new` is rare enough that a line here is not noise.
+      const logDirNow = await logDirBytes().catch(() => 0);
       return json({
         name: session.name,
+        ...(logDirNow > LOG_DIR_NOTICE_BYTES
+          ? {
+              log_dir_bytes: logDirNow,
+              log_dir_note:
+                `Session transcripts under ~/.ath/log now total ` +
+                `${Math.round(logDirNow / 1048576)} MiB. Each FILE is trimmed; the DIRECTORY ` +
+                `is not, and \`kill\` keeps a transcript on purpose, so dead sessions stay ` +
+                `forever. \`ath purge --dead\` reclaims the ones whose sessions are gone. ` +
+                `They are verbatim: every command and every byte of output, including output ` +
+                `nobody read.`,
+            }
+          : {}),
         // `cwd` used to be the LOCAL directory even for a remote session, so
         // creating a session on another machine answered with this Mac's path.
         // The first field a caller reads must not be the wrong one; the local
@@ -920,7 +946,14 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       }
       const rows = [];
       for (const r of all) {
-        const res = r.handle ? await poll(r.session, r.handle).catch(() => undefined) : undefined;
+        // A LISTING must not settle the width notice. This polls every open
+        // handle only to fill in a status column, and consuming here deleted
+        // the resize for each of those sessions with nobody printing it.
+        const res = r.handle
+          ? await poll(r.session, r.handle, 0, undefined, { consumeNotices: false }).catch(
+              () => undefined,
+            )
+          : undefined;
         const code = res?.done ? (res.exitCode ?? null) : null;
         const interrupted = code === 130 || code === 143;
         rows.push({
@@ -1244,8 +1277,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // would inform that choice lives on poll". It does; there is no reason
           // it cannot be here too, and a caller that has just spent five minutes
           // blocked has earned more than a status word.
+          // Peeked for `progress` alone, so it must not consume: this runs in
+          // the still-running branch, where `poll` would not settle the notice
+          // anyway — unless the command finished in the gap between the wait
+          // timing out and this call, which is exactly the moment a human who
+          // just attached would be missed.
           const waitProgress = handle
-            ? await poll(session, handle, 0, 1)
+            ? await poll(session, handle, 0, 1, { consumeNotices: false })
                 .then((r) => r.progress)
                 .catch(() => undefined)
             : undefined;

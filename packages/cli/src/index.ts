@@ -417,6 +417,21 @@ async function main(): Promise<number> {
         return 0;
       }
       if (result.output) console.log(result.output);
+      // The doc says "a resize is reported to poll too, not just run", and a
+      // reviewer quoted that line back while showing four commands that said
+      // nothing. It was true of `--json`, which carries the whole result, and
+      // false of the text output a human actually reads — so the claim was
+      // half right, which is the half that gets believed.
+      if (result.paneWidthChanged) {
+        const w = result.paneWidthChanged;
+        console.error(
+          c.yellow(
+            `[ath] the pane resized ${w.from} → ${w.to} columns while this ran. Width-aware ` +
+              `output (ps, top, docker ps, column) is formatted for ${w.to} now; anything ` +
+              `read from this session earlier was formatted for ${w.from}.`,
+          ),
+        );
+      }
       if (!result.done) {
         console.error(c.dim(`\n[ath] still running · resume with --since ${result.nextOffset}`));
         return EXIT_STILL_RUNNING;
@@ -958,6 +973,32 @@ async function main(): Promise<number> {
                     )
                   : ''),
           );
+          // PUBLISH THE RESIZE. `poll` above consumes the consume-once width
+          // notice, so if this command does not print it, nobody ever will —
+          // the next `run` sees a settled baseline and stays silent.
+          //
+          // This is the same defect fixed in MCP's `await_human` one round
+          // earlier, left standing here because I fixed the report's surface
+          // instead of the report's CAUSE. A reviewer then used `ath await`,
+          // watched the pane go 200 -> 156 as the human attached, ran four
+          // commands in it, and was told nothing by any of them — finding out
+          // only by calling `ls` at the end, out of curiosity. They had run
+          // `ps` earlier in the audit; in that session it would have been
+          // silently truncated at 156 columns.
+          //
+          // A human attaching to answer a prompt is the SCENARIO THIS FIELD
+          // EXISTS FOR, and `await` is the call that scenario always makes.
+          if (res.paneWidthChanged) {
+            const w = res.paneWidthChanged;
+            console.error(
+              c.yellow(
+                `[ath] the pane resized ${w.from} → ${w.to} columns while you were at the ` +
+                  `keyboard. Output from width-aware commands (ps, top, docker ps, column) ` +
+                  `is now formatted for ${w.to} columns, and anything you read from this ` +
+                  `session BEFORE this line was formatted for ${w.from}.`,
+              ),
+            );
+          }
           return code;
         }
         if (Date.now() >= deadline) {
