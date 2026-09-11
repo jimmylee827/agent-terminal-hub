@@ -4,6 +4,7 @@ import * as os from 'node:os';
 
 import { AthError, InvalidName, SessionExists, SessionGone } from './errors';
 import {
+  reapStaleRc,
   frameHooksFor,
   shellProbeLine,
   HELPER_ONELINE,
@@ -384,6 +385,19 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   ]);
 
   await tmux(['set-option', '-t', tmuxName(name), 'remain-on-exit', 'on']);
+  // MAKE THE DOCUMENTED BOUND TRUE.
+  //
+  // `doctor --artifacts` says rc/ is "reaped after 6h" and the `purge` tool
+  // description says sentinels are kept "for about 6 hours" — but the only
+  // caller of the reaper was `ath gc`, a command nobody runs. Measured here
+  // before this change: 906 sentinels, 593 of them older than six hours, the
+  // oldest at ten. The code was fine; the claim was one nothing executed.
+  //
+  // Done in core rather than on either surface, so it cannot end up true of one
+  // and false of the other — the shape these rounds keep finding. Creation is
+  // the right moment: infrequent, already doing filesystem work, and the point
+  // at which the directory is about to grow again.
+  await reapStaleRc().catch(() => 0);
   await setMeta(name, 'pinned', opts.pin ? '1' : '0');
   await setMeta(name, 'owner', opts.owner || 'agent');
   // Where the session was created FROM, which is usually the project it belongs

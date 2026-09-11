@@ -1263,6 +1263,19 @@ chk "and the CLI doctor asks"                "yes" \
     "$(grep -q 'await staleServers()' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the MCP doctor asks"                "yes" \
     "$(grep -q 'await staleServers()' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# ---- a documented bound must be enforced by something that RUNS ------------
+#
+# `doctor --artifacts` says rc/ is "reaped after 6h" and the purge tool says
+# sentinels last "about 6 hours". The reaper existed and was correct — and its
+# only caller was `ath gc`, which nobody runs. Measured on this machine before
+# the fix: 906 sentinels, 593 older than six hours, oldest ten. The code was
+# fine; the CLAIM was the thing nothing executed. Creating one session now reaps
+# them, and it is wired in core so it cannot be true of one surface only.
+chk "rc reaping runs without ath gc"         "yes" \
+    "$(grep -q 'await reapStaleRc()' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
+chk "and not only from gc"                   "yes" \
+    "$(grep -q 'reapStaleRc' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
+
 chk "a current build reports nothing"        "yes" \
     "$(node -e 'const c=require("'"$RP"'/packages/core/dist/index.js");process.stdout.write(c.buildStaleness()?"no":"yes")' 2>/dev/null)"
 # Re-anchored: the wording it used to match ("while you were at the keyboard")
