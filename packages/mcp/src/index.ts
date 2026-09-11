@@ -330,12 +330,25 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // and because `new` is rare enough that a line here is not noise.
       const logDirNow = await logDirBytes().catch(() => 0);
       const newStale = buildStaleness();
+      // Ask the question that can actually be TRUE here.
+      //
+      // `new` already carried buildStaleness() — this process against the disk —
+      // which for a freshly launched server is always "current". Inert, exactly
+      // where it needed not to be: a reviewer ran a whole audit through the MCP
+      // tools and learned only at the end, from `doctor`, that two other servers
+      // were serving code from days earlier. They put it plainly: the notice
+      // "surfaces only if you call doctor, which is a command an agent has no
+      // reason to run unless it's specifically asked what the tool leaves
+      // behind". So ask about OTHER servers here, at session creation, which is
+      // the first call an agent makes and the one it cannot skip.
+      const newStaleServers = await staleServers().catch(() => []);
       return json({
         name: session.name,
         // Said HERE as well as in `doctor`, because by the time someone thinks
         // to run a diagnostic they have already been misled once. This is the
         // first call of a session.
         ...(newStale ? { stale_build: staleBuildNote(newStale) } : {}),
+        ...(newStaleServers.length ? { stale_servers: staleServersNote(newStaleServers) } : {}),
         ...(logDirNow > LOG_DIR_NOTICE_BYTES
           ? {
               log_dir_bytes: logDirNow,
@@ -483,6 +496,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // produced, never that anyone could see it.
       if (result.warning) payload.warning = result.warning;
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
+      if (result.exitCodeShortNote) payload.exit_code_note = result.exitCodeShortNote;
       // Same judgment `read` carries: the resume offer may already be void.
       if (result.omittedAtRisk) payload.omitted_at_risk = true;
       if (result.exitCodeCaveat) payload.exit_code_caveat = result.exitCodeCaveat;
@@ -768,6 +782,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         };
       }
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
+      if (result.exitCodeShortNote) payload.exit_code_note = result.exitCodeShortNote;
       // Output that is GONE, said out loud.
       //
       // A session log is rewritten to its last 8 MiB once it passes 32 MiB,

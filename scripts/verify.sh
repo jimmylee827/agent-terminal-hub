@@ -58,7 +58,14 @@ chk() { # name expected actual
     printf '  FAIL %s\n       expected: %s\n       actual:   %s\n' "$1" "$(printf %s "$2" | head -c 120)" "$(printf %s "$3" | head -c 120)"
   fi
 }
-out() { $ATH run "$S" -- "$1" 2>&1; }
+# 2>&1 because "stderr captured" genuinely needs the COMMAND's stderr — but the
+# hub's own `[ath]` diagnostics share that channel, and they are not the
+# command's output. Filtering them keeps this helper answering the question it
+# was written for. It started mattering when the CLI began showing the
+# exit-code caveat in text mode, which it had never done: three tests here use
+# compound lines and all three suddenly captured the notice as if the command
+# had printed it.
+out() { $ATH run "$S" -- "$1" 2>&1 | grep -v '^\[ath\] '; }
 rc()  { $ATH run "$S" -- "$1" >/dev/null 2>&1; echo $?; }
 
 echo "═══ $LABEL ═══"
@@ -1263,6 +1270,70 @@ chk "and the CLI doctor asks"                "yes" \
     "$(grep -q 'await staleServers()' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the MCP doctor asks"                "yes" \
     "$(grep -q 'await staleServers()' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# ---- the trim warning must be true on BOTH sides of the threshold ----------
+#
+# The warning fires at 75% of the cap (24 MiB); the trim happens only ABOVE the
+# cap (32 MiB). Between them this announced "24 MiB, already past the 32 MiB
+# threshold, and WILL BE rewritten when the next command starts" — both halves
+# false, in one clause, with the two numbers side by side. A reviewer quoted it
+# and said they could not tell which figure was wrong, "meaning I couldn't judge
+# how urgent the warning was", which is all this message is for. It came from
+# patching an earlier tense bug by bolting a clause on instead of asking when
+# the sentence is true.
+TRIMN="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const near=a.logNearTrimNote(24*1048576), past=a.logNearTrimNote(57*1048576);
+const out=[];
+out.push(/already past/.test(near)?"NEARCLAIMSPAST":"nearIsHonest");
+out.push(/NOTHING has been discarded yet/.test(near)?"nearSaysNothingLost":"NEARSILENTONLOSS");
+out.push(/already past/.test(past)?"pastSaysPast":"PASTNOTMARKED");
+out.push(/WILL BE rewritten/.test(past)?"pastSaysWillBe":"PASTNOTFUTURE");
+process.stdout.write(out.join(" "));
+' 2>/dev/null)"
+chk "the NEAR warning does not claim past"   "yes" "$(printf '%s' "$TRIMN" | grep -q nearIsHonest && echo yes || echo no)"
+chk "and says nothing is lost yet"           "yes" "$(printf '%s' "$TRIMN" | grep -q nearSaysNothingLost && echo yes || echo no)"
+chk "the PAST warning still says past"       "yes" "$(printf '%s' "$TRIMN" | grep -q pastSaysPast && echo yes || echo no)"
+chk "and keeps the future tense"             "yes" "$(printf '%s' "$TRIMN" | grep -q pastSaysWillBe && echo yes || echo no)"
+
+# ---- a stale server must be visible without running `doctor` ----------------
+#
+# `new` carried buildStaleness() — this process against the disk — which for a
+# freshly launched server is always "current". Inert exactly where it mattered:
+# a reviewer ran an entire audit through the MCP tools and learned only at the
+# end, from `doctor`, that two other servers were days behind. Their words: it
+# "surfaces only if you call doctor, which is a command an agent has no reason
+# to run". `new` asks about OTHER servers now.
+chk "new asks about other servers"           "yes" \
+    "$(grep -q 'newStaleServers' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "the stale note scopes the gap"          "yes" \
+    "$(grep -q 'behind' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "and points at git log, not guesses"     "yes" \
+    "$(grep -q 'git log --since' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "sub-hour gaps are not shown as 0h"      "yes" \
+    "$(grep -q 'm behind' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+
+# ---- the once-per-session caveat must still advise on later commands --------
+#
+# After the paragraph was shown once, affected commands carried a bare token,
+# `exit_code_covers: "last-pipeline-stage-only"`. A reviewer read the paragraph
+# on their first command, then several calls later wrote `cmd | head -5 ||
+# fallback`, watched the `||` never fire because head returned 0, and said the
+# policy "is right for context budget and wrong for the moment you actually need
+# it". A classification is not advice. One clause now rides every affected
+# command — ~70 characters against the paragraph's ~600.
+chk "later commands still carry advice"      "yes" \
+    "$(grep -q 'exitCodeShortNote' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "on poll as well as run"                 "2" \
+    "$(grep -c 'exitCodeShortNote:' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+# And the surface that never showed ANY of it. Found while fixing the complaint
+# above: the CLI printed neither the paragraph nor the marker in text mode —
+# only --json carried them, via toWire. Nobody reported this; it surfaced
+# because the MCP complaint was the opposite one, about repetition.
+chk "the CLI shows the caveat at all"        "yes" \
+    "$(grep -q 'result.exitCodeCaveat' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and the short form after it"            "yes" \
+    "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
 # ---- a documented bound must be enforced by something that RUNS ------------
 #
 # `doctor --artifacts` says rc/ is "reaped after 6h" and the purge tool says
@@ -1421,6 +1492,14 @@ chk "the doc lists the new-session cause"     "yes" \
 chk "session layout is the FIRST core rule"  "yes" \
     "$(grep -q '^1\. \*\*Plan the session layout' "$SK" && echo yes || echo no)"
 # Three questions reviewers listed as unanswerable from the docs.
+# The MCP `await_human` is bounded and looping is forbidden, which leaves "what
+# if I have nothing else to do" unanswered. A reviewer said they were only fine
+# because this task happened to have parallel work: "with nothing else to do I'd
+# have had to choose between stalling and breaking the no-loop rule."
+chk "the doc answers having nothing to do"   "yes" \
+    "$(grep -q 'end your turn — that is the answer' "$SK" && echo yes || echo no)"
+chk "and names the shell-tool bridge"        "yes" \
+    "$(grep -q 'you are not' "$SK" && grep -q 'background job and let your harness' "$SK" && echo yes || echo no)"
 chk "the doc explains what owner means"      "yes" \
     "$(grep -q 'says who CREATED the session' "$SK" && echo yes || echo no)"
 chk "and that a noisy prompt is not detected" "yes" \
@@ -1622,8 +1701,11 @@ chk "and the MCP layer no longer spells it" "0" \
     "$(grep -c 'once it passes 32 MiB, at the START' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
 chk "the note says it has not happened yet" "yes" \
     "$(grep -q 'WILL BE rewritten to its last 8 MiB when the next command starts — it ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+# Anchored on the phrase, not the number: the threshold is templated from
+# LOG_MAX_BYTES now, so a hardcoded 32 stopped matching. The NEAR/PAST split is
+# asserted properly by the TRIMN probe above.
 chk "and drops the already-passed threshold" "yes" \
-    "$(grep -q 'already past the 32 MiB' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+    "$(grep -q 'already past the' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 # One unit. The same response quotes the log size twice; MB beside MiB invites
 # the reader to wonder whether two different limits are meant.
 chk "no MB/MiB mixture in trim messages"    "0" \
@@ -2749,7 +2831,11 @@ $ATH_BIN send "$N" --text -- bash >/dev/null 2>&1; sleep 2
 $ATH_BIN run "$N" -- 'echo one' >/dev/null 2>&1
 chk "depth 1: one marker"       "1"   "$(prompt | grep -o '↳' | wc -l | tr -d ' ')"
 chk "depth 1: exit code"        "17"  "$($ATH_BIN run "$N" -- '(exit 17)' >/dev/null 2>&1; echo $?)"
-chk "depth 1: state persists"   "kept" "$($ATH_BIN run "$N" -- 'X=kept; echo $X' 2>&1)"
+# stdout only. This captured 2>&1 and passed only because the CLI printed
+# nothing to stderr for a compound line — which was itself the bug fixed this
+# round: `X=kept; echo $X` is compound, so it now carries the exit-code caveat,
+# and a test asking "what did the command print" must not swallow diagnostics.
+chk "depth 1: state persists"   "kept" "$($ATH_BIN run "$N" -- 'X=kept; echo $X' 2>/dev/null)"
 
 $ATH_BIN send "$N" --text -- bash >/dev/null 2>&1; sleep 2
 $ATH_BIN run "$N" -- 'echo two' >/dev/null 2>&1

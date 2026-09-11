@@ -146,6 +146,12 @@ export interface RunResult {
    * it.
    */
   exitCodeCaveat?: string;
+  /**
+   * The one-clause form, on every affected command after the paragraph has been
+   * shown once. The classification alone is not advice — see the comment at its
+   * emission in run.ts.
+   */
+  exitCodeShortNote?: string;
   /** null when the command did not finish (timed out or is awaiting input). */
   exitCode: number | null;
   /** Combined stdout+stderr for this command only, ANSI-stripped. */
@@ -400,6 +406,8 @@ export interface PollResult {
    * Exactly the omission the `warning` field documents, one field over.
    */
   exitCodeCovers?: string;
+  /** The one-clause advice that goes with it. */
+  exitCodeShortNote?: string;
   /**
    * How far in, as a NUMBER rather than something to derive.
    *

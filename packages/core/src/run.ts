@@ -1918,7 +1918,27 @@ async function runLocked(
                       'stage rather than only the last. ') +
                   '(Shown once per session; the short marker stays on every affected command.)',
               }
-            : {}),
+            : {
+                // After the full paragraph has been given once, this carried a
+                // BARE TOKEN — `exit_code_covers: "last-pipeline-stage-only"` —
+                // and nothing else.
+                //
+                // A reviewer read the full caveat on their first command, then
+                // several calls later wrote `cmd | head -5 || fallback`, watched
+                // the `||` never fire because `head` returned 0, and said the
+                // once-per-session policy "is right for context budget and wrong
+                // for the moment you actually need it". They are right: a
+                // classification is not advice, and the moment of need is
+                // whichever command you happen to be writing, not the first.
+                //
+                // One clause, ~70 characters against the paragraph's ~600, so
+                // the budget argument survives and the warning still says what
+                // to do at the point it applies.
+                exitCodeShortNote:
+                  compoundExitCaveat(command) === 'last-pipeline-stage-only'
+                    ? 'Exit code is the LAST PIPELINE STAGE only — read the output, not the number.'
+                    : 'Exit code is the LAST PART of this line only — read the output, not the number.',
+              }),
         }
       : {}),
     timedOut: false,
@@ -2842,7 +2862,15 @@ export async function poll(
     // Only once the code EXISTS: a caveat about an exit code nobody has yet is
     // noise, and `done: false` results carry no code to qualify.
     ...(done && session.lastCommand && compoundExitCaveat(session.lastCommand)
-      ? { exitCodeCovers: compoundExitCaveat(session.lastCommand) }
+      ? {
+          exitCodeCovers: compoundExitCaveat(session.lastCommand),
+          // Same one clause `run` carries. A compound line driven by start/poll
+          // hides an earlier failure exactly as well as one driven by `run`.
+          exitCodeShortNote:
+            compoundExitCaveat(session.lastCommand) === 'last-pipeline-stage-only'
+              ? 'Exit code is the LAST PIPELINE STAGE only — read the output, not the number.'
+              : 'Exit code is the LAST PART of this line only — read the output, not the number.',
+        }
       : {}),
     // How far in, computed once here rather than left to the caller to derive
     // from a climbing offset and an elapsed time.
@@ -3524,12 +3552,38 @@ export function tailIsAllFurniture(output: string): boolean {
  * has ALREADY passed 32 MiB, so a conditional about passing it reads as a
  * threshold still ahead when the only thing still ahead is the rewrite itself.
  */
+const LOG_KEEP_BYTES_NOTE = 8;
+
 export function logNearTrimNote(bytes: number): string {
+  const mib = Math.floor(bytes / 1048576);
+  const cap = LOG_MAX_BYTES / 1048576;
+  const keep = LOG_KEEP_BYTES_NOTE;
+  // TWO SITUATIONS, and saying the wrong one is how this went wrong before.
+  //
+  // The warning fires at 75% of the cap; the trim happens only ABOVE the cap.
+  // Between those — 24 to 32 MiB — this used to announce "24 MiB, already past
+  // the 32 MiB threshold, and WILL BE rewritten when the next command starts".
+  // Both halves were false, in one clause, with the two numbers side by side.
+  // A reviewer quoted it and said they could not tell whether the size or the
+  // threshold was wrong, "meaning I couldn't judge how urgent the warning was",
+  // which is the only thing this message exists to convey.
+  //
+  // It came from patching the earlier tense bug by bolting a clause onto the
+  // sentence rather than asking when the sentence is true.
+  if (bytes > LOG_MAX_BYTES) {
+    return (
+      `This session's log is ${mib} MiB, already past the ${cap} MiB threshold, and WILL BE ` +
+      `rewritten to its last ${keep} MiB when the next command starts — it has not happened ` +
+      `yet. Offsets from before that point will then return lost_bytes. If you need this ` +
+      `job's output, write it to a file on the host now, while it is still here.`
+    );
+  }
   return (
-    `This session's log is ${Math.floor(bytes / 1048576)} MiB, already past the 32 MiB ` +
-    `threshold, and WILL BE rewritten to its last 8 MiB when the next command starts — it ` +
-    `has not happened yet. Offsets from before that point will then return lost_bytes. If ` +
-    `you need this job's output, write it to a file on the host now, while it is still here.`
+    `This session's log is ${mib} MiB and approaching the ${cap} MiB threshold. NOTHING has ` +
+    `been discarded yet, and the next command will not discard anything either — the rewrite ` +
+    `happens only once the log is over ${cap} MiB, and then at the start of the command after ` +
+    `that. This is the warning you get while there is still time to act: if you need this ` +
+    `job's output, write it to a file on the host now, rather than relying on the transcript.`
   );
 }
 

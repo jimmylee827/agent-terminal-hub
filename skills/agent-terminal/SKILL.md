@@ -418,6 +418,17 @@ Your job when it fires:
    its exit code is the answer. `requests` listing nothing means none was ever
    filed, not that one was answered.
 
+   **If you have nothing to interleave, end your turn — that is the answer, not
+   a workaround.** A reviewer with plenty of parallel work noted they were only
+   fine because of it: "with nothing else to do I'd have had to choose between
+   stalling and breaking the no-loop rule." Neither. Report which session is
+   waiting and what for, and stop. Being re-invoked after the person answers
+   costs nothing; a burned turn spent looping costs the human a slower reply.
+   And if you have an ordinary shell tool alongside these MCP tools, you are not
+   restricted to the bounded form — run `ath await <session>` there as a
+   background job and let your harness notify you. Using the MCP surface for the
+   session does not mean you must wait through it.
+
    Read the exit code, not just the text. `0` or the command's own code means
    answered; `130`/`143` mean interrupted, NOT answered; `2` means nothing was
    pending to wait for; `3` means it is no longer waiting and the outcome

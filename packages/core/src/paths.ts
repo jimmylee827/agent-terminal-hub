@@ -322,13 +322,46 @@ export async function staleServers(): Promise<StaleServer[]> {
 /** What to say about them. Shared wording, like every other notice here. */
 export function staleServersNote(servers: StaleServer[]): string {
   const when = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-  const list = servers.map((s) => `pid ${s.pid} (started ${when(s.startedMs)} UTC)`).join(', ');
+  let built = 0;
+  try {
+    built = statSync(__filename).mtimeMs;
+  } catch {
+    built = 0;
+  }
+  // HOW FAR behind, not just "behind".
+  //
+  // A reviewer acted on this notice and still could not scope their own
+  // uncertainty: "it doesn't say which behaviours differ". Enumerating those
+  // honestly is not possible from here — but the SIZE of the gap is, and a
+  // server three days old is a different problem from one three minutes old.
+  // The build date lets a reader go and look, which is the most this can
+  // truthfully offer.
+  const list = servers
+    .map((s) => {
+      const days = built ? (built - s.startedMs) / 86400000 : 0;
+      // Minutes below an hour: "0h behind" reads as NOT behind, which is the
+      // opposite of what the row is there to say.
+      const mins = built ? Math.max(1, Math.round((built - s.startedMs) / 60000)) : 0;
+      const behind = !built
+        ? ''
+        : days >= 1
+          ? `, ${Math.floor(days)}d behind`
+          : mins >= 60
+            ? `, ${Math.round(mins / 60)}h behind`
+            : `, ${mins}m behind`;
+      return `pid ${s.pid} (started ${when(s.startedMs)} UTC${behind})`;
+    })
+    .join(', ');
   return (
     `${servers.length} agent_terminal MCP server${servers.length === 1 ? '' : 's'} ` +
     `${servers.length === 1 ? 'is' : 'are'} running code older than the current build: ${list}. ` +
     `Node reads its modules once at startup, so those processes do NOT have fixes built since ` +
     `then — an agent using the MCP tools will see the old behaviour while this CLI shows the ` +
-    `new one. Restart the client that launched each server to pick the build up.`
+    `new one. ` +
+    (built ? `The build on disk is from ${when(built)} UTC; ` : '') +
+    `what changed in between is whatever landed in the project since each start time above — ` +
+    `"git log --since" over that window is the honest answer, because this cannot enumerate ` +
+    `behaviours. Restart the client that launched each server to pick the build up.`
   );
 }
 

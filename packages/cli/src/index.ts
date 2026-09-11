@@ -320,6 +320,20 @@ async function main(): Promise<number> {
           ),
         );
       }
+      // THE EXIT-CODE CAVEAT HAS NEVER REACHED THIS SURFACE.
+      //
+      // Found while fixing the once-per-session complaint: the MCP payload has
+      // carried `exit_code_caveat` and `exit_code_covers` since they existed,
+      // and `ath run` printed neither in text mode — only `--json` had them,
+      // via toWire. So a human or agent driving the CLI has been reading exit
+      // codes off compound lines with no indication the number covers one part
+      // of them. Nobody reported it; it turned up because a reviewer complained
+      // about the MCP version's REPETITION, which is the opposite problem.
+      if (result.exitCodeCaveat) {
+        console.error(c.yellow(`\n[ath] ${result.exitCodeCaveat}`));
+      } else if (result.exitCodeShortNote) {
+        console.error(c.dim(`[ath] ${result.exitCodeShortNote}`));
+      }
       if (result.paneWidthChanged) {
         console.error(
           c.yellow(
