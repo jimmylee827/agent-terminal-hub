@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, statSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -221,6 +221,68 @@ export async function logDirBytes(): Promise<number> {
     if (st?.isFile()) total += st.size;
   }
   return total;
+}
+
+/**
+ * Is the code answering this call older than the code on disk?
+ *
+ * Node reads a module once, at startup. A long-lived MCP server therefore keeps
+ * serving the build it booted with, however many times the project is rebuilt
+ * underneath it — and the preferred surface, the one the skill file tells
+ * agents to use, is exactly the long-lived one. The CLI re-reads `dist` on
+ * every invocation, so a fix appears there immediately.
+ *
+ * That split cost a reviewer twenty minutes: they ran the same command on both
+ * surfaces seconds apart, got a warning from one and silence from the other,
+ * and had to go through process start times to work out why. Their words, and
+ * the design point: "the preferred surface is the one that silently serves
+ * stale code after an update, with nothing anywhere indicating a version
+ * mismatch. A build stamp visible in list or doctor would have turned twenty
+ * minutes of process archaeology into one call."
+ *
+ * `__filename` is this module in `dist`; its mtime at load is what is running,
+ * and its mtime now is what is on disk. Comparing the two needs no build step,
+ * no version file, and cannot drift out of date.
+ */
+const BUILD_LOADED_MS = ((): number => {
+  try {
+    return statSync(__filename).mtimeMs;
+  } catch {
+    return 0;
+  }
+})();
+
+export interface BuildStaleness {
+  loadedMs: number;
+  onDiskMs: number;
+}
+
+/** Returns the two timestamps only when the running code is behind the disk. */
+export function buildStaleness(): BuildStaleness | undefined {
+  if (!BUILD_LOADED_MS) return undefined;
+  let onDiskMs = 0;
+  try {
+    onDiskMs = statSync(__filename).mtimeMs;
+  } catch {
+    return undefined;
+  }
+  // A second of slack: some filesystems round mtimes, and a false alarm here
+  // would send people restarting servers that are perfectly current.
+  if (onDiskMs <= BUILD_LOADED_MS + 1000) return undefined;
+  return { loadedMs: BUILD_LOADED_MS, onDiskMs };
+}
+
+/** The sentence both surfaces show for it. Shared, so they cannot disagree. */
+export function staleBuildNote(s: BuildStaleness): string {
+  const when = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+  return (
+    `THIS PROCESS IS RUNNING STALE CODE. It loaded the hub at ${when(s.loadedMs)} UTC, and the ` +
+    `build on disk is from ${when(s.onDiskMs)} UTC — newer. Node reads its modules once at ` +
+    `startup, so a fix built since then is NOT in effect here, even though the same command run ` +
+    `through the "ath" CLI would use it. If a documented behaviour seems missing, this is the ` +
+    `first thing to rule out: restart this server (for an MCP server, restart the client that ` +
+    `launched it) and try again.`
+  );
 }
 
 /** Past this, `new` says so once. Chosen to sit under the 274 MiB a reviewer met. */

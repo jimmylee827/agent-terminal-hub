@@ -45,7 +45,14 @@ import {
   looksLikeCredentialPromptNear,
   looksLikePrompt,
 } from './state';
-import type { PollResult, RunOptions, RunResult, Session, StartResult } from './types';
+import type {
+  PaneWidthChange,
+  PollResult,
+  RunOptions,
+  RunResult,
+  Session,
+  StartResult,
+} from './types';
 import { randomNonce, shellQuote, sleep, stripAnsi, toLines, trimBlankEdges } from './util';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -2217,12 +2224,8 @@ async function firstWidthNoteFor(name: string): Promise<boolean> {
   }
 }
 
-export interface WidthObservation {
-  from: number;
-  to: number;
-  /** Every distinct width seen, when tmux recorded more than the endpoints. */
-  seen?: number[];
-  /** False once the long explanation has been given for this session. */
+export interface WidthObservation extends PaneWidthChange {
+  /** Always present internally, unlike on the wire. */
   explain: boolean;
   /**
    * `from` is the width that was REQUESTED, not one previously observed.
@@ -2285,6 +2288,13 @@ async function observeWidth(
   }
   const distinct = [...new Set([baseline, ...everyWidth])];
   const explain = await firstWidthNoteFor(name);
+  // Did WE land it here? `setWidth` records what it asked for, and a pane
+  // sitting at exactly that is the one case where "someone attached" can be
+  // ruled out rather than assumed. Cleared as it is read, so a genuine resize
+  // back to the same number later is not excused by a stale record.
+  const selfSet = Number(await readMeta(name, 'selfw').catch(() => '')) || 0;
+  const byHub = selfSet > 0 && selfSet === now;
+  if (byHub && consume) await setMeta(name, 'selfw', '').catch(() => undefined);
   await settle();
   return {
     from: baseline,
@@ -2293,6 +2303,7 @@ async function observeWidth(
     // moved back reports from === to, and this list is the only evidence left.
     ...(distinct.length > 2 || baseline === now ? { seen: distinct } : {}),
     explain,
+    ...(byHub ? { byHub: true } : {}),
   };
 }
 

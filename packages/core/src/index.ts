@@ -22,6 +22,8 @@ export {
   purgeLog,
   reapDeadLogs,
   logDirBytes,
+  buildStaleness,
+  staleBuildNote,
   LOG_DIR_NOTICE_BYTES,
   LOG_MAX_BYTES,
   NOTIFY_MAX_BYTES,

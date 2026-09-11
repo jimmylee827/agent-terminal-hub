@@ -28,6 +28,8 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  buildStaleness,
+  staleBuildNote,
   logDirBytes,
   LOG_DIR_NOTICE_BYTES,
   logNearTrimNote,
@@ -78,16 +80,36 @@ function json(value: unknown): ToolResult {
  * there applies here: the marker is always present and costs nothing, and the
  * explanation is given once.
  */
-function widthNote(w: { from: number; to: number; seen?: number[]; explain?: boolean }): string {
+function widthNote(w: {
+  from: number;
+  to: number;
+  seen?: number[];
+  explain?: boolean;
+  byHub?: boolean;
+}): string {
   const moved =
     w.from === w.to
       ? `The pane was resized and put back (${(w.seen ?? []).join(' → ')}) while this was running`
       : `The pane was resized from ${w.from} to ${w.to} columns`;
+  // WHO did it, only when it is known.
+  //
+  // This said "a human attaching does that" on every resize, including the ones
+  // the hub performed itself. A reviewer ran `ath width` on their own session
+  // and was told a person had been at the keyboard. Since `attached_clients`
+  // was retired, a resize is the only evidence left that anyone joined — which
+  // makes it exactly the signal that must not be overstated. The one case that
+  // can be RULED OUT is the hub's own call; everything else is evidence of a
+  // client, stated as evidence rather than as a person.
+  const cause = w.byHub
+    ? ` — by a \`width\` call from this session, NOT by anyone attaching`
+    : ` — something attached to the pane and set its size. That is usually a person joining, ` +
+      `often to answer a prompt, but the hub cannot see who, and an editor panel attaching ` +
+      `looks identical`;
   if (!w.explain) {
-    return `${moved}. Column layouts measured earlier may no longer hold.`;
+    return `${moved}${w.byHub ? cause : ''}. Column layouts measured earlier may no longer hold.`;
   }
   return (
-    `${moved} — a human attaching does that, usually to answer a prompt. ` +
+    `${moved}${cause}. ` +
     `Width-aware tools (ps, docker ps, lsblk, vmstat) format themselves to the pane, so a ` +
     `layout you calibrated earlier may not hold for output written after the change. If you ` +
     `are parsing by column, re-read rather than trusting it, or switch to width-independent ` +
@@ -195,7 +217,11 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           ],
         };
       }
-      return json(
+      // A stale server is reported HERE too, because `list` is named in the docs
+      // as the call you make first and is where a reviewer said they would have
+      // looked. Prepended as its own block so it cannot be lost inside the rows.
+      const listStale = buildStaleness();
+      const listRows = json(
         sessions.map((s) => ({
           name: s.name,
           state: s.state,
@@ -269,6 +295,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           summary: summarize(s),
         })),
       );
+      return listStale
+        ? { content: [{ type: 'text', text: staleBuildNote(listStale) }, ...listRows.content] }
+        : listRows;
     }
 
     case 'new': {
@@ -298,8 +327,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // Said at CREATION because that is the moment you are about to add to it,
       // and because `new` is rare enough that a line here is not noise.
       const logDirNow = await logDirBytes().catch(() => 0);
+      const newStale = buildStaleness();
       return json({
         name: session.name,
+        // Said HERE as well as in `doctor`, because by the time someone thinks
+        // to run a diagnostic they have already been misled once. This is the
+        // first call of a session.
+        ...(newStale ? { stale_build: staleBuildNote(newStale) } : {}),
         ...(logDirNow > LOG_DIR_NOTICE_BYTES
           ? {
               log_dir_bytes: logDirNow,
@@ -1368,7 +1402,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           bounded: a.bounded,
         });
       }
+      const doctorStale = buildStaleness();
       return json({
+        ...(doctorStale ? { stale_build: staleBuildNote(doctorStale) } : {}),
         root: ATH_HOME,
         artifacts: rows,
         note: '`purge` clears only the entry marked removed_by_purge, and only for one session.',

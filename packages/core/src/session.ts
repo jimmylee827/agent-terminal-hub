@@ -834,6 +834,16 @@ export async function setWidth(name: string, cols: number, rows?: number): Promi
     ...(height === undefined ? [] : ['-y', String(height)]),
   ]);
   void current;
+  // RECORD THAT WE DID IT.
+  //
+  // A resize is the only remaining evidence that someone attached — the field
+  // that used to imply it was retired for counting the editor's own panel as a
+  // person. That makes it important that a resize the HUB performed is not
+  // reported as one a human performed. A reviewer called `ath width` on their
+  // own session and was told the pane "resized while you were at the keyboard";
+  // nobody was at the keyboard, and they were right to call it a false
+  // statement in a tool whose refusal to overclaim they had singled out.
+  await setMeta(clean, 'selfw', String(width)).catch(() => undefined);
   return width;
 }
 

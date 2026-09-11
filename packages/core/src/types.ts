@@ -9,6 +9,31 @@ export type SessionState =
   /** The pane's process exited; the session is held open by `remain-on-exit`. */
   | 'dead';
 
+/**
+ * A pane resize, as reported to a caller.
+ *
+ * Declared ONCE and referenced twice. It was spelled out inline on both
+ * `RunResult` and `PollResult`, so adding `byHub` to one left the other
+ * rejecting it — the same "two copies drift" shape these rounds keep turning
+ * up, this time in the type declarations rather than the messages.
+ */
+export interface PaneWidthChange {
+  from: number;
+  to: number;
+  /** Every distinct width seen, when tmux recorded more than the endpoints. */
+  seen?: number[];
+  /** False once the long explanation has been given for this session. */
+  explain?: boolean;
+  /**
+   * The HUB resized it (a `width` call), not a person attaching.
+   *
+   * Since `attached_clients` was retired, a resize is the only evidence left
+   * that anyone joined the pane — so the one case that can be ruled out must
+   * be, or every `width` call reads as a human arriving.
+   */
+  byHub?: boolean;
+}
+
 export interface Session {
   /** Logical name, without the `ath-` prefix. This is what users and agents type. */
   name: string;
@@ -169,14 +194,7 @@ export interface RunResult {
    * reads differently after it. Two agents hit it; the second put it plainly —
    * "the errors are excellent; the silent state changes are the gap".
    */
-  paneWidthChanged?: {
-    from: number;
-    to: number;
-    /** Every distinct width seen, when tmux recorded more than the endpoints. */
-    seen?: number[];
-    /** False once the long explanation has been given for this session. */
-    explain?: boolean;
-  };
+  paneWidthChanged?: PaneWidthChange;
   /**
    * Present when the command is still running (a prompt or a timeout). Pass it
    * to `poll` to pick the same command back up rather than re-running it.
@@ -343,7 +361,7 @@ export interface PollResult {
    * `done`, so a polling loop cannot swallow the notice before a later `run`
    * sees it.
    */
-  paneWidthChanged?: { from: number; to: number; seen?: number[]; explain?: boolean };
+  paneWidthChanged?: PaneWidthChange;
   state: SessionState;
   needsInput: boolean;
   /**

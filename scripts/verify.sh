@@ -1197,8 +1197,68 @@ chk "every result field reaches its surface" "0" \
 # MCP `wait` — none of which anyone had reported yet.
 chk "no handler swallows a width notice"     "0" \
     "$(node "$RP/scripts/consumers.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# ---- a user-facing fact must reach BOTH surfaces ----------------------------
+#
+# `log_dir_note` shipped to MCP alone, in the very commit titled "stop fixing the
+# width bug one surface at a time". A reviewer grepped packages/cli, found not
+# one reference, and pointed out that `ath new` could never warn by construction.
+# consumers.js had no opinion — it only knows about poll handlers.
+#
+# surfaces.js closes that: any core export whose NAME marks it as user-facing
+# wording must be referenced by both surfaces or excused with a reason. It is
+# retroactive and needs no registration, so the next one is caught by naming
+# convention rather than by anyone remembering. Verified against commit 18f7625,
+# where it correctly reports logDirBytes and LOG_DIR_NOTICE_BYTES as MCP-only.
+chk "no user-facing fact is one-sided"       "0" \
+    "$(node "$RP/scripts/surfaces.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+chk "ath new can warn about the log dir"     "yes" \
+    "$(grep -q 'logDirBytes' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# ---- never claim a person was there --------------------------------------
+#
+# A reviewer praised this tool for refusing to overclaim and, in the same
+# report, caught it telling them a "prompt answered" for a bare `sleep 8` and
+# that the pane resized "while you were at the keyboard" when they had resized
+# it themselves with `ath width`. Since `attached_clients` was retired a resize
+# is the ONLY evidence the docs offer that a human is present, so a notice that
+# fires on the agent's own actions is worse than none.
+CLAIM="$(node "$RP/scripts/claimcheck.js" 2>/dev/null)"
+chk "a resize WE made is marked as ours"     "yes" \
+    "$(printf '%s' "$CLAIM" | grep -q hubResizeMarked && echo yes || echo no)"
+chk "an external resize is still reported"   "yes" \
+    "$(printf '%s' "$CLAIM" | grep -q externalResizeSeen && echo yes || echo no)"
+chk "and is not attributed to the hub"       "yes" \
+    "$(printf '%s' "$CLAIM" | grep -q externalNotBlamedOnHub && echo yes || echo no)"
+chk "no message asserts the keyboard"        "0" \
+    "$(cat "$RP/packages/cli/src/index.ts" "$RP/packages/mcp/src/index.ts" | grep -c 'while you were at the' | tr -d ' ')"
+chk "widthNote branches on who resized"      "yes" \
+    "$(grep -q 'NOT by anyone attaching' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "await proves a prompt before claiming one" "yes" \
+    "$(grep -q 'Nothing here was ' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# ---- a long-lived server must say when it is stale --------------------------
+#
+# Node reads its modules once. The MCP server — the surface the skill file tells
+# agents to prefer — therefore serves whatever build it booted with, forever,
+# while the CLI picks up every rebuild. A reviewer ran the same command on both
+# seconds apart, got a warning from one and silence from the other, and spent
+# twenty minutes on process start times working out why. Their fix, adopted
+# verbatim: a build stamp where you would look.
+chk "the hub can detect its own staleness"   "yes" \
+    "$(grep -q 'export function buildStaleness' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+# Two plain greps, not `grep -lc` over two files: -l and -c together are not
+# portable and gave 4 on macOS where I expected 2. Clever constructs in this
+# file have now cost several rounds; the boring form is the correct form.
+chk "and both surfaces report it"            "yes yes" \
+    "$(grep -q 'staleBuildNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no) $(grep -q 'staleBuildNote' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "a current build reports nothing"        "yes" \
+    "$(node -e 'const c=require("'"$RP"'/packages/core/dist/index.js");process.stdout.write(c.buildStaleness()?"no":"yes")' 2>/dev/null)"
+# Re-anchored: the wording it used to match ("while you were at the keyboard")
+# was itself the overclaim removed above. The PROPERTY is that `await` publishes
+# the resize at all — that is what four blind commands cost a reviewer.
 chk "the CLI await publishes the resize"     "yes" \
-    "$(grep -q 'keyboard. Output from width-aware' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+    "$(grep -q 'columns. ` +' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the CLI poll does too"              "yes" \
     "$(grep -q 'columns while this ran' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 # A listing must not settle a notice it will never print.
@@ -1219,6 +1279,8 @@ chk "a LAN mismatch is detected, not just documented" "yes" \
     "$(grep -q 'function networkBlindSpot' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "and it rides both warning chains"       "2" \
     "$(grep -c 'networkBlindSpot(command, session.remote)' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "the doc states the guard's LIMITS"      "yes" \
+    "$(grep -q 'cannot help at all if you run the probe' "$SK" && echo yes || echo no)"
 chk "it stays off REMOTE sessions"           "yes" \
     "$(grep -q 'if (remote) return undefined;' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 # Precision matters more than presence: a warning that fires on every address is

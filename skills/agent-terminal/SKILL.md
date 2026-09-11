@@ -521,6 +521,18 @@ A plain `exit` there returns you one level, it does not end the session.
 Things cold agents worked out they could not answer from the docs. The answers
 are cheap to state and each one changes a decision.
 
+**Ask which HOST a question is about, and which host you are speaking as.** A
+probe of an address your machine cannot route to answers exactly like a
+firewalled one: closed, filtered, no route. Reporting that as "locked down"
+inverts the truth, and nothing errors to tell you. A command run in a LOCAL
+session that names an RFC1918 address outside this machine's own subnets now
+gets a `warning` saying so — but note the limits. It cannot help inside a
+`--remote` session, because the command runs on the far host whose interfaces
+the hub cannot see; and it cannot help at all if you run the probe from your
+ordinary shell tool rather than through a session. When the question is about a
+remote machine, the reliable answer is to run the probe **in a session on that
+machine**, where "can I reach it" and "is it filtered" stop being confusable.
+
 **`owner` says who CREATED the session, not who is using it.** It is set once,
 at creation, and never changes — so an agent-created session reads `agent`
 forever, including while a human is attached to it and typing in it. A reviewer

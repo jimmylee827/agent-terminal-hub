@@ -40,6 +40,10 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  logDirBytes,
+  buildStaleness,
+  staleBuildNote,
+  LOG_DIR_NOTICE_BYTES,
   rename,
   run,
   sendKeys,
@@ -191,12 +195,32 @@ async function main(): Promise<number> {
         // later moment where a person would think to ask. The session records
         // everything printed in it and outlives both the agent and the editor.
         console.log(c.dim(`recording to: ${logPath(session.name)}`));
+        // The SAME notice the MCP surface gives. It was added to `new` there
+        // and not here, in the very commit titled "stop fixing the width bug
+        // one surface at a time" — a reviewer noted the irony and was right:
+        // there was not one reference to it in packages/cli, so `ath new` could
+        // never warn, by construction.
+        const dirBytes = await logDirBytes().catch(() => 0);
+        if (dirBytes > LOG_DIR_NOTICE_BYTES) {
+          console.error(
+            c.yellow(
+              `[ath] session transcripts under ~/.ath/log total ` +
+                `${Math.round(dirBytes / 1048576)} MiB. Each FILE is trimmed; the DIRECTORY is ` +
+                `not, and "ath kill" keeps a transcript on purpose, so dead sessions stay ` +
+                `forever. "ath purge --dead" reclaims the ones whose sessions are gone.`,
+            ),
+          );
+        }
       }
       return 0;
     }
 
     case 'ls':
     case 'list': {
+      {
+        const stale = buildStaleness();
+        if (stale) console.error(c.yellow(`[ath] ${staleBuildNote(stale)}\n`));
+      }
       const sessions = await list();
       if (flagBool(flags, 'json')) {
         // `paneTail` is the whole visible pane, wrapped to the pane width. It
@@ -917,6 +941,13 @@ async function main(): Promise<number> {
         }
       }
 
+      // Was a person ever actually needed? Established by OBSERVATION across the
+      // whole wait, not assumed from the fact that `await` was called. `ath
+      // await --handle` works on any running command, so a plain `sleep 8` can
+      // reach the same success line.
+      let everParked = (await listRequests()).some(
+        (r) => r.session === name && (!handle || r.handle === handle),
+      );
       for (;;) {
         // A vanished session must END the wait, not be polled forever.
         //
@@ -924,9 +955,9 @@ async function main(): Promise<number> {
         // the callback kept looping against nothing until its timeout — the
         // human's answer was already unrecoverable and the watcher still
         // reported "waiting". Silence is the wrong output for "it is gone".
-        const stillThere = await get(name)
-          .then(() => true)
-          .catch(() => false);
+        const seen = await get(name).catch(() => undefined);
+        if (seen?.state === 'needs-input') everParked = true;
+        const stillThere = seen !== undefined;
         if (!stillThere) {
           console.error(
             c.red(`[ath] "${name}" no longer exists — the session died and any answer with it.`),
@@ -952,6 +983,22 @@ async function main(): Promise<number> {
         if (res?.done) {
           if (res.output) console.log(res.output);
           const code = res.exitCode ?? 0;
+          // "PROMPT ANSWERED" IS A CLAIM ABOUT A PERSON. Only make it when a
+          // prompt actually existed.
+          //
+          // This said "prompt answered, command finished with exit 0" for
+          // `sleep 8; echo job-done` — a command that never prompted and that
+          // nobody answered. A reviewer caught it in the same breath as praising
+          // this tool for refusing to overclaim, which is the right place to
+          // hold it. `ath await` is reachable with a bare `--handle` on any
+          // running command, so "something was waiting on a human" has to be
+          // established, not assumed.
+          const wasWaiting =
+            everParked ||
+            res.needsInput === true ||
+            (await listRequests()).some(
+              (r) => r.session === name && (!handle || r.handle === handle),
+            );
           // "answered — exit 0" is SUCCESS-SHAPED for something it does not prove.
           //
           // A cold agent read it as confirmation of elevation, then said it had
@@ -964,8 +1011,13 @@ async function main(): Promise<number> {
           console.error(
             code === 130 || code === 143
               ? c.red(`[ath] "${name}" was interrupted (exit ${code}) — NOT answered.`)
-              : c.green(`[ath] "${name}" — prompt answered, command finished with exit ${code}.`) +
-                (code === 0
+              : c.green(
+                  wasWaiting
+                    ? `[ath] "${name}" — prompt answered, command finished with exit ${code}.`
+                    : `[ath] "${name}" — command finished with exit ${code}. Nothing here was ` +
+                      `waiting on a human, so this reports only that the command ended.`,
+                ) +
+                (code === 0 && wasWaiting
                   ? c.dim(
                       `\n[ath] That the prompt was answered is what this observed. Exit 0 does\n` +
                         `      NOT prove the answer was CORRECT — a wrong password can still\n` +
@@ -992,10 +1044,14 @@ async function main(): Promise<number> {
             const w = res.paneWidthChanged;
             console.error(
               c.yellow(
-                `[ath] the pane resized ${w.from} → ${w.to} columns while you were at the ` +
-                  `keyboard. Output from width-aware commands (ps, top, docker ps, column) ` +
-                  `is now formatted for ${w.to} columns, and anything you read from this ` +
-                  `session BEFORE this line was formatted for ${w.from}.`,
+                `[ath] the pane resized ${w.from} → ${w.to} columns. ` +
+                  (w.byHub
+                    ? `That was a \`width\` call from this session, NOT someone attaching. `
+                    : `Something attached and set its size — usually a person joining, though ` +
+                      `an editor panel looks the same from here. `) +
+                  `Output from width-aware commands (ps, top, docker ps, column) is now ` +
+                  `formatted for ${w.to} columns, and anything read from this session BEFORE ` +
+                  `this line was formatted for ${w.from}.`,
               ),
             );
           }
@@ -1137,6 +1193,15 @@ async function main(): Promise<number> {
     }
 
     case 'doctor': {
+      // The CLI re-reads `dist` on every invocation, so this is nearly always
+      // current here — which is precisely why it must still be reported. The
+      // reviewer who lost twenty minutes to a stale MCP server diagnosed it by
+      // comparing the two surfaces; a CLI that also states its build makes that
+      // comparison a single pair of calls instead of process archaeology.
+      {
+        const stale = buildStaleness();
+        if (stale) console.error(c.yellow(`[ath] ${staleBuildNote(stale)}\n`));
+      }
       // `--artifacts` answers "what did this leave on my machine?" — a question
       // the hub could not previously answer from any surface, while writing to
       // ten places and documenting four of them.
