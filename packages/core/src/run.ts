@@ -645,7 +645,8 @@ async function readLogCapped(
   const trimIsClose = size > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
   const note = trimIsClose
     ? `[ath: ${bytes} bytes omitted here. This session's log is ${Math.floor(size / 1048576)} MiB ` +
-      `and is trimmed past ${Math.floor(LOG_MAX_BYTES / 1048576)} MiB, so these bytes are likely ` +
+      `and WILL BE rewritten to its last 8 MiB when the next command starts — it has not ` +
+      `happened yet — so these bytes are likely ` +
       `to be DESTROYED before you can read them — since=${logicalResume} will probably return ` +
       `lost_bytes, not output. Redirect this job's output to a file on the host instead; the ` +
       `transcript is not durable storage for it.]`
@@ -721,7 +722,8 @@ function capRunOutput(
   const trimIsClose = logSize > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
   const note = trimIsClose
     ? `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output. This ` +
-      `session's log is ${Math.floor(logSize / 1048576)} MiB and is trimmed past ` +
+      `session's log is ${Math.floor(logSize / 1048576)} MiB and WILL BE rewritten to its last ` +
+      `8 MiB when the next command starts, past ` +
       `${Math.floor(LOG_MAX_BYTES / 1048576)} MiB, so re-reading it is likely to return ` +
       `lost_bytes rather than output. Redirect this job's output to a file on the host; the ` +
       `transcript is not durable storage for it.]`
@@ -3347,10 +3349,35 @@ function encodeCommand(command: string): string {
  *
  * Both shapes carry it now, so either one starts the loop.
  */
+/**
+ * A tail window holds nothing but a shell prompt and padding.
+ *
+ * `--tail 3` on a job that printed 200,000 lines came back as a blank line and
+ * a prompt — a SUCCESS with nothing in it, which two reviewers hit and one
+ * named exactly: "it returns success with useless content". The window is
+ * counted in LINES while a wrapped 200-column pane spends a small one entirely
+ * on furniture, so N=3 can miss every line of real output.
+ *
+ * Defined once, here, because the same blind spot exists on both surfaces and
+ * a second copy of this rule would drift from the first.
+ */
+export function tailIsAllFurniture(output: string): boolean {
+  return !output
+    .split('\n')
+    .some((l) => l.trim() !== '' && !/[$#%>\u276f]\s*$/.test(l.trim()));
+}
+
+/** What to do instead, when a tail came back as furniture. Shared wording. */
+export const EMPTY_TAIL_ADVICE =
+  'hold only a shell prompt and padding, not command output — a wrapped pane ' +
+  'spends most of a small window on furniture. Ask for more lines (40+), or, to ' +
+  'learn whether a job is still running and how far in, use `poll` with its ' +
+  'handle: it returns a `progress` block, which a tail cannot give you.';
+
 export async function readTail(
   name: string,
   lines = 200,
-): Promise<{ output: string; nextOffset: number }> {
+): Promise<{ output: string; nextOffset: number; emptyTail?: boolean }> {
   const clean = validateName(name);
   const log = logPath(clean);
   // Taken BEFORE the read, so the offset can never point past what was
@@ -3361,9 +3388,13 @@ export async function readTail(
   // tell which shape it was given, so there must only be one shape.
   const nextOffset = await logicalEnd(clean);
   const raw = await readLogTailBytes(log);
-  if (!raw) return { output: await capturePane(clean, lines), nextOffset };
+  if (!raw) {
+    const pane = await capturePane(clean, lines);
+    return { output: pane, nextOffset, ...(tailIsAllFurniture(pane) ? { emptyTail: true } : {}) };
+  }
   const all = trimBlankEdges(toLines(raw).filter((line) => !MARKER_LINE_RE.test(line)));
-  return { output: all.slice(Math.max(0, all.length - lines)).join('\n'), nextOffset };
+  const output = all.slice(Math.max(0, all.length - lines)).join('\n');
+  return { output, nextOffset, ...(tailIsAllFurniture(output) ? { emptyTail: true } : {}) };
 }
 
 /** Incremental read for pollers: everything after `since`, plus where to resume. */

@@ -27,6 +27,7 @@ import {
   poll,
   readSince,
   readTail,
+  EMPTY_TAIL_ADVICE,
   purgeLog,
   purgeSessionRequests,
   requestHuman,
@@ -570,11 +571,17 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // ("the documented round-trip can't be bootstrapped") and one puzzle
       // ("two results had no metadata block at all; I couldn't tell whether
       // that was intentional"). It was not intentional.
-      const tail = await readTail(session, Number(args.lines ?? 200));
+      const lines = Number(args.lines ?? 200);
+      const tail = await readTail(session, lines);
+      // An all-furniture tail is a success with nothing in it. The rule lives in
+      // core (see `tailIsAllFurniture`) so the CLI says the same thing.
       return jsonWithOutput(
         {
           session,
           next_offset: tail.nextOffset,
+          ...(tail.emptyTail
+            ? { empty_tail: true, what_to_do: `These ${lines} lines ${EMPTY_TAIL_ADVICE}` }
+            : {}),
           note: 'Pass next_offset as `since` on your next read to get ONLY what is new.',
         },
         tail.output,

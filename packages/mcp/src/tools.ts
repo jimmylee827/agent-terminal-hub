@@ -123,12 +123,24 @@ export const TOOL_DEFINITIONS = [
       // had pointed it here.
       'For a quick progress glance at a chatty job, this with a small `lines` is the cheapest ' +
       'thing you can do: it reads a fixed window off the end however much the command has ' +
-      'printed. Use `poll` when you want the incremental slice and the exit code.',
+      'printed. Use `poll` when you want the incremental slice and the exit code. ' +
+      // "Small" was read as 3, and 3 lines of a wrapped 200-column pane are the
+      // prompt and its padding — a success with nothing in it. Two reviewers hit
+      // that, so the advice now carries its own floor.
+      'Keep `lines` at 40 or more: a wrapped pane spends the last few on the prompt alone, and ' +
+      'a window that lands entirely on furniture comes back as `empty_tail` with nothing in ' +
+      'it. A tail also cannot tell you whether a job is still running — `poll` returns a ' +
+      '`progress` block for that.',
     inputSchema: {
       type: 'object',
       properties: {
         session: { type: 'string' },
-        lines: { type: 'number', description: 'How many trailing lines to return. Default 200.' },
+        lines: {
+          type: 'number',
+          description:
+            'How many trailing lines to return. Default 200. Use 40 or more — fewer can land ' +
+            'entirely on the shell prompt of a wrapped pane and return nothing.',
+        },
         since: {
           type: 'number',
           description: 'Byte offset from a previous read\'s next_offset. Returns only newer output.',

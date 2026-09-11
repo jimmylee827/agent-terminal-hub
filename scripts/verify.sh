@@ -1392,6 +1392,58 @@ chk "and explains what the new width means"        "yes" \
 chk "await_human is in the parity coverage"        "yes" \
     "$(grep -q "await_human', \['pane_width_changed'\]" "$RP/scripts/parity.js" && echo yes || echo no)"
 
+# ---- two messages that state something not so ------------------------------
+#
+# Both are the recurring shape and both were under-called as cosmetic first time.
+#
+# The omission marker said "This session's log is 37 MiB and IS TRIMMED past 32
+# MiB". Read literally that says the trim already happened; it had not, and the
+# whole point of the warning is that it is about to. A reviewer needed the DOC
+# to disambiguate a runtime message — "the doc is doing work the message should
+# do itself".
+chk "the trim marker is explicitly future" "yes" \
+    "$(grep -q 'WILL BE rewritten to its last' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and says it has not happened yet"     "yes" \
+    "$(grep -q 'it has not ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "no present-tense claim remains"       "0" \
+    "$(grep -c 'and is trimmed past' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+
+# A tail of a wrapped pane can be all prompt and padding — success with nothing
+# in it, which two reviewers hit. It now says so and names the next step.
+chk "an empty tail announces itself"       "yes" \
+    "$(grep -q 'empty_tail: true' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and points at poll for progress"      "yes" \
+    "$(grep -q 'tail cannot give you' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "empty_tail is in parity coverage"     "yes" \
+    "$(grep -q "empty_tail" "$RP/scripts/parity.js" && echo yes || echo no)"
+
+# The defect CLASS, not this instance of it. Three quarters of everything the
+# cold reviewers found was one fact known on one surface and not carried to the
+# other, so the rule and its wording live in core exactly once and both surfaces
+# import them. A second copy is how the first divergence starts.
+chk "the rule is defined once, in core"    "1" \
+    "$(grep -c 'export function tailIsAllFurniture' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "the CLI imports it rather than copying" "yes" \
+    "$(grep -q 'EMPTY_TAIL_ADVICE' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "so does the MCP surface"              "yes" \
+    "$(grep -q 'EMPTY_TAIL_ADVICE' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "neither surface re-implements the test" "0" \
+    "$(cat "$RP/packages/cli/src/index.ts" "$RP/packages/mcp/src/index.ts" | grep -c '276f' | tr -d ' ')"
+
+# And the cause, not only the symptom: the tool description told the reader to
+# use "a small `lines`" without saying how small is too small, which is exactly
+# how two reviewers arrived at 3.
+chk "the read description gives lines a floor" "yes" \
+    "$(grep -q 'Keep \`lines\` at 40 or more' "$RP/packages/mcp/src/tools.ts" && echo yes || echo no)"
+chk "and the parameter repeats it"           "yes" \
+    "$(grep -q 'Use 40 or more' "$RP/packages/mcp/src/tools.ts" && echo yes || echo no)"
+# One floor, not two. The advice you get AFTER an empty tail and the advice you
+# get BEFORE one must name the same number, or the pair reads as a contradiction.
+chk "advice and schema name the same floor" "40 40 40" \
+    "$(grep -o 'more lines (40+)' "$RP/packages/core/src/run.ts" | head -1 | grep -o 40) \
+$(grep -o 'at 40 or more' "$RP/packages/mcp/src/tools.ts" | head -1 | grep -o 40) \
+$(grep -o 'Use 40 or more' "$RP/packages/mcp/src/tools.ts" | head -1 | grep -o 40)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

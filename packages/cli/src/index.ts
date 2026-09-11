@@ -39,6 +39,7 @@ import {
   reapStaleRc,
   readSince,
   readTail,
+  EMPTY_TAIL_ADVICE,
   rename,
   run,
   sendKeys,
@@ -494,7 +495,8 @@ async function main(): Promise<number> {
         }
         return 0;
       }
-      const tail = await readTail(name, flagNumber(flags, 'tail', 200));
+      const tailLines = flagNumber(flags, 'tail', 200);
+      const tail = await readTail(name, tailLines);
       if (flagBool(flags, 'json')) {
         // `nextOffset` LAST, so it survives the spread rather than being
         // overwritten by a session field — and so this shape matches the
@@ -508,6 +510,11 @@ async function main(): Promise<number> {
         );
       } else {
         console.log(tail.output);
+        // Same blind spot as the MCP surface, so the same sentence — a human
+        // staring at a blank pane deserves the next step as much as an agent does.
+        if (tail.emptyTail) {
+          console.error(c.dim(`[ath] these ${tailLines} lines ${EMPTY_TAIL_ADVICE}`));
+        }
         console.error(c.dim(`\n[ath] follow with --since ${tail.nextOffset}`));
       }
       return 0;

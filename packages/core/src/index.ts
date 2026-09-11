@@ -87,6 +87,8 @@ export {
   readLogFrom,
   readSince,
   readTail,
+  tailIsAllFurniture,
+  EMPTY_TAIL_ADVICE,
   run,
   start,
   startMarker,

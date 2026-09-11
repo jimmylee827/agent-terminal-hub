@@ -87,7 +87,7 @@ const HAND_BUILT = [
   ['wait', ['exit_code', 'exit_code_covers', 'verified', 'last_command']],
   ['poll', ['progress']],
   ['await_human', ['pane_width_changed']],
-  ['read', ['next_offset', 'omitted_bytes', 'lost_bytes']],
+  ['read', ['next_offset', 'omitted_bytes', 'lost_bytes', 'empty_tail']],
 ];
 
 let bad = 0;

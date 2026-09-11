@@ -175,7 +175,9 @@ NOT: on a chatty job it returns three arbitrary lines from the middle of a
 stream, which tells you nothing about progress. A reviewer following a checksum
 job got exactly one filename back and said so. Use `--tail` when you want the
 last CONTENT of a finished job, and give it enough lines — a wrapped 200-column
-pane needs more than 3 to show you a line you can read:
+pane needs more than 3 to show you a line you can read. If the window lands
+entirely on the prompt and padding you get `empty_tail: true` saying so, rather
+than a success with nothing in it:
 
 ```sh
 ath start bulk -- 'big-job > /tmp/run.out 2>/tmp/run.err; echo done'
