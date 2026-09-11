@@ -89,6 +89,7 @@ export {
   readTail,
   tailIsAllFurniture,
   EMPTY_TAIL_ADVICE,
+  logNearTrimNote,
   run,
   start,
   startMarker,

@@ -119,11 +119,16 @@ on a remote host) — answers the wrapper with `__ath: command not found`,
 and the command never runs. `start` used to hand back a handle anyway, so that
 looked exactly like success and the handle could never complete. It now
 reports `launched: false` (the CLI prints `sent … (unconfirmed)` instead of
-`started`). If you see it, read the session before polling — and do **not**
-just send it again: if the session was merely slow, the command is queued and
-re-sending runs it twice. To recover, run any trivial command in that session
-first — `echo ok` — which re-arms the helper and tells you the shell is healthy,
-then re-issue the `start`.
+`started`).
+
+`launched: false` means **not confirmed**, which is not the same as *did not
+run*. Treat it as a prompt to look, never as a reason to re-send: **poll the
+handle or read the session first.** If the command is running or already
+finished, the handle was good all along and re-issuing would run the job a
+second time — which on the long, loud jobs `start` exists for is the expensive
+mistake. Only if the pane actually shows `__ath: command not found`, or the
+handle never advances, is the start genuinely lost; then run a trivial `echo ok`
+to re-arm the helper and issue the `start` again.
 
 Pass the previous `next_offset` back as `--since` each time so you get only
 new output instead of re-reading the whole log into your context. Space the

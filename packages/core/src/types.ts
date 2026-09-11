@@ -316,7 +316,7 @@ export interface PollResult {
   /**
    * Output that was TRIMMED AWAY before this call and cannot be returned.
    *
-   * A session log is rewritten to its last 8 MB once it passes 32 MB, which
+   * A session log is rewritten to its last 8 MiB once it passes 32 MiB, which
    * invalidates every offset issued before that. Silence here used to be the
    * only signal: the caller got empty output and a `nextOffset` smaller than
    * the `since` it passed, and was left to work out that ~38 MB of its job had

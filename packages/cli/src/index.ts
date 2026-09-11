@@ -379,12 +379,12 @@ async function main(): Promise<number> {
       if (started.launched === false) {
         console.error(
           c.red(
-            `[ath] NOT confirmed — the command's frame never opened, so it may not be running ` +
-              `at all. The usual cause is a shell without the hub's helper (a nested shell, or ` +
-              `a reconnected remote), where the wrapper fails with "__ath: command not found". ` +
-              `Check with "ath read ${name} --tail 5" BEFORE polling; this handle may never ` +
-              `complete. Do not simply re-send it — if the session was only slow, the command ` +
-              `is queued and sending again runs it twice.`,
+            `[ath] NOT confirmed — the frame did not open in time. This is NOT proof the ` +
+              `command failed to run: the handle may be fine. CHECK BEFORE YOU RE-SEND — ` +
+              `"ath read ${name} --tail 40", or poll the handle. If it is running or done, ` +
+              `only this flag was wrong, and re-sending would run it twice. If instead the ` +
+              `pane shows "__ath: command not found" — a nested shell or a reconnected remote ` +
+              `— then "ath run ${name} -- 'echo ok'" to re-arm the helper, and start again.`,
           ),
         );
       }

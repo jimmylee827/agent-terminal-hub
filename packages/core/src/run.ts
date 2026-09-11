@@ -2429,7 +2429,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // The start marker is ground truth: the frame prints it BEFORE the command
     // runs, so it appears in milliseconds when things are working, whatever
     // the command goes on to do.
-    const launched = await awaitStartMarker(clean, nonce, START_CONFIRM_MS);
+    const launched = await awaitStartMarker(clean, nonce, START_CONFIRM_MS, offset);
     return {
       session: clean,
       command,
@@ -2887,12 +2887,54 @@ const START_CONFIRM_MS = 2500;
  * marker BEFORE running the command, so it lands within milliseconds whenever
  * things are working, whatever the command then goes on to do.
  */
-async function awaitStartMarker(name: string, nonce: string, timeoutMs: number): Promise<boolean> {
+/**
+ * Did the frame open? Scanned FORWARD from where the log stood, never backward
+ * from the end.
+ *
+ * The tail scan was a race the fastest commands always lost. The marker is
+ * printed once, immediately, and then the command's own output buries it: at
+ * the 19 MiB/s a local `seq 1 5000000` reaches, a 32 KiB tail window is
+ * overwritten in under two milliseconds — long before the first 60 ms poll.
+ * So the marker WAS in the log, just no longer in the part being looked at,
+ * and `start` called a command that ran perfectly `launched: false`.
+ *
+ * A reviewer isolated it exactly: same command, local said false twice and
+ * remote said true, the only difference being ssh throttling 19 MiB/s down to
+ * 1.7 and so holding the marker inside the window long enough to be seen.
+ * Every false negative this produced was on the loudest, longest jobs — the
+ * ones where acting on the bad advice costs the most.
+ *
+ * `start` already records the log's logical end before sending, and the marker
+ * lands within a few hundred bytes of it. Reading a bounded window from there
+ * finds it at any output rate, because that window does not move.
+ */
+async function awaitStartMarker(
+  name: string,
+  nonce: string,
+  timeoutMs: number,
+  from?: number,
+): Promise<boolean> {
   const file = logPath(name);
   const marker = `${SENTINEL}<ATHS:${nonce}>`;
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const raw = await readLogTailBytes(file, MARKER_SCAN_BYTES).catch(() => '');
+    let raw: string;
+    if (from === undefined) {
+      raw = await readLogTailBytes(file, MARKER_SCAN_BYTES).catch(() => '');
+    } else {
+      // Resolved every pass: a trim between passes moves the physical position
+      // of a logical offset, and a stale one would scan the wrong bytes.
+      const at = await resolveOffset(name, from).catch(() => undefined);
+      raw = at
+        ? (await readLogRange(file, at.physical, MARKER_SCAN_BYTES)).toString('utf8')
+        : '';
+      // Belt and braces: if the window from `from` somehow missed it — a trim
+      // that discarded the offset itself — fall back to the tail before
+      // declaring a failure the caller will act on.
+      if (!raw.includes(marker) && (at?.lostBytes || Date.now() >= deadline)) {
+        raw += await readLogTailBytes(file, MARKER_SCAN_BYTES).catch(() => '');
+      }
+    }
     if (raw.includes(marker)) return true;
     if (Date.now() >= deadline) return false;
     await sleep(60);
@@ -3365,6 +3407,29 @@ export function tailIsAllFurniture(output: string): boolean {
   return !output
     .split('\n')
     .some((l) => l.trim() !== '' && !/[$#%>\u276f]\s*$/.test(l.trim()));
+}
+
+/**
+ * The "your log is about to be rewritten" warning, in one voice.
+ *
+ * Written by hand at two call sites, which is how one of them kept the tense
+ * the other had just had fixed: the inline omission marker was corrected to
+ * "WILL BE rewritten ... it has not happened yet" while this note still said
+ * "is rewritten to its last 8 MiB once it passes 32 MiB". A reviewer got both
+ * sentences in a SINGLE response and said so — the corrected phrasing and the
+ * uncorrected one, describing the same event.
+ *
+ * "Once it passes 32 MiB" was the worse half. By the time this fires the log
+ * has ALREADY passed 32 MiB, so a conditional about passing it reads as a
+ * threshold still ahead when the only thing still ahead is the rewrite itself.
+ */
+export function logNearTrimNote(bytes: number): string {
+  return (
+    `This session's log is ${Math.floor(bytes / 1048576)} MiB, already past the 32 MiB ` +
+    `threshold, and WILL BE rewritten to its last 8 MiB when the next command starts — it ` +
+    `has not happened yet. Offsets from before that point will then return lost_bytes. If ` +
+    `you need this job's output, write it to a file on the host now, while it is still here.`
+  );
 }
 
 /** What to do instead, when a tail came back as furniture. Shared wording. */

@@ -28,6 +28,7 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  logNearTrimNote,
   purgeLog,
   purgeSessionRequests,
   requestHuman,
@@ -514,11 +515,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             ? {}
             : {
                 log_near_trim_bytes: nearTrim,
-                log_near_trim_note:
-                  `This session's log is ${Math.floor(nearTrim / 1048576)} MiB and is rewritten ` +
-                  `to its last 8 MiB once it passes 32 MiB, at the START of the next command. ` +
-                  `Offsets from before that point will return lost_bytes. If you need this ` +
-                  `job's output, write it to a file on the host now.`,
+                log_near_trim_note: logNearTrimNote(nearTrim),
               }),
           ...(result.lostBytes === undefined
             ? {}
@@ -528,7 +525,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
                   `${result.lostBytes} bytes — counted from the offset YOU asked for, not from the ` +
           `start of the log, which is why this figure is smaller than any log_trimmed_bytes ` +
           `you were shown — were TRIMMED AWAY and cannot be ` +
-                  `recovered — a session log is rewritten to its last 8 MB once it passes 32 MB, ` +
+                  `recovered — a session log is rewritten to its last 8 MiB once it passes 32 MiB, ` +
                   `which invalidates offsets issued before that. The output below resumes from ` +
                   `the earliest byte that still exists. For a job this size, write it to a file ` +
                   `on the host and read that instead of relying on the transcript.`,
@@ -634,13 +631,21 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         ...(started.launched === false
           ? {
               what_to_do:
-                'The command was sent but its frame never opened, so it may not be running. ' +
-                'Do NOT just send it again: if the session was only slow, the command is ' +
-                'queued and re-sending runs it twice. ' +
-                'TO RECOVER: run any trivial command here first (`run` with `echo ok`) — that ' +
-                're-arms the helper and tells you whether the shell is healthy — then re-issue ' +
-                'this start. If that `run` also misbehaves, `read` the session to see what the ' +
-                'pane is actually showing.',
+                'The command was sent but its frame was not confirmed. That is NOT the same as ' +
+                'not running: the handle above may be perfectly valid. ' +
+                // The old wording opened with the recovery and buried the check.
+                // A reviewer whose 57 MiB job had run fine — exit 0, three
+                // seconds — was told to re-issue it, and only avoided running
+                // it twice by reading the pane on its own initiative. Advice
+                // that costs you a heavy job when followed literally is worse
+                // than no advice, so the check now comes first and the re-issue
+                // last, gated on what the check says.
+                'FIRST, CHECK — do not re-send anything yet: `poll` this handle, or `read` the ' +
+                'session. If the command is running or already finished, nothing is wrong ' +
+                'except this flag, and re-sending would run it a second time. ' +
+                'ONLY IF the pane shows an error like "__ath: command not found", or `poll` ' +
+                'never advances, is the start genuinely lost — then `run` a trivial command ' +
+                '(`echo ok`) to re-arm the helper, and re-issue this start.',
             }
           : {}),
         ...(started.warning ? { warning: started.warning } : {}),
@@ -679,11 +684,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         const near = logNearTrim(await logSizeBytes(session).catch(() => 0));
         if (near !== undefined) {
           payload.log_near_trim_bytes = near;
-          payload.log_near_trim_note =
-            `This session's log is ${Math.floor(near / 1048576)} MiB and is rewritten to its ` +
-            `last 8 MiB once it passes 32 MiB, at the START of the next command. Offsets from ` +
-            `before that point will return lost_bytes. If you need this job's output, write it ` +
-            `to a file on the host now.`;
+          payload.log_near_trim_note = logNearTrimNote(near);
         }
       }
       // "Is it alive and how far in", as one field instead of two to combine.
@@ -707,7 +708,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
       // Output that is GONE, said out loud.
       //
-      // A session log is rewritten to its last 8 MB once it passes 32 MB,
+      // A session log is rewritten to its last 8 MiB once it passes 32 MiB,
       // which invalidates every offset issued before that. The only signal
       // used to be an empty `output` and a `next_offset` SMALLER than the
       // `since` that was passed — an agent following a 46 MB job read that as
@@ -729,8 +730,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         payload.lost_bytes = result.lostBytes;
         payload.lost_note =
           `${result.lostBytes} bytes of this command's output were TRIMMED AWAY before this ` +
-          `call and cannot be recovered: the log is rewritten to its last 8 MB once it passes ` +
-          `32 MB. The output below resumes from the earliest byte that still exists. A job ` +
+          `call and cannot be recovered: the log is rewritten to its last 8 MiB once it passes ` +
+          `32 MiB. The output below resumes from the earliest byte that still exists. A job ` +
           `this chatty should write to a file on the host and be read from there — the ` +
           `transcript is not durable storage.`;
       }

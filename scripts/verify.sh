@@ -680,6 +680,17 @@ const out=[];
   out.push(good.launched!==false?"healthyNotFlagged":"FALSEALARM");
   out.push(good.launched===true?"healthyStatesSuccess":"NOPOSITIVESIGNAL");
   await new Promise(r=>setTimeout(r,2500));
+  // A command that BURIES its own start marker must still be seen to start.
+  // The tail scan looked 32 KiB back from the end of the log; a local `seq`
+  // runs at ~19 MiB/s, so the marker left that window in under 2 ms and a
+  // perfectly healthy job was reported `launched: false` — twice out of two,
+  // while the identical command over ssh said true because the link throttled
+  // it. Run it twice: the old code failed this consistently, not flakily.
+  for(let i=0;i<2;i++){
+    const loud=await a.start("lp","seq 1 5000000");
+    out.push(loud.launched===true?"loudStartSeen":"LOUDSTARTMISSED");
+    await new Promise(r=>setTimeout(r,6000));
+  }
   // Now a shell with neither hooks nor wrapper.
   await a.sendLine("lp","exec env -i PATH=/usr/bin:/bin bash --norc --noprofile");
   await new Promise(r=>setTimeout(r,2500));
@@ -692,6 +703,7 @@ const out=[];
 ' 2>/dev/null)"
 chk "a healthy start is not flagged"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyNotFlagged && echo yes || echo no)"
 chk "and states success positively"     "yes" "$(printf '%s' "$LAUNCH" | grep -q healthyStatesSuccess && echo yes || echo no)"
+chk "a loud command is still seen to start" "2" "$(printf '%s' "$LAUNCH" | grep -o loudStartSeen | wc -l | tr -d ' ')"
 chk "a start that did NOT start is"      "yes" "$(printf '%s' "$LAUNCH" | grep -q unlaunchedFlagged && echo yes || echo no)"
 chk "and the handle is still returned"   "yes" "$(printf '%s' "$LAUNCH" | grep -q handleStillGiven  && echo yes || echo no)"
 
@@ -1224,10 +1236,24 @@ chk "start self-heals before using the wrapper" "yes" \
     "$(grep -q 'if (!(await wrapperReady(clean))) {' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "and run still does the same"               "2" \
     "$(grep -c 'await wrapperReady(clean)' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+# Still names the recovery — but as the SECOND step. This assertion used to
+# pin the old opener, "TO RECOVER: run any trivial command here first", which
+# was the wording that told a reviewer to re-run a 57 MiB job that had already
+# finished. The property worth pinning is the ORDER, not the phrase.
 chk "launched:false names the recovery"       "yes" \
-    "$(grep -q 'TO RECOVER: run any trivial command here first' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+    "$(grep -q 'to re-arm the helper, and re-issue this start' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and gates it behind ONLY IF"             "yes" \
+    "$(grep -q 'ONLY IF the pane shows an error' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "the doc lists the new-session cause"     "yes" \
     "$(grep -q 'whose helper has not' "$SK" && echo yes || echo no)"
+# The doc offered ONE cause — a helper still installing, "your very FIRST
+# command after new on a remote host". A reviewer hit launched:false on a LOCAL
+# session already armed with echo ok, and said the framing did not cover it.
+# It now leads with what the flag means rather than with one way to earn it.
+chk "the doc separates unconfirmed from unrun" "yes" \
+    "$(grep -q 'which is not the same as \*did not' "$SK" && echo yes || echo no)"
+chk "and says to look before re-sending"       "yes" \
+    "$(grep -q 'handle or read the session first' "$SK" && echo yes || echo no)"
 
 # A repeated warning is a warning that gets skimmed.
 chk "the blind-spot warning shortens on repeat" "yes" \
@@ -1407,6 +1433,40 @@ chk "and says it has not happened yet"     "yes" \
     "$(grep -q 'it has not ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 chk "no present-tense claim remains"       "0" \
     "$(grep -c 'and is trimmed past' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+
+# ...and so does the note that sits BESIDE it. A reviewer got both sentences in
+# one response: the corrected marker and a sibling field still saying "is
+# rewritten ... once it passes 32 MiB" — the same event, two tenses, one payload.
+# Written by hand at two call sites, which is how one drifted from the other, so
+# it is a core function now and neither surface spells it out.
+chk "the trim note is built in core, once"  "1" \
+    "$(grep -c 'export function logNearTrimNote' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "and the MCP layer no longer spells it" "0" \
+    "$(grep -c 'once it passes 32 MiB, at the START' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "the note says it has not happened yet" "yes" \
+    "$(grep -q 'WILL BE rewritten to its last 8 MiB when the next command starts — it ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and drops the already-passed threshold" "yes" \
+    "$(grep -q 'already past the 32 MiB' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+# One unit. The same response quotes the log size twice; MB beside MiB invites
+# the reader to wonder whether two different limits are meant.
+chk "no MB/MiB mixture in trim messages"    "0" \
+    "$(cat "$RP/packages/core/src/"*.ts "$RP/packages/mcp/src/"*.ts | grep -c 'last 8 MB\|passes 32 MB' | tr -d ' ')"
+
+# A start that was not CONFIRMED is not a start that failed. The advice used to
+# open with "re-issue this start"; a reviewer whose 57 MiB job had finished fine
+# was told to run it again, and only avoided it by checking the pane unprompted.
+chk "launched:false says check first"       "yes" \
+    "$(grep -q 'FIRST, CHECK — do not re-send anything yet' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and says the handle may be valid"      "yes" \
+    "$(grep -q 'may be perfectly valid' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "the CLI says check before re-sending"  "yes" \
+    "$(grep -q 'CHECK BEFORE YOU RE-SEND' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "neither claims it never ran"           "0" \
+    "$(cat "$RP/packages/mcp/src/index.ts" "$RP/packages/cli/src/index.ts" | grep -c 'frame never opened' | tr -d ' ')"
+
+# The marker scan must not be a race the loudest jobs lose.
+chk "the start marker is scanned forward"   "yes" \
+    "$(grep -q 'awaitStartMarker(clean, nonce, START_CONFIRM_MS, offset)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 
 # A tail of a wrapped pane can be all prompt and padding — success with nothing
 # in it, which two reviewers hit. It now says so and names the next step.
