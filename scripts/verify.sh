@@ -1343,6 +1343,36 @@ chk "progress is in the parity coverage"  "yes" \
 chk "the empty-window message says WINDOW" "yes" \
     "$(grep -q 'this is a window, not the whole command' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
+# ---- the doc must describe the surface it tells you to use -------------------
+#
+# The skill said `cwd` is the LOCAL path and `remote_cwd` is the truth. That is
+# the CLI's shape. On MCP — the surface the same document tells agents to
+# prefer — `cwd` is already the remote path, the launcher is `local_cwd`, and
+# there is no `remote_cwd` at all. A reviewer followed the paragraph while using
+# MCP, hunted for a field that does not exist there, and could reasonably have
+# concluded its `cd` had not taken.
+#
+# parity.js cannot see this: it compares result types against payloads, not
+# prose against either.
+chk "the doc covers BOTH cwd shapes"   "yes" \
+    "$(grep -q 'other way round' "$SK" && echo yes || echo no)"
+chk "and MCP really has no remote_cwd" "0" \
+    "$(awk "/case .list.:/{f=1} f&&/case .[a-z_]+.:/&&!/case .list.:/{f=0} f" "$RP/packages/mcp/src/index.ts" | grep -c 'remote_cwd' | tr -d ' ')"
+
+# The blocking instrument should not be the least informative one.
+chk "wait carries progress when it times out" "yes" \
+    "$(grep -q 'const waitProgress = handle' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# Four reviewers each tried to read a field that is wrong in both directions.
+chk "attached_clients is gone from MCP list" "0" \
+    "$(awk "/case .list.:/{f=1} f&&/case .[a-z_]+.:/&&!/case .list.:/{f=0} f" "$RP/packages/mcp/src/index.ts" | grep -c 'attached_clients:' | tr -d ' ')"
+chk "and the omission is recorded as deliberate" "yes" \
+    "$(grep -q 'Session.attached' "$RP/scripts/parity.js" && echo yes || echo no)"
+
+# progress.bytes counts pane bytes, which run ahead of a tee'd file.
+chk "progress.bytes says what it counts" "yes" \
+    "$(grep -q 'counts PANE bytes' "$RP/packages/core/src/types.ts" && echo yes || echo no)"
+
 # ---- a remote session must not silently read a LOCAL-only path ---------------
 #
 # The hub runs on the driving machine; ssh carries only the connection. So

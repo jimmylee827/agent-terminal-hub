@@ -232,25 +232,29 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           ...(askedFor.has(s.name) ? { asked_for_you: true } : {}),
           pinned: s.pinned,
           remote: s.remote,
-          // NOT a presence signal, in EITHER direction.
+          // REMOVED from the listing, after four reviewers each tried to read it.
           //
-          // This is tmux's client count. It over-reports: the VS Code panel
-          // attaches a real client per session it displays, so a session nobody
-          // has touched shows 1 whenever the editor is showing it. And it
-          // under-reports: answering a request from the editor's notification
-          // button attaches no tmux client at all, so a session someone
-          // demonstrably typed into can read 0 throughout.
+          // It is tmux's client count, and it is wrong in both directions. It
+          // over-reports: the editor panel attaches a real client per session it
+          // displays, so a session nobody has touched shows 1. It under-reports:
+          // answering a request from the notification button attaches no client
+          // at all, so a session someone demonstrably typed into reads 0
+          // throughout.
           //
-          // Three reviewers have now tried to read something into it. The third
-          // saw 0 while the human was typing a password into that very session,
-          // checked the documented caveat, and found it described only the
-          // over-count — "the field was uninformative in both directions and
-          // the documented caveat doesn't cover what I saw". They were right,
-          // and the caveat was half a caveat.
+          // Rounds H, K, S and V each reasoned about it and each was misled. The
+          // fourth put the conclusion plainly: "a field documented as unreliable
+          // in both directions probably shouldn't be in the output at all." A
+          // caveat that has to be re-learned by every reader is not a caveat, it
+          // is a trap with a footnote.
           //
-          // What IS authoritative: the request outcome from `await_human`, and
-          // `sudo -n true` for elevation. Neither infers a person from a count.
-          attached_clients: s.attached,
+          // What IS authoritative and stays: the outcome from `await_human` /
+          // `ath await` for "did they answer", `sudo -n true` for "am I still
+          // elevated", and `pane_width_changed` for "did someone attach" — which
+          // a reviewer used successfully for exactly that.
+          //
+          // Still on the CLI's human table, where a person can see the tmux
+          // clients they themselves attached and judge it in context.
+          
           // Reported because the docs warn that tmux truncates to this width
           // and then gave no way to see it. An agent found `MOUNTPOINT`
           // rendered as `MOUNTPOIN`, correctly identified the cause from the
@@ -1200,9 +1204,32 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           }
         }
         if (Date.now() >= deadline) {
+          // Carry PROGRESS, so the instrument that blocks is not the one that
+          // tells you least.
+          //
+          // A reviewer's 482-second job needed two `wait` calls, the first
+          // spending 300 blocking seconds to return `still_running` with no
+          // basis for choosing when to call again — "the progress data that
+          // would inform that choice lives on poll". It does; there is no reason
+          // it cannot be here too, and a caller that has just spent five minutes
+          // blocked has earned more than a status word.
+          const waitProgress = handle
+            ? await poll(session, handle, 0, 1)
+                .then((r) => r.progress)
+                .catch(() => undefined)
+            : undefined;
           return json({
             session,
             outcome: 'still_running',
+            ...(waitProgress
+              ? {
+                  progress: {
+                    bytes: waitProgress.bytes,
+                    seconds: waitProgress.seconds,
+                    bytes_per_second: waitProgress.bytesPerSecond,
+                  },
+                }
+              : {}),
             last_command: s.lastCommand,
             // `state` is reported because it can legitimately read `idle` here:
             // a foreground shell script looks like a shell at a prompt, and the

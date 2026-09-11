@@ -398,6 +398,13 @@ export interface PollResult {
    * `bytes` counts what the command has produced since it started, not the
    * whole log. Absent when the start offset is unknown, because a figure
    * measured from the wrong origin is worse than none.
+   *
+   * It counts PANE bytes, not the bytes a redirect would write: the transcript
+   * carries carriage returns and the hub's own frame markers, so it runs a
+   * little ahead of the file a job tees to. A reviewer measured the gap at
+   * ~375 KB on 75 MB — about half a percent — and asked, fairly, which it was
+   * before trusting it to estimate completion. Good for "alive, and roughly how
+   * far"; not a byte-exact count of the command's own output.
    */
   progress?: { bytes: number; seconds: number; bytesPerSecond: number };
   warning?: string;

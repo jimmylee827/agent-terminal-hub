@@ -479,9 +479,16 @@ A plain `exit` there returns you one level, it does not end the session.
 - **`owner`** is `agent` when the CLI is driven from inside a hub pane or
   without a TTY, `human` otherwise. It says who the terminal belongs to, not
   who typed the last command.
-- **`cwd` vs `remote_cwd` in `--json`.** For a remote session `cwd` is the LOCAL
-  pane path, which is the launcher, not where your commands run. `remote_cwd` is
-  the truth. The human-readable `ath ls` already shows `host:path`.
+- **`cwd` means different things on the two surfaces, and this is the one place
+  they genuinely differ.** On the CLI (`--json`), `cwd` is the LOCAL pane path —
+  the launcher, not where your commands run — and `remote_cwd` is the truth. On
+  MCP it is the other way round: `cwd` is already where your commands run, the
+  launcher is in `local_cwd`, and there is no `remote_cwd` field at all. A
+  reviewer followed this paragraph while using MCP, went looking for a field
+  that does not exist there, and could reasonably have concluded its `cd` had
+  not taken. Whichever surface you are on, the field named `cwd` on MCP and
+  `remote_cwd` on the CLI is the one that answers "where will my next command
+  run".
 - **`ath ls --json` omits `pane_tail`** — the whole visible pane, several KB.
   Pass `--full` if you actually want it.
 - **`remote_env` accumulates**, last write winning per variable, and holds both

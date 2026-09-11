@@ -26,6 +26,10 @@ const snake = (s) => s.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
 
 /** Field -> why the MCP payload deliberately does not carry it. */
 const EXPECTED_OMISSIONS = {
+  'Session.attached':
+    'removed from the MCP listing on purpose — tmux client count, wrong in both ' +
+    'directions, and four reviewers in a row were misled by it. Use await/await_human, ' +
+    'sudo -n true, or pane_width_changed instead. Still on the CLI human table.',
   'RunResult.session': 'echoed at the top of the payload already',
   'RunResult.command': 'the caller just sent it; echoing costs tokens for nothing',
   'PollResult.session': 'echoed at the top of the payload already',
