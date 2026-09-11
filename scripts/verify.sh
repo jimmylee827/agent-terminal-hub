@@ -1252,6 +1252,17 @@ chk "the hub can detect its own staleness"   "yes" \
 # file have now cost several rounds; the boring form is the correct form.
 chk "and both surfaces report it"            "yes yes" \
     "$(grep -q 'staleBuildNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no) $(grep -q 'staleBuildNote' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# The check that actually matters. A CLI run re-reads dist, so its OWN staleness
+# is always "fine" — which makes the per-process check inert exactly where the
+# problem lives. The long-lived MCP server is the thing that goes stale, and the
+# CLI is the only surface positioned to look at it. The reviewer did this by hand
+# with `ps` start times; `ath doctor` does it in one call.
+chk "doctor looks at RUNNING servers too"    "yes" \
+    "$(grep -q 'export async function staleServers' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "and the CLI doctor asks"                "yes" \
+    "$(grep -q 'await staleServers()' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and the MCP doctor asks"                "yes" \
+    "$(grep -q 'await staleServers()' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "a current build reports nothing"        "yes" \
     "$(node -e 'const c=require("'"$RP"'/packages/core/dist/index.js");process.stdout.write(c.buildStaleness()?"no":"yes")' 2>/dev/null)"
 # Re-anchored: the wording it used to match ("while you were at the keyboard")

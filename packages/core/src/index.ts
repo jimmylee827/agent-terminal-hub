@@ -24,6 +24,8 @@ export {
   logDirBytes,
   buildStaleness,
   staleBuildNote,
+  staleServers,
+  staleServersNote,
   LOG_DIR_NOTICE_BYTES,
   LOG_MAX_BYTES,
   NOTIFY_MAX_BYTES,

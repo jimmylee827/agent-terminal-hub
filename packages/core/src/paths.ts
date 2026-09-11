@@ -272,6 +272,66 @@ export function buildStaleness(): BuildStaleness | undefined {
   return { loadedMs: BUILD_LOADED_MS, onDiskMs };
 }
 
+export interface StaleServer {
+  pid: number;
+  startedMs: number;
+}
+
+/**
+ * Which running MCP servers booted BEFORE the current build.
+ *
+ * The per-process check above can only speak for the process running it — and
+ * the CLI, which re-reads `dist` on every invocation, is never stale, so its
+ * own answer is always "fine". That is useless precisely where the problem is:
+ * the long-lived MCP server, which the skill file tells agents to prefer.
+ *
+ * The CLI is the right place to ask about OTHER processes, and a reviewer
+ * already proved the method by hand — they read `ps` start times against the
+ * build and found three servers, all older. This does that in one call, which
+ * is what they asked for: "a build stamp visible in list or doctor would have
+ * turned twenty minutes of process archaeology into one call."
+ */
+export async function staleServers(): Promise<StaleServer[]> {
+  if (!BUILD_LOADED_MS) return [];
+  let built = 0;
+  try {
+    built = statSync(__filename).mtimeMs;
+  } catch {
+    return [];
+  }
+  const { execFile } = await import('node:child_process');
+  const out = await new Promise<string>((resolve) => {
+    execFile('ps', ['-eo', 'pid,lstart,args'], { maxBuffer: 8 << 20 }, (err, stdout) =>
+      resolve(err ? '' : stdout),
+    );
+  });
+  const stale: StaleServer[] = [];
+  for (const line of out.split('\n')) {
+    // Our own server, not every node process, and not this grep-alike itself.
+    if (!/mcp[/\\]dist[/\\]index\.js/.test(line)) continue;
+    const m = line.match(/^\s*(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s/);
+    if (!m) continue;
+    const startedMs = Date.parse(m[2] ?? '');
+    if (!Number.isFinite(startedMs)) continue;
+    // A second of slack, matching the per-process check.
+    if (startedMs < built - 1000) stale.push({ pid: Number(m[1]), startedMs });
+  }
+  return stale.sort((a, b) => a.startedMs - b.startedMs);
+}
+
+/** What to say about them. Shared wording, like every other notice here. */
+export function staleServersNote(servers: StaleServer[]): string {
+  const when = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+  const list = servers.map((s) => `pid ${s.pid} (started ${when(s.startedMs)} UTC)`).join(', ');
+  return (
+    `${servers.length} agent_terminal MCP server${servers.length === 1 ? '' : 's'} ` +
+    `${servers.length === 1 ? 'is' : 'are'} running code older than the current build: ${list}. ` +
+    `Node reads its modules once at startup, so those processes do NOT have fixes built since ` +
+    `then — an agent using the MCP tools will see the old behaviour while this CLI shows the ` +
+    `new one. Restart the client that launched each server to pick the build up.`
+  );
+}
+
 /** The sentence both surfaces show for it. Shared, so they cannot disagree. */
 export function staleBuildNote(s: BuildStaleness): string {
   const when = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);

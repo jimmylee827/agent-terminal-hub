@@ -43,6 +43,8 @@ import {
   logDirBytes,
   buildStaleness,
   staleBuildNote,
+  staleServers,
+  staleServersNote,
   LOG_DIR_NOTICE_BYTES,
   rename,
   run,
@@ -1201,6 +1203,13 @@ async function main(): Promise<number> {
       {
         const stale = buildStaleness();
         if (stale) console.error(c.yellow(`[ath] ${staleBuildNote(stale)}\n`));
+        // The question only this surface can answer. A CLI invocation re-reads
+        // `dist` every time, so its own staleness check is always "fine" — the
+        // process that can BE stale is the long-lived MCP server, and a reviewer
+        // spent twenty minutes reading `ps` start times to discover exactly
+        // that. One call now.
+        const servers = await staleServers();
+        if (servers.length) console.error(c.yellow(`[ath] ${staleServersNote(servers)}\n`));
       }
       // `--artifacts` answers "what did this leave on my machine?" — a question
       // the hub could not previously answer from any surface, while writing to

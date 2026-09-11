@@ -30,6 +30,8 @@ import {
   EMPTY_TAIL_ADVICE,
   buildStaleness,
   staleBuildNote,
+  staleServers,
+  staleServersNote,
   logDirBytes,
   LOG_DIR_NOTICE_BYTES,
   logNearTrimNote,
@@ -1403,8 +1405,12 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         });
       }
       const doctorStale = buildStaleness();
+      // Including servers OTHER than this one: a machine can be running several,
+      // and a reviewer found three, of which the one serving them was stale.
+      const doctorServers = await staleServers();
       return json({
         ...(doctorStale ? { stale_build: staleBuildNote(doctorStale) } : {}),
+        ...(doctorServers.length ? { stale_servers: staleServersNote(doctorServers) } : {}),
         root: ATH_HOME,
         artifacts: rows,
         note: '`purge` clears only the entry marked removed_by_purge, and only for one session.',
