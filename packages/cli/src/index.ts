@@ -44,6 +44,7 @@ import {
   buildStaleness,
   staleBuildNote,
   staleServers,
+  thisServer,
   staleServersNote,
   LOG_DIR_NOTICE_BYTES,
   rename,
@@ -1224,6 +1225,15 @@ async function main(): Promise<number> {
         // that. One call now.
         const servers = await staleServers();
         if (servers.length) console.error(c.yellow(`[ath] ${staleServersNote(servers)}\n`));
+        // Say which build is answering, positively. Silence cannot distinguish
+        // "current" from "too old to know the question exists".
+        const me = thisServer();
+        console.error(
+          c.dim(
+            `[ath] answering from pid ${me.pid}, loaded ${me.started_utc} UTC; ` +
+              `build on disk ${me.build_utc} UTC — ${me.current ? 'current' : 'STALE'}.\n`,
+          ),
+        );
       }
       // `--artifacts` answers "what did this leave on my machine?" — a question
       // the hub could not previously answer from any surface, while writing to

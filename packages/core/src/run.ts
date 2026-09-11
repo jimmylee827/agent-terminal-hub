@@ -289,6 +289,21 @@ async function findExitCode(logFile: string, nonce: string): Promise<number | un
  * right granularity — the question "how long has THIS job been running" is
  * about the job, not the session.
  */
+/** When and where a handle's command was dispatched, if the hub recorded it. */
+async function dispatchedAt(
+  nonce: string,
+): Promise<{ ms: number; offset?: number } | undefined> {
+  try {
+    const [t, o] = (await fs.readFile(path.join(RC_DIR, `${nonce}.t`), 'utf8')).trim().split(/\s+/);
+    const ms = Number(t);
+    if (!Number.isFinite(ms)) return undefined;
+    const off = o === undefined ? NaN : Number(o);
+    return { ms, ...(Number.isFinite(off) ? { offset: off } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
 async function markStarted(nonce: string, offset: number): Promise<void> {
   await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
   await fs
@@ -651,13 +666,15 @@ async function readLogCapped(
   // So when a trim is actually close, lead with that and point at the durable
   // route instead of offering an offset that is about to expire.
   const trimIsClose = size > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
+  const prospect = trimProspect(size);
   const note = trimIsClose
-    ? `[ath: ${bytes} bytes omitted here. This session's log is ${Math.floor(size / 1048576)} MiB ` +
-      `and WILL BE rewritten to its last 8 MiB when the next command starts — it has not ` +
-      `happened yet — so these bytes are likely ` +
-      `to be DESTROYED before you can read them — since=${logicalResume} will probably return ` +
-      `lost_bytes, not output. Redirect this job's output to a file on the host instead; the ` +
-      `transcript is not durable storage for it.]`
+    ? `[ath: ${bytes} bytes omitted here. ${prospect.clause}. ` +
+      (prospect.past
+        ? `So these bytes are likely to be DESTROYED before you can read them — ` +
+          `since=${logicalResume} ${prospect.resume}. `
+        : `since=${logicalResume} ${prospect.resume}. `) +
+      `Redirect this job's output to a file on the host instead; the transcript is not ` +
+      `durable storage for it.]`
     : `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
       `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
   return {
@@ -728,13 +745,11 @@ function capRunOutput(
   // tool they reached for. Pointing at a region the next trim is about to
   // destroy is worse than saying so.
   const trimIsClose = logSize > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
+  const midProspect = trimProspect(logSize);
   const note = trimIsClose
-    ? `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output. This ` +
-      `session's log is ${Math.floor(logSize / 1048576)} MiB and WILL BE rewritten to its last ` +
-      `8 MiB when the next command starts, past ` +
-      `${Math.floor(LOG_MAX_BYTES / 1048576)} MiB, so re-reading it is likely to return ` +
-      `lost_bytes rather than output. Redirect this job's output to a file on the host; the ` +
-      `transcript is not durable storage for it.]`
+    ? `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output. ` +
+      `${midProspect.clause}, so re-reading it ${midProspect.resume}. Redirect this job's ` +
+      `output to a file on the host; the transcript is not durable storage for it.]`
     : `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output — ` +
       `run returns at most ${Math.floor(maxBytes / 1024)} KiB. The command's full region is in ` +
       `the session log: ath read ${session} --since=${resumeFrom} returns all of it, not just ` +
@@ -2719,6 +2734,9 @@ export async function poll(
 
   let exitCode: number | null = null;
   let done = false;
+  // Set when the command began and the shell returned to a prompt without
+  // framing an exit — killed, or interrupted. See its use below.
+  let commandGone: 'killed' | 'never-framed' | false = false;
   /** The ssh link for a remote session dropped while this command was running. */
   let remoteLost = false;
 
@@ -2776,6 +2794,38 @@ export async function poll(
 
   const session = await get(clean).catch(() => null);
   if (!session) throw new SessionGone(clean);
+
+  // A KILLED command leaves the pane at a prompt and no end marker — and this
+  // reported it as running, forever.
+  //
+  // A reviewer killed a command and watched `poll` answer "116 B produced in
+  // 10s (12 B/s)" with running_for_seconds climbing. The documented way to spot
+  // a dead start is that "poll never advances", and that heuristic fails
+  // precisely here, because the error text IS output: the offset moves once and
+  // then stops, which looks like a quiet job rather than a dead one.
+  //
+  // The evidence was already on disk. The command's start marker proves it
+  // began; the absent end marker proves it never framed an exit; an IDLE pane
+  // proves the shell is back at a prompt and nothing is going to write one.
+  // Together those are conclusive, and they are the same shape the dropped-ssh
+  // case above already resolves to: done, with a null code, because what it did
+  // is unknowable.
+  //
+  // Scanned FORWARD from the recorded dispatch offset rather than backward from
+  // the end, for the reason the `launched` race taught: a loud command buries
+  // its own start marker far beyond any tail window.
+  if (!done && session.state === 'idle') {
+    const sent = await dispatchedAt(handle);
+    // A grace window, because `start` returns before the command necessarily
+    // runs and a pane can be momentarily idle in between. `start` itself waits
+    // 2.5s for the frame, so anything past that has had its chance.
+    if (sent && Date.now() - sent.ms > 3000) {
+      const began = await awaitStartMarker(clean, handle, 0, sent.offset);
+      done = true;
+      exitCode = null;
+      commandGone = began ? 'killed' : 'never-framed';
+    }
+  }
 
   // A BACKGROUND command stopped at a prompt must ask for a human too.
   //
@@ -2851,6 +2901,24 @@ export async function poll(
     ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
     ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
     ...(remoteLost ? { remoteDisconnected: true } : {}),
+    ...(commandGone
+      ? {
+          commandGone: true,
+          commandGoneNote:
+            commandGone === 'killed'
+              ? 'This command BEGAN and then ended without reporting a status — killed, ' +
+                'interrupted, or its shell went away. The pane is back at a prompt, so nothing ' +
+                'further will be written for this handle and the exit code is unknowable. Do ' +
+                'NOT keep polling: `read` the session to see what it printed before it died, ' +
+                'and re-run it if you still need the result.'
+              : 'This command NEVER OPENED ITS FRAME — the wrapper did not run, so nothing was ' +
+                'ever going to report an exit for this handle, and the pane is already back at ' +
+                'a prompt. This is the `launched: false` case seen from the other end. Do NOT ' +
+                'keep polling: `read` the session (a shell with no helper answers ' +
+                '"__ath: command not found"), then `run` a trivial `echo ok` to re-arm it and ' +
+                'issue the command again.',
+        }
+      : {}),
     ...(widthChange === undefined ? {} : { paneWidthChanged: widthChange }),
     ...(timing?.seconds === undefined
       ? {}
@@ -3552,6 +3620,44 @@ export function tailIsAllFurniture(output: string): boolean {
  * has ALREADY passed 32 MiB, so a conditional about passing it reads as a
  * threshold still ahead when the only thing still ahead is the rewrite itself.
  */
+/**
+ * What the trim is about to do, said truthfully for where the log actually is.
+ *
+ * THREE places made this claim and I fixed one. The warning threshold is 75% of
+ * the cap; the rewrite happens only ABOVE the cap — so between them, "WILL BE
+ * rewritten when the next command starts" is false. A reviewer got both versions
+ * in a single payload: the structured note saying "NOTHING has been discarded
+ * yet, and the next command will not discard anything either" beside an inline
+ * marker in the same response saying the bytes were "likely to be DESTROYED".
+ *
+ * One decision point now, and the callers ask it rather than restating it. This
+ * is the fourth message in this project to be unified after diverging; the
+ * pattern is reliable enough that a second copy should be read as a defect on
+ * sight.
+ */
+export function trimProspect(size: number): { past: boolean; clause: string; resume: string } {
+  const mib = Math.floor(size / 1048576);
+  const cap = Math.floor(LOG_MAX_BYTES / 1048576);
+  if (size > LOG_MAX_BYTES) {
+    return {
+      past: true,
+      clause:
+        `This session's log is ${mib} MiB, already past the ${cap} MiB threshold, and WILL BE ` +
+        `rewritten to its last 8 MiB when the next command starts — it has not happened yet`,
+      resume: 'will probably return lost_bytes rather than output',
+    };
+  }
+  return {
+    past: false,
+    clause:
+      `This session's log is ${mib} MiB and approaching the ${cap} MiB threshold. NOTHING has ` +
+      `been discarded yet, and the next command will not discard anything either — the rewrite ` +
+      `happens only once the log is over ${cap} MiB, and then at the start of the command after ` +
+      `that`,
+    resume: 'still works for now, but not once the log passes the threshold',
+  };
+}
+
 const LOG_KEEP_BYTES_NOTE = 8;
 
 export function logNearTrimNote(bytes: number): string {
@@ -3570,20 +3676,17 @@ export function logNearTrimNote(bytes: number): string {
   //
   // It came from patching the earlier tense bug by bolting a clause onto the
   // sentence rather than asking when the sentence is true.
-  if (bytes > LOG_MAX_BYTES) {
-    return (
-      `This session's log is ${mib} MiB, already past the ${cap} MiB threshold, and WILL BE ` +
-      `rewritten to its last ${keep} MiB when the next command starts — it has not happened ` +
-      `yet. Offsets from before that point will then return lost_bytes. If you need this ` +
-      `job's output, write it to a file on the host now, while it is still here.`
-    );
-  }
+  void mib;
+  void cap;
+  void keep;
+  const p = trimProspect(bytes);
   return (
-    `This session's log is ${mib} MiB and approaching the ${cap} MiB threshold. NOTHING has ` +
-    `been discarded yet, and the next command will not discard anything either — the rewrite ` +
-    `happens only once the log is over ${cap} MiB, and then at the start of the command after ` +
-    `that. This is the warning you get while there is still time to act: if you need this ` +
-    `job's output, write it to a file on the host now, rather than relying on the transcript.`
+    `${p.clause}. ` +
+    (p.past
+      ? `Offsets from before that point will then return lost_bytes. `
+      : `This is the warning you get while there is still time to act. `) +
+    `If you need this job's output, write it to a file on the host now, ` +
+    `${p.past ? 'while it is still here' : 'rather than relying on the transcript'}.`
   );
 }
 

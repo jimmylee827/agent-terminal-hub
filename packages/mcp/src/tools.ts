@@ -221,17 +221,33 @@ export const TOOL_DEFINITIONS = [
     description:
       'Send raw keys to a session without waiting: tmux key names like C-c, Up, Enter, or single ' +
       'characters like y. Use for interrupting a process or answering a simple y/n. NEVER use this ' +
-      'to type a password, passphrase, or any other credential.',
+      'to type a password, passphrase, or any other credential. ' +
+      // `keys` splits on whitespace and interprets every word as a key NAME, so
+      // there was no way to type a literal string here at all. A reviewer wanted
+      // to type a command into an interactive program and had to shell out to
+      // the CLI's `ath send --text`, which this surface simply lacked.
+      'To type LITERAL TEXT rather than key names — a command into an interactive program, an ' +
+      'answer to a non-credential prompt — pass `text` instead of `keys`; it is sent verbatim ' +
+      'and followed by Return.',
     inputSchema: {
       type: 'object',
       properties: {
         session: { type: 'string' },
         keys: {
           type: 'string',
-          description: 'Space-separated tmux key names, e.g. "C-c" or "y Enter".',
+          description:
+            'Space-separated tmux key names, e.g. "C-c" or "y Enter". Every word is interpreted ' +
+            'as a key name — use `text` for literal characters.',
+        },
+        text: {
+          type: 'string',
+          description:
+            'Literal text to type, sent verbatim with no key-name interpretation, followed by ' +
+            'Return — the same behaviour as the CLI\'s `ath send --text`. Give exactly one of ' +
+            '`keys` or `text`.',
         },
       },
-      required: ['session', 'keys'],
+      required: ['session'],
       additionalProperties: false,
     },
   },
@@ -290,7 +306,13 @@ export const TOOL_DEFINITIONS = [
       'interrupted, or the session dies — and if nobody has answered within the (short) timeout ' +
       'it returns `outcome: "still_waiting"`, which is NOT a failure: the request stays open. ' +
       'Read the outcome field, not just the text; "interrupted" and "still_waiting" are not ' +
-      'answers. Tell the user what you need BEFORE calling this.',
+      'answers. Tell the user what you need BEFORE calling this. ' +
+      // The advice above widened to "any started job"; without this sentence it
+      // walks a caller into an unbounded result. One reviewer followed it on a
+      // checksum job and got 65,993 characters back.
+      'On a job that PRINTS a lot, pass `max_bytes` — this returns the command window like ' +
+      '`poll` does, so an unbounded wait on a loud job can hand you a result far larger than ' +
+      'you wanted.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -301,6 +323,13 @@ export const TOOL_DEFINITIONS = [
           description:
             'Return only output produced after this byte offset, as `poll` does. Without it the ' +
             'whole command window comes back, which on a chatty command is a lot of context.',
+        },
+        max_bytes: {
+          type: 'integer',
+          description:
+            'Cap on how much output comes back (default 65536). This is recommended for ANY ' +
+            'long job, and a chatty one can return far more than you want in a single result — ' +
+            'pass a few hundred bytes when you only need the outcome and the exit code.',
         },
         timeout_seconds: {
           type: 'number',

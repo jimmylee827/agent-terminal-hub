@@ -842,8 +842,23 @@ chk "run emits a handle on SUCCESS, not only on timeout" "yes" \
 # Asserted on the shared sentence rather than on a symbol count: the guard is
 # named twice per cap (declaration and use), so counting mentions measured the
 # spelling and not the property.
+# Asserted on the RENDERED text, not the source.
+#
+# This grepped source for a phrase that the formatter had wrapped across two
+# lines, so it counted 1 where 2 were present. That is the fourth assertion in
+# this file to fail for that reason, and re-anchoring keeps losing the race with
+# the formatter — a message is a runtime value, so test the runtime value.
+TRIMRENDER="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const near=a.trimProspect(28*1048576), past=a.trimProspect(57*1048576);
+const out=[];
+out.push(/WILL BE rewritten to its last 8 MiB when the next command starts/.test(past.clause)?"futureTense":"NOFUTURE");
+out.push(/it has not happened yet/.test(past.clause)?"notYet":"NONOTYET");
+out.push(/and is trimmed past/.test(past.clause+near.clause)?"PRESENTTENSE":"noPresentTense");
+process.stdout.write(out.join(" "));
+' 2>/dev/null)"
 chk "both caps warn about an imminent trim" "2" \
-    "$(grep -c 'transcript is not durable storage for it' "$RP/packages/core/src/run.ts")"
+    "$(grep -c 'durable storage for it' "$RP/packages/core/src/run.ts")"
 chk "RunResult declares omittedBytes" "yes" \
     "$(grep -q 'omittedBytes?: number;' "$RP/packages/core/src/types.ts" && echo yes || echo no)"
 
@@ -1334,6 +1349,83 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- the trim claim is made in ONE place now --------------------------------
+#
+# Three sites made it and I fixed one. A reviewer got both versions in a SINGLE
+# payload: the structured note saying "NOTHING has been discarded yet, and the
+# next command will not discard anything either", beside an inline marker in the
+# same response saying the bytes were "likely to be DESTROYED".
+chk "the trim claim has one definition"      "1" \
+    "$(grep -c 'export function trimProspect' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "no inline marker restates it"           "0" \
+    "$(grep -c 'WILL BE rewritten to its last 8 MiB when the next command starts — it has not ' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+TRIMA="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const near=a.trimProspect(28*1048576), past=a.trimProspect(57*1048576);
+const out=[];
+out.push(near.past?"NEARSAYSPAST":"nearHonest");
+out.push(/NOTHING has been discarded/.test(near.clause)?"nearSaysSafe":"NEARSILENT");
+out.push(past.past&&/WILL BE rewritten/.test(past.clause)?"pastHonest":"PASTWRONG");
+out.push(/lost_bytes/.test(past.resume)&&!/lost_bytes/.test(near.resume)?"resumeDiffers":"RESUMESAME");
+process.stdout.write(out.join(" "));
+' 2>/dev/null)"
+chk "near does not claim past"               "yes" "$(printf '%s' "$TRIMA" | grep -q nearHonest && echo yes || echo no)"
+chk "near says nothing is lost"              "yes" "$(printf '%s' "$TRIMA" | grep -q nearSaysSafe && echo yes || echo no)"
+chk "past keeps its warning"                 "yes" "$(printf '%s' "$TRIMA" | grep -q pastHonest && echo yes || echo no)"
+chk "and the resume advice differs"          "yes" "$(printf '%s' "$TRIMA" | grep -q resumeDiffers && echo yes || echo no)"
+
+# ---- await_human was generalised; its contract was not ----------------------
+#
+# Its description now recommends it "for ANY started job instead of polling in a
+# loop". A reviewer followed that on a checksum job and got 65,993 characters
+# back, overflowing their harness — "the one read surface newly recommended for
+# loud jobs is the only one with no volume control".
+chk "await_human takes max_bytes"            "yes" \
+    "$(grep -q 'max_bytes' "$RP/packages/mcp/src/tools.ts" && node -e '
+const {TOOL_DEFINITIONS}=require("'"$RP"'/packages/mcp/dist/tools.js");
+const a=TOOL_DEFINITIONS.find(t=>t.name==="await_human");
+process.stdout.write(a.inputSchema.properties.max_bytes?"yes":"no")' 2>/dev/null)"
+chk "and passes it to poll"                  "yes" \
+    "$(grep -q 'args.max_bytes === undefined ? undefined : Number(args.max_bytes)' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and returns took_seconds like poll"     "yes" \
+    "$(grep -q 'res.elapsedSeconds === undefined ? {} : { took_seconds' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# The sudo paragraph rode EVERY answered outcome, so a shasum pipeline came back
+# with a paragraph about timestamp_timeout. "The tool was generalised; the note
+# wasn't conditionalised."
+chk "the sudo note needs evidence"           "yes" \
+    "$(grep -q 'answered && credentialWasInPlay' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and parking is observed, not assumed"   "yes" \
+    "$(grep -q 'parkedDuringWait' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- which server is answering ---------------------------------------------
+#
+# "It never says whether I am stale. It reports two stale pids; it doesn't say
+# which server is serving this call" — they ran `ps` to find out, and called it
+# the only version question they actually had.
+chk "the answering build is stated"          "yes" \
+    "$(grep -q 'export function thisServer' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "on new and doctor"                      "2" \
+    "$(grep -c 'this_server: thisServer()' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+chk "and the CLI says it too"                "yes" \
+    "$(grep -q 'answering from pid' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "a stale row marks itself"               "yes" \
+    "$(grep -q 'THIS server, the one answering you' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+
+# ---- a handle that can never complete ---------------------------------------
+#
+# `poll` reported a dead handle as running: "116 B produced in 10s (12 B/s)" with
+# running_for_seconds climbing. Its documented tell — "poll never advances" —
+# fails exactly here, because the ERROR TEXT is output: the offset moves once
+# and stops, which reads as a quiet job. Only `start`'s flag saved the reviewer.
+DEADH="$(node "$RP/scripts/deadhandle.js" 2>/dev/null)"
+chk "start still flags an unframed command"  "yes" "$(printf '%s' "$DEADH" | grep -q startFlagged && echo yes || echo no)"
+chk "poll now sees the dead handle"          "yes" "$(printf '%s' "$DEADH" | grep -q deadHandleSeen && echo yes || echo no)"
+chk "and stops calling it running"           "yes" "$(printf '%s' "$DEADH" | grep -q deadHandleDone && echo yes || echo no)"
+chk "naming the actual reason"               "yes" "$(printf '%s' "$DEADH" | grep -q neverFramedNamed && echo yes || echo no)"
+chk "a RUNNING job is not flagged"           "yes" "$(printf '%s' "$DEADH" | grep -q runningNotFlagged && echo yes || echo no)"
+chk "nor a finished one"                     "yes" "$(printf '%s' "$DEADH" | grep -q finishedNotFlagged && echo yes || echo no)"
+chk "which still reports its zero"           "yes" "$(printf '%s' "$DEADH" | grep -q finishedReportsZero && echo yes || echo no)"
+
 # ---- a documented bound must be enforced by something that RUNS ------------
 #
 # `doctor --artifacts` says rc/ is "reaped after 6h" and the purge tool says
@@ -1684,11 +1776,11 @@ chk "await_human is in the parity coverage"        "yes" \
 # to disambiguate a runtime message — "the doc is doing work the message should
 # do itself".
 chk "the trim marker is explicitly future" "yes" \
-    "$(grep -q 'WILL BE rewritten to its last' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+    "$(printf '%s' "$TRIMRENDER" | grep -q futureTense && echo yes || echo no)"
 chk "and says it has not happened yet"     "yes" \
-    "$(grep -q 'it has not ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
-chk "no present-tense claim remains"       "0" \
-    "$(grep -c 'and is trimmed past' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+    "$(printf '%s' "$TRIMRENDER" | grep -q notYet && echo yes || echo no)"
+chk "no present-tense claim remains"       "yes" \
+    "$(printf '%s' "$TRIMRENDER" | grep -q noPresentTense && echo yes || echo no)"
 
 # ...and so does the note that sits BESIDE it. A reviewer got both sentences in
 # one response: the corrected marker and a sibling field still saying "is
@@ -1700,7 +1792,7 @@ chk "the trim note is built in core, once"  "1" \
 chk "and the MCP layer no longer spells it" "0" \
     "$(grep -c 'once it passes 32 MiB, at the START' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
 chk "the note says it has not happened yet" "yes" \
-    "$(grep -q 'WILL BE rewritten to its last 8 MiB when the next command starts — it ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+    "$(printf '%s' "$TRIMRENDER" | grep -q notYet && echo yes || echo no)"
 # Anchored on the phrase, not the number: the threshold is templated from
 # LOG_MAX_BYTES now, so a hardcoded 32 stopped matching. The NEAR/PAST split is
 # asserted properly by the TRIMN probe above.
@@ -2442,7 +2534,13 @@ const a=require("'"$RP"'/packages/core/dist/index.js");
   const s=await a.start("tq","sleep 5");
   await new Promise(r=>setTimeout(r,9000));      // look LATE, and only once
   const p=await a.poll("tq",s.handle,s.offset);
-  process.stdout.write(`${p.done} ${p.elapsedExact} ${p.elapsedSeconds}`);
+  // 5 or 6: the figure is the measurement made BY the shell, and on a loaded machine
+  // a `sleep 5` genuinely takes a little over five seconds. Asserting exactly 5
+  // was asserting that the test machine is idle, which is not the property
+  // under test — the property is that the reported time is real rather than
+  // estimated, which `elapsedExact` states and the tolerance preserves.
+  const secs = p.elapsedSeconds >= 5 && p.elapsedSeconds <= 6 ? 5 : p.elapsedSeconds;
+  process.stdout.write(`${p.done} ${p.elapsedExact} ${secs}`);
   await a.kill("tq").catch(()=>{});
 })();
 ' 2>/dev/null)"
@@ -3743,6 +3841,21 @@ blocks=$(printf '%s' "$r" | node -e 'let d="";process.stdin.on("data",c=>d+=c).o
 check "run returns output as its own content block" "2" "$blocks"
 esc=$(printf '%s' "$r" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const t=JSON.parse(d).result.content[1].text;console.log(/\\n/.test(t)?"escaped":"raw")}catch(e){console.log("x")}})')
 check "and that block is raw text, not JSON-escaped" "raw" "$esc"
+
+# LITERAL TEXT through the MCP surface, which it could not send at all.
+#
+# `keys` splits on whitespace and reads every word as a tmux key NAME, so typing
+# a command into an interactive program was impossible here. A reviewer wanted
+# exactly that and had to shell out to the CLI's `ath send --text`. The CLI has
+# had it since the beginning; the MCP schema simply never exposed it.
+mcp '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"send","arguments":{"session":"mc","text":"echo mcp-literal-ok"}}}' >/dev/null 2>&1
+sleep 2
+check "MCP send can type literal text" "yes" \
+    "$($ATH read mc --tail 40 2>/dev/null | grep -q 'mcp-literal-ok' && echo yes || echo no)"
+# And it must refuse the ambiguous call rather than guessing which to honour.
+both=$(mcp '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"send","arguments":{"session":"mc","text":"x","keys":"Enter"}}}')
+check "and refuses keys+text together" "yes" \
+    "$(printf '%s' "$both" | grep -q 'exactly one' && echo yes || echo no)"
 $ATH kill mc --force >/dev/null 2>&1
 
 echo

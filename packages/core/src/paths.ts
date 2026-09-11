@@ -320,6 +320,31 @@ export async function staleServers(): Promise<StaleServer[]> {
 }
 
 /** What to say about them. Shared wording, like every other notice here. */
+/**
+ * Who is answering, and whether that process is current.
+ *
+ * The staleness signals so far could only speak by ABSENCE: a stale server was
+ * named, a current one said nothing, and "nothing" is also what you get from a
+ * server too old to have the feature at all. A reviewer put the gap precisely —
+ * the notice "reports two stale pids; it doesn't say which server is serving
+ * this call" — and had to run `ps` to answer it.
+ */
+export function thisServer(): { pid: number; started_utc: string; build_utc: string; current: boolean } {
+  const iso = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+  let built = 0;
+  try {
+    built = statSync(__filename).mtimeMs;
+  } catch {
+    built = 0;
+  }
+  return {
+    pid: process.pid,
+    started_utc: iso(BUILD_LOADED_MS),
+    build_utc: iso(built || BUILD_LOADED_MS),
+    current: buildStaleness() === undefined,
+  };
+}
+
 export function staleServersNote(servers: StaleServer[]): string {
   const when = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
   let built = 0;
@@ -349,7 +374,15 @@ export function staleServersNote(servers: StaleServer[]): string {
           : mins >= 60
             ? `, ${Math.round(mins / 60)}h behind`
             : `, ${mins}m behind`;
-      return `pid ${s.pid} (started ${when(s.startedMs)} UTC${behind})`;
+      // Mark the process doing the reporting.
+      //
+      // "It never says whether I am stale. It reports two stale pids; it
+      // doesn't say which server is serving this call" — a reviewer had to run
+      // `ps` to find they were on a fourth, current one, and called it "the
+      // only version question I actually have". The answer was always in hand:
+      // the process knows its own pid.
+      const me = s.pid === process.pid ? ' ← THIS server, the one answering you' : '';
+      return `pid ${s.pid} (started ${when(s.startedMs)} UTC${behind})${me}`;
     })
     .join(', ');
   return (

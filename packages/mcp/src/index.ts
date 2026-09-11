@@ -31,6 +31,7 @@ import {
   buildStaleness,
   staleBuildNote,
   staleServers,
+  thisServer,
   staleServersNote,
   logDirBytes,
   LOG_DIR_NOTICE_BYTES,
@@ -42,6 +43,8 @@ import {
   setPinned,
   setWidth,
   sendKeys,
+  sendLine,
+  assertNotCredentialPrompt,
   start,
   summarize,
   effectiveCwd,} from '@ath/core';
@@ -349,6 +352,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // first call of a session.
         ...(newStale ? { stale_build: staleBuildNote(newStale) } : {}),
         ...(newStaleServers.length ? { stale_servers: staleServersNote(newStaleServers) } : {}),
+        // Stated positively, on the first call of every session. Silence could
+        // never distinguish "current" from "too old to know".
+        this_server: thisServer(),
         ...(logDirNow > LOG_DIR_NOTICE_BYTES
           ? {
               log_dir_bytes: logDirNow,
@@ -783,6 +789,10 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       }
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
       if (result.exitCodeShortNote) payload.exit_code_note = result.exitCodeShortNote;
+      if (result.commandGone) {
+        payload.command_gone = true;
+        payload.what_to_do = result.commandGoneNote;
+      }
       // Output that is GONE, said out loud.
       //
       // A session log is rewritten to its last 8 MiB once it passes 32 MiB,
@@ -913,8 +923,33 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // for another machine.
       await assertRemoteConnected(args.session as string);
       const session = String(args.session ?? '');
+      // Literal text, which this surface could not send at all.
+      //
+      // `keys` splits on whitespace and treats every word as a tmux key NAME,
+      // so typing a command into an interactive program was impossible here — a
+      // reviewer had to shell out to the CLI's `ath send --text`. The CLI has
+      // had it all along; the MCP schema simply never exposed it.
+      if (args.text !== undefined) {
+        if (args.keys !== undefined) {
+          return text('Give exactly one of `keys` or `text`, not both.', true);
+        }
+        const literal = String(args.text);
+        // Same guard the CLI applies: arbitrary text typed into a password
+        // field becomes a failed login attempt, and enough of those lock an
+        // account.
+        await assertNotCredentialPrompt(session);
+        // Return is always pressed, exactly as the CLI's `--text` does. Matching
+        // it is the point: a surface that differs in a detail like this is the
+        // divergence these rounds keep finding, and there is no no-Return mode
+        // on the other side to be consistent with.
+        await sendLine(session, literal);
+        return text(
+          `Typed ${literal.length} characters into "${session}" and pressed Return. ` +
+            'Use the read tool to see the effect.',
+        );
+      }
       const keys = String(args.keys ?? '').split(/\s+/).filter(Boolean);
-      if (keys.length === 0) return text('No keys given.', true);
+      if (keys.length === 0) return text('No keys given. Pass `keys` (tmux key names) or `text` (literal).', true);
       await sendKeys(session, keys);
       return text(`Sent ${keys.join(' ')} to "${session}". Use the read tool to see the effect.`);
     }
@@ -1051,6 +1086,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // lets it say something useful to the person it is waiting on.
       const waitMs = Math.min(Math.max(Number(args.timeout_seconds ?? 45), 5), 120) * 1000;
       const deadline = Date.now() + waitMs;
+      // Whether this wait ever saw a credential prompt. See its use below: it
+      // decides whether the sudo-timestamp paragraph belongs in the answer.
+      let parkedDuringWait = false;
       let handle = args.handle === undefined ? undefined : String(args.handle);
       // Where the handle comes from when the caller did not pass one.
       //
@@ -1108,9 +1146,40 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         if (!alive && Date.now() < deadline) {
           return json({ outcome: 'session_gone', note: 'The session died; any answer was lost.' });
         }
-        const res = await withDeadline(poll(session, handle, Number(args.since ?? 0)));
+        // Sampled every pass: a command that parks and is answered between two
+        // polls leaves no trace in either the request list or the final result.
+        if (!parkedDuringWait) {
+          const st = await get(session).catch(() => undefined);
+          if (st?.state === 'needs-input') parkedDuringWait = true;
+        }
+        // max_bytes, because this is now recommended for ANY long job.
+        //
+        // Widening the advice without widening the contract is what broke here:
+        // the description says to use this "for ANY started job instead of
+        // polling in a loop, including ordinary long ones", and a reviewer did
+        // exactly that on a checksum job. It returned 65,993 characters and
+        // overflowed their harness — "the one read surface newly recommended
+        // for loud jobs is the only one with no volume control". `poll` and
+        // `read` have taken max_bytes all along.
+        const res = await withDeadline(
+          poll(
+            session,
+            handle,
+            Number(args.since ?? 0),
+            args.max_bytes === undefined ? undefined : Number(args.max_bytes),
+          ),
+        );
         if (res?.done) {
           const code = res.exitCode ?? 0;
+          // Was a person ever actually needed here? Read BEFORE the resolved
+          // requests are reaped, because reaping is what would erase the
+          // evidence. `needsInput` catches the case where the command parked and
+          // was answered inside a single call, leaving no request to find.
+          const credentialWasInPlay =
+            parkedDuringWait ||
+            res.needsInput === true ||
+            (await listRequests().catch(() => []))
+              .some((r) => r.session === session && (!args.handle || r.handle === handle));
           await reapResolvedRequests(session).catch(() => undefined);
           // Same trap as the requests listing: sudo traps SIGINT and exits 1,
           // so an interrupted credential prompt never shows 130/143. Only
@@ -1171,7 +1240,22 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               // confirmed elevation with `sudo -n true`, and had the very next
               // privileged command prompt anyway. Saying nothing about the
               // duration is strictly better than saying something plannable.
-              ...(answered
+              // Duration, because the new advice costs it otherwise.
+              //
+              // `poll` returns `took_seconds` with its "measured by the shell"
+              // provenance; this returned outcome and exit code and no timing,
+              // so a reviewer following the new guidance had to make a second
+              // call to get back what the old route gave them for free.
+              ...(res.elapsedSeconds === undefined ? {} : { took_seconds: res.elapsedSeconds }),
+              // The credential paragraph only when a credential was in play.
+              //
+              // It rode every answered outcome, so a `shasum` pipeline came back
+              // with a paragraph about timestamp_timeout. The reviewer named the
+              // cause exactly: "the tool was generalised; the note wasn't
+              // conditionalised". Established by evidence — a request was filed
+              // for this session, or the command actually parked — never assumed
+              // from the fact that `await_human` was the tool that was called.
+              ...(answered && credentialWasInPlay
                 ? {
                     note:
                       'If that was a sudo password, its timestamp is now cached for THIS ' +
@@ -1182,12 +1266,19 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
                       'you rely on, never from elapsed time. The password itself is NOT in ' +
                       'the session log (a prompt echoes nothing), so there is nothing to purge.',
                   }
-                : {
-                    note:
-                      `The command ended with exit ${code}. That is NOT proof a human answered: a ` +
-                      'wrong password, an interrupt, and the command failing on its own all look ' +
-                      'the same from here. Read the output before assuming you have elevation.',
-                  }),
+                : answered
+                  ? {
+                      note:
+                        'This finished on its own — nothing here was waiting on a person, and no ' +
+                        'request was filed. `await_human` works as a plain "tell me when this ' +
+                        'is done", which is what happened.',
+                    }
+                  : {
+                      note:
+                        `The command ended with exit ${code}. That is NOT proof a human answered: a ` +
+                        'wrong password, an interrupt, and the command failing on its own all look ' +
+                        'the same from here. Read the output before assuming you have elevation.',
+                    }),
             },
             res.output,
           );
@@ -1426,6 +1517,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       return json({
         ...(doctorStale ? { stale_build: staleBuildNote(doctorStale) } : {}),
         ...(doctorServers.length ? { stale_servers: staleServersNote(doctorServers) } : {}),
+        this_server: thisServer(),
         root: ATH_HOME,
         artifacts: rows,
         note: '`purge` clears only the entry marked removed_by_purge, and only for one session.',

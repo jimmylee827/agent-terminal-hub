@@ -409,6 +409,13 @@ export interface PollResult {
   /** The one-clause advice that goes with it. */
   exitCodeShortNote?: string;
   /**
+   * The command began and then ended without framing an exit — killed or
+   * interrupted. `exitCode` is null because what it did is unknowable.
+   */
+  commandGone?: boolean;
+  /** What to do about it. */
+  commandGoneNote?: string;
+  /**
    * How far in, as a NUMBER rather than something to derive.
    *
    * "Is it alive and how far in" is the question every long job raises, and the
