@@ -1234,6 +1234,37 @@ chk "no handler swallows a width notice"     "0" \
 # where it correctly reports logDirBytes and LOG_DIR_NOTICE_BYTES as MCP-only.
 chk "no user-facing fact is one-sided"       "0" \
     "$(node "$RP/scripts/surfaces.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# ---- the document a cold agent reads must keep up with the runtime ----------
+#
+# Two auditors existed and neither covered this: parity.js checks a result field
+# reaches the payload, surfaces.js checks a fact reaches both surfaces, and
+# nothing checked that any of it reaches SKILL.md. So the runtime grew fields the
+# doc never mentioned. A reviewer caught one — `cwd_host` — and noted the skill
+# file's mtime was two hours older than the build, with the doc still describing
+# the ambiguity that field had closed: "the surface a new agent reads first is
+# the one that didn't get updated."
+#
+# Run on the whole wire surface it found 20 undocumented fields, not one.
+chk "no wire field is undocumented"          "0" \
+    "$(node "$RP/scripts/docdrift.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+chk "the doc names the host fields"          "yes" \
+    "$(grep -q 'cwd_host' "$SK" && echo yes || echo no)"
+chk "and no longer calls cwd the one place" "0" \
+    "$(grep -c 'one place they genuinely differ' "$SK" | tr -d ' ')"
+
+# ---- the changelog must be anchored to the READER ---------------------------
+#
+# It was anchored to the oldest server in the list, which answers "what is new
+# since the oldest straggler" rather than "what am I missing". A reviewer could
+# place only two of eight entries empirically, because the baseline was a process
+# from five days before the build they were actually running.
+chk "the report anchors to this process"     "yes" \
+    "$(grep -q 'servers.find((x) => x.pid === process.pid)' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "and says so when it is current"         "yes" \
+    "$(grep -q 'none of the below is missing HERE' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "naming the baseline date either way"    "2" \
+    "$(grep -c 'started \${when} UTC' "$RP/packages/core/src/paths.ts" | tr -d ' ')"
 chk "ath new can warn about the log dir"     "yes" \
     "$(grep -q 'logDirBytes' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 

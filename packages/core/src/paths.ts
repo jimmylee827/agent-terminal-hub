@@ -367,13 +367,29 @@ async function changesSince(ms: number): Promise<string[]> {
 /** The note, with what changed when that can be established. */
 export async function staleServersReport(servers: StaleServer[]): Promise<string> {
   const base = staleServersNote(servers);
-  const oldest = servers.reduce((a, b) => (a.startedMs < b.startedMs ? a : b));
-  const changes = await changesSince(oldest.startedMs).catch(() => []);
+  // ANCHOR THE LIST TO THE READER, when the reader is one of the stale ones.
+  //
+  // It was anchored to the oldest server in the list, which answers "what is
+  // new since the oldest straggler" — not "what am I missing". A reviewer said
+  // so exactly: of eight entries they could place only two empirically, because
+  // the baseline was a process from five days earlier and the other six may
+  // already have been in the build they were running.
+  //
+  // The process reading this knows when IT started. When that process is itself
+  // stale, its own start is the only baseline that answers the question it
+  // actually has; when it is current, nothing is missing for it and the list is
+  // information about OTHER servers, which is worth saying rather than leaving
+  // the reader to assume the list applies to them.
+  const self = servers.find((x) => x.pid === process.pid);
+  const anchor = self ?? servers.reduce((a, b) => (a.startedMs < b.startedMs ? a : b));
+  const changes = await changesSince(anchor.startedMs).catch(() => []);
+  const when = new Date(anchor.startedMs).toISOString().replace('T', ' ').slice(0, 19);
+  const heading = self
+    ? `What THIS server (pid ${self.pid}) is missing, having started ${when} UTC, newest first:`
+    : `This process is current, so none of the below is missing HERE. For the oldest of ` +
+      `those servers, started ${when} UTC, what has landed since, newest first:`;
   if (!changes.length) return base;
-  return (
-    `${base}\n\nWhat landed since the oldest of those started, newest first:\n` +
-    changes.map((c) => `  - ${c}`).join('\n')
-  );
+  return `${base}\n\n${heading}\n` + changes.map((c) => `  - ${c}`).join('\n');
 }
 
 /** What to say about them. Shared wording, like every other notice here. */

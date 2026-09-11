@@ -469,6 +469,16 @@ Fields worth checking on the `--json` form:
 | `needs_input` | Waiting on a human. Hand off; do not retry. |
 | `timed_out` | Still running. Output is partial; poll with `ath read`. |
 | `shell_exited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
+| `exit_code_covers` / `exit_code_caveat` | The code is only the last part of a compound line or the last stage of a pipeline. The caveat is the long form, shown once per session; `exit_code_note` is the one-line form that rides every affected command. Read the output, not the number. |
+| `capture_incomplete` | The output came back empty and that could NOT be confirmed as genuine. Re-read before concluding the command printed nothing. |
+| `command_gone` | On `poll`: this handle began and then died, or never framed at all. `exit_code` is `null` because what it did is unknowable. Stop polling — `read` the session, then re-run if you still need it. |
+| `log_trimmed_bytes` | That many bytes were DISCARDED from this session's transcript when the command started. Gone, not paginated. |
+| `omitted_at_risk` / `omitted_resume_from` | Output was elided and the offset offered to recover it may expire in the next trim. Read it now, or redirect the job to a file. |
+| `still_on_disk` | The elided bytes are recoverable as of this call — a snapshot, not a promise. |
+| `offset_beyond_end` | The `since` you passed is past the end of the log. Nothing is wrong; there is simply nothing there yet. |
+| `this_server` | Which build is answering: pid, load time, build time, and whether it is current. A long-lived MCP server keeps the code it booted with. |
+| `stale_servers` | Other MCP servers running older code, with how far behind and what has landed since. Said once per server process; `doctor` repeats it on demand. |
+| `already_open` | On `request_human`: a request for this command was already filed, so nothing new was raised and the human was not pinged twice. |
 
 ## What the shared terminal looks like
 
@@ -498,16 +508,18 @@ A plain `exit` there returns you one level, it does not end the session.
 - **`owner`** is `agent` when the CLI is driven from inside a hub pane or
   without a TTY, `human` otherwise. It says who the terminal belongs to, not
   who typed the last command.
-- **`cwd` means different things on the two surfaces, and this is the one place
-  they genuinely differ.** On the CLI (`--json`), `cwd` is the LOCAL pane path —
-  the launcher, not where your commands run — and `remote_cwd` is the truth. On
-  MCP it is the other way round: `cwd` is already where your commands run, the
-  launcher is in `local_cwd`, and there is no `remote_cwd` field at all. A
-  reviewer followed this paragraph while using MCP, went looking for a field
-  that does not exist there, and could reasonably have concluded its `cd` had
-  not taken. Whichever surface you are on, the field named `cwd` on MCP and
-  `remote_cwd` on the CLI is the one that answers "where will my next command
-  run".
+- **`cwd` means different things on the two surfaces.** On the CLI (`--json`),
+  `cwd` is the LOCAL pane path — the launcher, not where your commands run —
+  and `remote_cwd` is the truth. On MCP it is the other way round: `cwd` is
+  already where your commands run, the launcher is in `local_cwd`, and there is
+  no `remote_cwd` field at all. Whichever surface you are on, the field named
+  `cwd` on MCP and `remote_cwd` on the CLI is the one that answers "where will
+  my next command run".
+  On MCP you do not have to hold that in your head: every remote row carries
+  `cwd_host` and `local_cwd_host` naming the machine each path is on, and when
+  the two paths are the SAME STRING — ordinary when your username exists on both
+  hosts — a `cwd_note` says so explicitly. Local-only sessions carry neither
+  field, because with one host there is nothing to disambiguate.
 - **`ath ls --json` omits `pane_tail`** — the whole visible pane, several KB.
   Pass `--full` if you actually want it.
 - **`remote_env` accumulates**, last write winning per variable, and holds both
