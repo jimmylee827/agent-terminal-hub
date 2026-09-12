@@ -1534,6 +1534,19 @@ chk "rc reaping runs without ath gc"         "yes" \
     "$(grep -q 'await reapStaleRc()' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
 chk "and not only from gc"                   "yes" \
     "$(grep -q 'reapStaleRc' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
+# ...and the command a PERSON runs to clean up sweeps them as well.
+#
+# rc/ is swept on session creation, which is correct and documented — but it
+# meant an explicit `purge --dead` left it untouched. Found while verifying this
+# machine was clean before a test round: 706 sentinels, every one past six
+# hours, 1.7 MiB, because nothing had been created since the previous evening.
+# Nobody reported it. "Clean up" that leaves bookkeeping behind is a gap someone
+# finds the round after you stop looking.
+chk "purge --dead sweeps sentinels too"      "yes" \
+    "$(grep -q 'const sentinels = await reapStaleRc()' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and says how many it removed"           "yes" \
+    "$(grep -q 'stale rc sentinel(s) older than 6h' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
 # ...and the wording says WHEN, because the sweep is triggered by creation
 # rather than by the clock. Measured after a cleanup: 3 sentinels past six hours
 # with no session left to trigger it.

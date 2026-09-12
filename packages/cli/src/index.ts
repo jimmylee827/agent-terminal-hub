@@ -706,11 +706,25 @@ async function main(): Promise<number> {
       if (flagBool(flags, 'dead')) {
         const live = new Set((await list({ withState: false })).map((s) => s.name));
         const sweep = await reapDeadLogs(live);
+        // Sweep stale sentinels too, because this is the command a person runs
+        // when they mean "clean up".
+        //
+        // rc/ is swept when a session is CREATED, which is correct and
+        // documented — but it means an explicit cleanup left it untouched. On
+        // this machine, right after a purge: 706 sentinels, every one of them
+        // past six hours, because nothing had been created since. Nobody had
+        // reported it; it turned up while verifying the machine was clean, and
+        // "clean up" leaving 1.7 MB of bookkeeping behind is the kind of gap a
+        // reviewer finds the round after you stop looking.
+        const sentinels = await reapStaleRc().catch(() => 0);
         console.log(
           `removed ${sweep.removed} transcript(s) of dead sessions, ` +
             `${fmtBytes(sweep.bytes)} reclaimed` +
             (sweep.live ? ` — ${sweep.live} live session(s) untouched` : ''),
         );
+        if (sentinels) {
+          console.log(`removed ${sentinels} stale rc sentinel(s) older than 6h`);
+        }
         if (sweep.removed === 0 && sweep.live > 0) {
           console.error(
             c.dim('[ath] nothing to reclaim: every transcript belongs to a live session.'),
