@@ -25,7 +25,7 @@
 set -uo pipefail
 
 ATH_BIN="${ATH_BIN:-ath}"
-DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0
+DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0; FAST=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,6 +39,7 @@ while [ $# -gt 0 ]; do
     --nesting)    INTERNAL_NESTING=1; shift ;;
     --contract)   INTERNAL_CONTRACT=1; shift ;;
     --no-nesting) SKIP_NESTING=1; shift ;;
+    --fast)       FAST=1; DO_LOCAL=1; EXPLICIT=1; shift ;;
     --battery)    INTERNAL_BATTERY=1; S="${2:-}"; LABEL="${3:-$2}"; shift 3 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -4646,15 +4647,31 @@ fi
 if [ "$DO_LOCAL" = "1" ]; then
   echo "═══ REGRESSION SUITE ═══"
   bash "$0" --suite-only || rc=1
-  s="_t$$-local"
-  $ATH_BIN new "$s" --cwd "$HOME" >/dev/null 2>&1
-  for _ in 1 2 3 4 5 6 7 8; do
-    $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle" && break
+  # The edge-case BATTERY is the expensive tail and the one part `--fast` drops.
+  #
+  # Measured, rather than guessed: NESTING 18s, CONTRACT 102s, REGRESSION 161s
+  # — 4.7 minutes for 697 of 717 assertions — and the local + remote batteries
+  # account for the rest of a ~15 minute run. Every regression my own changes
+  # caused this month was caught by one of the three fast sections, except two
+  # in the battery that both came from a single change to CLI text output.
+  #
+  # So `--fast` is for iterating on messages and payload wiring, which is what
+  # a cold-agent round produces. Run the FULL suite before a cold-agent test,
+  # and whenever CLI output, run/poll plumbing or the framing protocol changes
+  # — that is where the battery earns its five minutes.
+  if [ "$FAST" = "0" ]; then
+    s="_t$$-local"
+    $ATH_BIN new "$s" --cwd "$HOME" >/dev/null 2>&1
+    for _ in 1 2 3 4 5 6 7 8; do
+      $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle" && break
+      sleep 1
+    done
     sleep 1
-  done
-  sleep 1
-  run "$s" "LOCAL"
-  $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+    run "$s" "LOCAL"
+    $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+  else
+    echo "  ── battery skipped (--fast). Run the full suite before a cold-agent test."
+  fi
 fi
 
 IFS=','
