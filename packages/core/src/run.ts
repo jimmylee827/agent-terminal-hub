@@ -1898,10 +1898,7 @@ async function runLocked(
   // would increment on every evaluation and decay the prose in the wrong place.
   // Only counted for commands the caveat actually applies to, so a session full
   // of simple commands does not burn through the budget before it ever sees one.
-  const caveatSeen =
-    compoundExitCaveat(command) && (hasPipeline(command) || exitCode === 0)
-      ? await caveatCountFor(clean)
-      : 0;
+  const caveatSeen = compoundExitCaveat(command) ? await caveatCountFor(clean) : 0;
 
   return {
     session: clean,
@@ -1946,7 +1943,31 @@ async function runLocked(
     // prevent it. An agent inspected a firewall with such a line, got a bare
     // `1` from a trailing grep that matched nothing, and read it as the
     // inspection having failed.
-    (hasPipeline(command) || exitCode === 0)
+    // ANY compound line, whatever the exit code. This used to require
+    // `exitCode === 0` for `;`-joined lines, on the reasoning written two lines
+    // above: "only exit 0 can mislead — a non-zero code already sends the
+    // reader to the output."
+    //
+    // That is false, and the pipeline branch of the same comment says why: "a
+    // non-zero tells you that stage failed and still says nothing about the
+    // ones before it." `;` has identical logic and was excluded anyway. The
+    // rule and its own counter-example sat two lines apart.
+    //
+    // A reviewer hit it on a cleanup:
+    //
+    //     rm -f /tmp/a /tmp/b && echo cleaned; ls /tmp/recheck.* 2>&1
+    //     -> exit_code: 1, no caveat
+    //
+    // The `rm` succeeded. The 1 came from `ls` finding no match — the EVIDENCE
+    // OF SUCCESS — and unflagged it reads as "cleanup failed", which invites
+    // reporting a failure that did not happen or retrying a destructive
+    // command. A non-zero from the last part of a chain is exactly as
+    // uninformative about the earlier parts as a zero is.
+    //
+    // This removes a special case rather than adding one. The extra volume is
+    // already handled: the prose decays to a three-word token after the third
+    // occurrence.
+    compoundExitCaveat(command) !== undefined
       ? {
           exitCodeCovers: compoundExitCaveat(command),
           ...(caveatSeen === 1

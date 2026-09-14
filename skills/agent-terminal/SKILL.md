@@ -144,6 +144,14 @@ that, reasonably, because the names are one word apart and only one of them was
 documented. `read` and `poll` return `next_offset` only, so there is nothing to
 confuse there.
 
+Both are CUMULATIVE COUNTERS, not file sizes, and they keep climbing across a
+trim. So an offset will routinely exceed the transcript's size on disk — after
+one trim a reviewer saw `log_offset: 58271025` against a 8.4 MiB file and
+reasonably read it as contradicting the 32 MiB limit. It does not: the counter
+survives what the file loses, which is exactly what makes an offset issued
+before a trim still resolvable afterwards. If you want the file's real size,
+`doctor` reports it; never infer it from an offset.
+
 **Output is capped, and the cap paginates.** A job printing megabytes would
 otherwise hand you all of them in one call, and you cannot know you wanted
 less until it has arrived. `run`, `poll` and `read --since` all return at most

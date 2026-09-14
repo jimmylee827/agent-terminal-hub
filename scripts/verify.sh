@@ -1389,6 +1389,48 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- a compound line is flagged whatever its exit code ----------------------
+#
+# The caveat used to require `exitCode === 0` for `;`-joined lines, on the
+# reasoning that "a non-zero code already sends the reader to the output". The
+# PIPELINE branch of the same comment refuted it two lines away: "a non-zero
+# tells you that stage failed and still says nothing about the ones before it."
+#
+# A reviewer hit the gap on a cleanup:
+#     rm -f /tmp/a /tmp/b && echo cleaned; ls /tmp/recheck.* 2>&1  -> exit 1
+# The rm succeeded; the 1 came from `ls` finding no match, which is the EVIDENCE
+# OF SUCCESS. Unflagged, that reads as "cleanup failed" and invites retrying a
+# destructive command.
+ECODE="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  const n="ecv"+process.pid; const out=[];
+  await a.create({name:n,cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get(n).catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,600));}
+  const mark=async(c)=>!!(await a.run(n,c)).exitCodeCovers;
+  out.push(await mark("echo a; false")?"nonZeroFlagged":"NONZEROSILENT");
+  out.push(await mark("rm -f /tmp/nope-xyz && echo c; ls /tmp/nope-xyz 2>&1")?"cleanupFlagged":"CLEANUPSILENT");
+  out.push(await mark("false; echo recovered")?"maskedFailureFlagged":"MASKEDSILENT");
+  out.push(await mark("echo simple")?"SIMPLEFLAGGED":"simpleQuiet");
+  await a.kill(n).catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a non-zero compound line is flagged"    "yes" "$(printf '%s' "$ECODE" | grep -q nonZeroFlagged && echo yes || echo no)"
+chk "including the destructive-cleanup shape" "yes" "$(printf '%s' "$ECODE" | grep -q cleanupFlagged && echo yes || echo no)"
+chk "a masked failure is still flagged"      "yes" "$(printf '%s' "$ECODE" | grep -q maskedFailureFlagged && echo yes || echo no)"
+chk "and a simple command stays quiet"       "yes" "$(printf '%s' "$ECODE" | grep -q simpleQuiet && echo yes || echo no)"
+
+# ---- an offset is a counter, not a size -------------------------------------
+#
+# After one trim: log_offset 58271025 against an 8.4 MiB file. A reviewer read
+# that as contradicting the 32 MiB limit, said so, then resolved it by doing
+# arithmetic in their ordinary shell — which an agent without one cannot do.
+chk "the doc says offsets are cumulative"    "yes" \
+    "$(grep -q 'CUMULATIVE COUNTERS' "$SK" && echo yes || echo no)"
+chk "and that they exceed the file size"     "yes" \
+    "$(grep -q 'exceed the transcript' "$SK" && echo yes || echo no)"
+
 # ---- a dead creator owns nothing --------------------------------------------
 #
 # `parallel_work` told a reviewer on every `start`: "No session of YOURS is free.
