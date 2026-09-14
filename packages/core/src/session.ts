@@ -368,7 +368,16 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   // every session that reuses the name — the marker outliving the thing it
   // describes. Found by the suite: a second run of the same test never saw the
   // caveat it was asserting.
-  await fs.rm(path.join(RC_DIR, `${name}.caveat`), { force: true }).catch(() => undefined);
+  //
+  // The DECAY COUNTER is the same hazard one file over, and adding it without
+  // adding it here reproduced the bug this comment already describes: the suite
+  // reported "the first compound command is explained — actual: quiet", because
+  // the count from a previous session of the same name had already run past the
+  // prose limit. Cleared as a set, so the next notice of this shape cannot be
+  // forgotten in the same way.
+  for (const flag of [`${name}.caveat`, `${name}.caveat.n`, `${name}.warn`, `${name}.warn.n`]) {
+    await fs.rm(path.join(RC_DIR, flag), { force: true }).catch(() => undefined);
+  }
 
   const fallbackShell = nonPosixShellFallback();
   await tmux([

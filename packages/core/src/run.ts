@@ -126,6 +126,15 @@ export function logNearTrim(size: number): number | undefined {
   return size > LOG_MAX_BYTES * TRIM_WARN_FRACTION ? size : undefined;
 }
 
+/**
+ * Past this, "read them with since=N" stops being good advice.
+ *
+ * A megabyte is already more than a caller wants returned in one result, and
+ * the reviewer offered 22 MB this way pointed out that the offer contradicts
+ * the documented route. Below it, the offset is cheap and correct.
+ */
+const LARGE_OMISSION_BYTES = 1024 * 1024;
+
 /** Below this, eliding costs the reader more than the bytes would. */
 const CAP_MIN_OMISSION = 4096;
 
@@ -675,8 +684,27 @@ async function readLogCapped(
         : `since=${logicalResume} ${prospect.resume}. `) +
       `Redirect this job's output to a file on the host instead; the transcript is not ` +
       `durable storage for it.]`
-    : `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
-      `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
+    : bytes >= LARGE_OMISSION_BYTES
+      ? // A recovery offer scaled to what recovering would COST.
+        //
+        // This said "read them with since=N" whatever the volume, and a
+        // reviewer got it for a 22 MB gap — an invitation to pull 22 MB into
+        // context, from the same product whose documentation says the
+        // transcript is not durable storage and to write the job's output to a
+        // file. Their words: "the default suggested action points the wrong
+        // way."
+        //
+        // Not a contradiction in fact — the offer does carry its caveat — but
+        // the action a reader takes FIRST should be the one that still works at
+        // this size. Below the threshold the offset is genuinely the cheap
+        // answer and still leads.
+        `[ath: ${bytes} bytes omitted here — that is ${Math.round(bytes / 1048576)} MiB, too ` +
+        `much to read back through this transcript, which is not durable storage for it. ` +
+        `Redirect this job's output to a file on the host and read the file. The bytes ARE on ` +
+        `disk as of this call if you need a slice of them (since=${logicalResume}), but a later ` +
+        `trim can discard them and pulling them all back is rarely what you want.]`
+      : `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
+        `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
   return {
     raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
     // `atRisk` travels WITH the numbers, because the caller that renders them
@@ -751,7 +779,12 @@ function capRunOutput(
       `${midProspect.clause}, so re-reading it ${midProspect.resume}. Redirect this job's ` +
       `output to a file on the host; the transcript is not durable storage for it.]`
     : `[ath: ${omittedBytes} bytes omitted from the MIDDLE of this command's output — ` +
-      `run returns at most ${Math.floor(maxBytes / 1024)} KiB. The command's full region is in ` +
+      // Bytes below a kibibyte: `Math.floor(400/1024)` is 0, and "returns at
+      // most 0 KiB" is both false and useless beside a result that plainly
+      // contains output. Found while testing the size-aware marker with an
+      // explicit small cap.
+      `run returns at most ${maxBytes < 1024 ? `${maxBytes} bytes` : `${Math.floor(maxBytes / 1024)} KiB`}. ` +
+      `The command's full region is in ` +
       `the session log: ath read ${session} --since=${resumeFrom} returns all of it, not just ` +
       `this gap. A later trim can discard it. For output this size, redirect it to a file on ` +
       `the host instead of reading it back through the transcript.]`;
@@ -1845,7 +1878,7 @@ async function runLocked(
     networkBlindSpot(command, session.remote);
   const blindSpotWarning = rawBlindSpot
     ? (await firstCaveatFor(clean, 'warn'))
-      ? rawBlindSpot
+      ? blindSpotNextStep(rawBlindSpot, 'run')
       : shortWarning(rawBlindSpot)
     : undefined;
 
@@ -1860,6 +1893,15 @@ async function runLocked(
     (await get(clean).catch(() => undefined))?.paneWidth,
     true,
   ).catch(() => undefined);
+
+  // Counted ONCE, here, not inside the result literal: a spread that awaited it
+  // would increment on every evaluation and decay the prose in the wrong place.
+  // Only counted for commands the caveat actually applies to, so a session full
+  // of simple commands does not burn through the budget before it ever sees one.
+  const caveatSeen =
+    compoundExitCaveat(command) && (hasPipeline(command) || exitCode === 0)
+      ? await caveatCountFor(clean)
+      : 0;
 
   return {
     session: clean,
@@ -1907,7 +1949,7 @@ async function runLocked(
     (hasPipeline(command) || exitCode === 0)
       ? {
           exitCodeCovers: compoundExitCaveat(command),
-          ...((await firstCaveatFor(clean))
+          ...(caveatSeen === 1
             ? {
                 exitCodeCaveat:
                   'The exit code above is the status of only the last part of this line — an ' +
@@ -1933,7 +1975,8 @@ async function runLocked(
                       'stage rather than only the last. ') +
                   '(Shown once per session; the short marker stays on every affected command.)',
               }
-            : {
+            : caveatSeen <= CAVEAT_PROSE_LIMIT
+            ? {
                 // After the full paragraph has been given once, this carried a
                 // BARE TOKEN — `exit_code_covers: "last-pipeline-stage-only"` —
                 // and nothing else.
@@ -1953,7 +1996,14 @@ async function runLocked(
                   compoundExitCaveat(command) === 'last-pipeline-stage-only'
                     ? 'Exit code is the LAST PIPELINE STAGE only — read the output, not the number.'
                     : 'Exit code is the LAST PART of this line only — read the output, not the number.',
-              }),
+              }
+            // Past the limit: the token alone. A third reviewer read the line
+            // on every command and said "by the eighth repetition I was
+            // skimming it" — which is the failure the doc itself warns about
+            // for over-broad warnings. The classification stays on every
+            // affected command, so nothing becomes undetectable; only the prose
+            // stops repeating.
+            : {}),
         }
       : {}),
     timedOut: false,
@@ -2458,11 +2508,16 @@ export async function start(name: string, command: string): Promise<StartResult>
     // so the one command shape most likely to be backgrounded — a long
     // filesystem walk with stderr thrown away — was also the one nothing
     // checked.
-    const startWarning =
+    const rawStartWarning =
       credentialBlindSpot(command) ??
       traversalBlindSpot(command) ??
       localPathBlindSpot(command, session.remote) ??
       networkBlindSpot(command, session.remote);
+    // `start` is the long-job tool, so this is the path where "you should have
+    // written it differently" is least useful and a decision is most urgent.
+    const startWarning = rawStartWarning
+      ? blindSpotNextStep(rawStartWarning, 'start')
+      : undefined;
 
     // Confirm the frame actually opened, because `start` could not fail.
     //
@@ -3150,6 +3205,39 @@ export function compoundExitCaveat(command: string): string | undefined {
  * always present and costs three words, and the explanation is shown once. The
  * hazard is never silent, and the paragraph never repeats.
  */
+/**
+ * How many times this session has been shown a given caveat, counting this one.
+ *
+ * The comment above `firstCaveatFor` records two agents complaining in opposite
+ * directions — one that the paragraph rode every result, one that showing it
+ * once left the hazard silent afterwards — and the resolution was "marker
+ * always, paragraph once". A third agent has now found the seam between them:
+ * the one-line marker rides nearly every command, because exploration is full
+ * of `;`, and "by the eighth repetition I was skimming it".
+ *
+ * Skimming is the failure the doc itself warns about for over-broad warnings,
+ * so neither "always prose" nor "never prose" is right either. It DECAYS:
+ * paragraph, then a line, then the bare token. The fact stays on every affected
+ * command and stays machine-readable; only the prose stops. Deliberate
+ * information loss, traded for being read at all.
+ */
+async function caveatCountFor(session: string, kind = 'caveat'): Promise<number> {
+  const flag = path.join(RC_DIR, `${session}.${kind}.n`);
+  let n = 0;
+  try {
+    n = Number(await fs.readFile(flag, 'utf8')) || 0;
+  } catch {
+    /* first time */
+  }
+  n += 1;
+  await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
+  await fs.writeFile(flag, String(n), { mode: 0o600 }).catch(() => undefined);
+  return n;
+}
+
+/** Past this many, the caveat is the token alone. */
+const CAVEAT_PROSE_LIMIT = 3;
+
 async function firstCaveatFor(session: string, kind = 'caveat'): Promise<boolean> {
   const flag = path.join(RC_DIR, `${session}.${kind}`);
   try {
@@ -3430,6 +3518,42 @@ function shortWarning(full: string): string {
     return 'this command hides a credential prompt — see the full note earlier this session.';
   }
   return `${full.slice(0, 90).trimEnd()}… (explained in full earlier this session)`;
+}
+
+/**
+ * Where in a command's life this warning arrived, and what to do from HERE.
+ *
+ * The stderr-discard warning is the single most valuable thing this tool does —
+ * a reviewer said so, and it saved them from reporting 294,343 files as a
+ * complete inventory when 65 directories had been refused. But it tells you how
+ * you SHOULD HAVE written the command and stops:
+ *
+ *   "nothing about what to do now that the command is already running. There is
+ *    no indication of whether it is a pre-launch or post-launch warning."
+ *
+ * For their 115-second job that cost nothing. For a two-hour job it burns the
+ * run — and `start` is exactly the tool you reach for with a two-hour job, so
+ * the case where the advice is useless is the case it was built for.
+ *
+ * The two lifecycles need different answers, and neither is "rewrite it":
+ *   run   — it has already finished; the only move left is to cross-check.
+ *   start — it is STILL RUNNING, and killing it now is cheap while discovering
+ *           the hole in two hours is not.
+ */
+function blindSpotNextStep(warning: string, phase: 'run' | 'start'): string {
+  // Only the traversal warning has a "too late" problem: the others describe a
+  // command that either already failed or targets the wrong machine, and their
+  // fix is to re-issue, which is the same before and after.
+  if (!/discards stderr/.test(warning)) return warning;
+  return phase === 'run'
+    ? `${warning} This command has ALREADY FINISHED, so the fix is not to rewrite it but to ` +
+        `check it: re-run the walk with stderr to a file and compare the counts, or verify the ` +
+        `total against an independent source before you report it.`
+    : `${warning} This command is ALREADY RUNNING and its stderr is being discarded as it goes. ` +
+        `Decide now rather than at the end: kill it and re-issue with \`2>err.log\` if it is ` +
+        `long — killing it in the first minute is cheap and finding the hole after two hours is ` +
+        `not — or let it run and plan to cross-check the total, knowing the errors it hit are ` +
+        `already unrecoverable.`;
 }
 
 function traversalBlindSpot(command: string): string | undefined {

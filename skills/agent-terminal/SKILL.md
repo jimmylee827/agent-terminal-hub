@@ -556,6 +556,36 @@ ordinary shell tool rather than through a session. When the question is about a
 remote machine, the reliable answer is to run the probe **in a session on that
 machine**, where "can I reach it" and "is it filtered" stop being confusable.
 
+**A resized pane STAYS resized after the human detaches.** `window-size latest`
+means the size follows the most recently attached client, and when that client
+leaves there is nothing to revert to — the pane keeps the width it was given.
+Verified: created at 200, resized to 156, still 156 with nothing attached. So a
+narrowing that happened while someone answered a prompt is permanent for the
+rest of the session unless you set it back with `ath width <name> <cols>`.
+
+**Killing one remote session does not disturb the others on that host.** They
+share one ssh connection, but it is held open by `ControlPersist=8h`: the master
+outlives the sessions using it, so a `kill` closes that session's client and
+leaves the rest untouched. This is the opposite of a dropped LINK, which takes
+every session on the host together — a deliberate kill is safe, a dead network
+is not.
+
+**`claim/` and `election/` coordinate editor windows, not sessions.** When
+several editor windows are open on the same machine, one is elected to own
+request notifications so a single credential prompt raises one ping rather than
+one per window; `claim/` records which window owns a given request. Nothing an
+agent does depends on them, and neither holds command text.
+
+**One command per session at a time, which pulls against the advice not to
+batch.** Both are real: a session runs one command, and chaining with `;` makes
+the exit code meaningless. The resolution is not to pick a side — it is that
+these have different costs. Another SESSION is cheap and is what the layout rule
+already tells you to create; a long `;` chain is cheap too, as long as you read
+the OUTPUT rather than the exit code, which the caveat on those results says
+outright. Reach for a chain when the parts are quick and you want them all to
+run regardless; reach for another session when you need the exit code to mean
+something, or when one part is slow enough to block the rest.
+
 **`owner` says who CREATED the session, not who is using it.** It is set once,
 at creation, and never changes — so an agent-created session reads `agent`
 forever, including while a human is attached to it and typing in it. A reviewer

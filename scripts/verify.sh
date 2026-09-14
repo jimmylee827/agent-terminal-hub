@@ -857,7 +857,11 @@ out.push(/it has not happened yet/.test(past.clause)?"notYet":"NONOTYET");
 out.push(/and is trimmed past/.test(past.clause+near.clause)?"PRESENTTENSE":"noPresentTense");
 process.stdout.write(out.join(" "));
 ' 2>/dev/null)"
-chk "both caps warn about an imminent trim" "2" \
+# Three sites now: the two caps, plus the large-omission branch that leads with
+# the file route. Counting a phrase was always a proxy for "both caps warn"; the
+# TRIMA probe below asserts the actual behaviour, so this one just holds the
+# line that every site still points at the durable route.
+chk "every omission site names the file route" "3" \
     "$(grep -c 'durable storage for it' "$RP/packages/core/src/run.ts")"
 chk "RunResult declares omittedBytes" "yes" \
     "$(grep -q 'omittedBytes?: number;' "$RP/packages/core/src/types.ts" && echo yes || echo no)"
@@ -1379,6 +1383,71 @@ chk "the CLI shows the caveat at all"        "yes" \
     "$(grep -q 'result.exitCodeCaveat' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# ---- the caveat must decay, or it gets skimmed ------------------------------
+#
+# Two agents once complained in opposite directions — "I stopped reading it" and
+# "it fired once and went quiet" — and the resolution was marker always,
+# paragraph once. A third found the seam: the one-LINE marker rode nearly every
+# command, because exploration is full of `;`, and "by the eighth repetition I
+# was skimming it". Measured on seven realistic exploration commands, four carry
+# it. Skimming is the failure the doc itself warns about for over-broad
+# warnings, so the prose decays to the bare token — the classification stays on
+# every affected command, only the words stop.
+#
+# The negatives are half the test: a simple command must carry nothing, and must
+# not spend the decay budget.
+DECAY="$(node "$RP/scripts/decaycheck.js" 2>/dev/null)"
+chk "a simple command carries nothing"       "yes" "$(printf '%s' "$DECAY" | grep -q simpleCarriesNothing && echo yes || echo no)"
+# The decay counter is keyed by session NAME in rc/, which is exactly the hazard
+# `create()` already guards for the boolean flag beside it — and adding the
+# counter without adding it there reproduced that bug immediately: the suite
+# reported "the first compound command is explained — actual: quiet", because a
+# previous session of the same name had already spent the budget.
+chk "a recreated session starts over"        "yes" \
+    "$(grep -q 'name}.caveat.n' "$RP/packages/core/src/session.ts" && echo yes || echo no)"
+chk "the first affected one is the full text" "yes" "$(printf '%s' "$DECAY" | grep -q firstIsFull && echo yes || echo no)"
+chk "the next two are one line"              "yes" "$(printf '%s' "$DECAY" | grep -q thenTwoLines && echo yes || echo no)"
+chk "and after that the token alone"         "yes" "$(printf '%s' "$DECAY" | grep -q thenTokenOnly && echo yes || echo no)"
+
+# ---- a warning must say WHERE IN THE COMMAND'"'"'S LIFE it arrived ------------------
+#
+# The stderr-discard warning is the most valuable thing this tool does — it
+# stopped a reviewer reporting 294,343 files as complete when 65 directories had
+# been refused — and it told them how they SHOULD HAVE written the command and
+# stopped. "There is no indication of whether it is a pre-launch or post-launch
+# warning." For a 115-second job that costs nothing; for a two-hour job it burns
+# the run, and `start` is the tool you reach for with a two-hour job.
+chk "run says the command has finished"      "yes" "$(printf '%s' "$DECAY" | grep -q runSaysFinished && echo yes || echo no)"
+chk "and does not claim it is running"       "yes" "$(printf '%s' "$DECAY" | grep -q runNotConfused && echo yes || echo no)"
+chk "start says it is still running"         "yes" "$(printf '%s' "$DECAY" | grep -q startSaysRunning && echo yes || echo no)"
+chk "and offers the kill-now option"         "yes" "$(printf '%s' "$DECAY" | grep -q startOffersKill && echo yes || echo no)"
+
+# ---- a recovery offer scaled to what recovery costs -------------------------
+#
+# The marker offered "read them with since=N" whatever the volume, and a
+# reviewer got it for a 22 MB gap — an invitation to pull 22 MB into context
+# from the same product whose docs say the transcript is not durable storage.
+# "The default suggested action points the wrong way."
+chk "a large omission leads with the file"   "yes" \
+    "$(grep -q 'too much to read back through this transcript\|too ' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "a small one still offers the offset"    "yes" \
+    "$(grep -q 'on disk as of this call, read them with' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "the threshold is named, not inline"     "yes" \
+    "$(grep -q 'const LARGE_OMISSION_BYTES' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+# Found while testing the above: a 400-byte cap rendered as "at most 0 KiB".
+chk "a sub-KiB cap is shown in bytes"        "yes" \
+    "$(grep -q 'maxBytes < 1024' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+
+# ---- four questions a reviewer could not answer from the doc ----------------
+chk "the doc says width survives a detach"   "yes" \
+    "$(grep -q 'STAYS resized after the human detaches' "$SK" && echo yes || echo no)"
+chk "and that kill spares the other sessions" "yes" \
+    "$(grep -q 'does not disturb the others on that host' "$SK" && echo yes || echo no)"
+chk "and what claim/ and election/ are for"  "yes" \
+    "$(grep -q 'coordinate editor windows, not sessions' "$SK" && echo yes || echo no)"
+chk "and names the batching tension"         "yes" \
+    "$(grep -q 'pulls against the advice not to' "$SK" && echo yes || echo no)"
 
 # ---- a constant is stated once, not once per session ------------------------
 #
