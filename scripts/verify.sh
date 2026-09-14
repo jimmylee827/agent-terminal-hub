@@ -1092,8 +1092,10 @@ chk "parallel_work checks provenance"     "yes" \
 # agent's sessions as mine — the two chains intersected only at the editor host
 # — so the filter written to stop offering other people's sessions would have
 # gone on offering them. Only visible with two agents running at once.
+# The drop-two rule moved into `identifying()` when liveness needed the same
+# levels; the property is unchanged and is now applied in both places.
 chk "and ignores the shared root ancestors" "yes" \
-    "$(grep -q 'chain.length - 2' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+    "$(grep -q 'pids.length - 2' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 PROV="$(node -e "
 const c=[29623,29621,54680,54436,67739];
 const mine=new Set(c.slice(0,c.length-2));
@@ -1105,8 +1107,11 @@ process.stdout.write(r(theirs)+' '+r(ours));
 chk "two unrelated chains do not match" "THEIRS" "$(printf '%s' "$PROV" | awk '{print $1}')"
 chk "a related chain still matches"     "MINE"   "$(printf '%s' "$PROV" | awk '{print $2}')"
 
+# Re-anchored: "belong to someone else" was the wording that told a reviewer to
+# abandon sessions they were using. The property being tested is that a session
+# held by a RUNNING agent is still withheld and still explained.
 chk "and says so when only others are free" "yes" \
-    "$(grep -q 'belong to someone else' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+    "$(grep -q 'that agent is still running' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 
 # ---- a pane that never reached the requested width must say so ---------------
 #
@@ -1383,6 +1388,42 @@ chk "the CLI shows the caveat at all"        "yes" \
     "$(grep -q 'result.exitCodeCaveat' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# ---- a dead creator owns nothing --------------------------------------------
+#
+# `parallel_work` told a reviewer on every `start`: "No session of YOURS is free.
+# spare, work are idle but belong to someone else — do not run your work there."
+# `list` reported `owner: agent` for those same sessions in the same breath, and
+# they had been running commands in both all session. "The one field that
+# actively told me to do the wrong thing."
+#
+# The original bias assumed a false "not yours" costs a suggestion. It does not:
+# obeying it creates another session, splits the sudo timestamp across a new
+# TTY, and charges the human a SECOND PASSWORD — the failure the layout rule
+# exists to prevent. The concurrent-agent protection stays; the abandoned case
+# is now offered and labelled.
+OWNER="$(node "$RP/scripts/ownercheck.js" 2>/dev/null)"
+chk "an exited creator reads as gone"        "yes" "$(printf '%s' "$OWNER" | grep -q deadCreatorSeenGone && echo yes || echo no)"
+chk "a running one still reads as alive"     "yes" "$(printf '%s' "$OWNER" | grep -q liveCreatorSeenAlive && echo yes || echo no)"
+chk "an abandoned session is offered"        "yes" "$(printf '%s' "$OWNER" | grep -q orphanClassifiedFree && echo yes || echo no)"
+chk "parallel_work separates the two cases"  "yes" \
+    "$(grep -q 'left behind by an exited one' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "and says a withheld one is still owned" "yes" \
+    "$(grep -q 'that agent is still running' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# Adopting a stranger's shell means adopting its cwd and exports.
+chk "and warns about inherited context"      "yes" \
+    "$(grep -q 'before trusting the context' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# ---- name the stage, not the whole pipeline ---------------------------------
+#
+# The stderr warning said "its stderr is being discarded" of a command whose
+# checksum stage redirected to a file and whose FIND stage did not. Right about
+# the real hole, wrong about the scope — and I had attached "kill it and
+# re-issue" to it the round before, so the escalation rode an overstatement.
+chk "the warning names the walking stage"    "2" \
+    "$(grep -c 'WALKING STAGE' "$RP/packages/core/src/run.ts" | tr -d ' ')"
+chk "and says a later stage does not cover it" "2" \
+    "$(grep -c 'does not cover the walk' "$RP/packages/core/src/run.ts" | tr -d ' ')"
 
 # ---- the caveat must decay, or it gets skimmed ------------------------------
 #

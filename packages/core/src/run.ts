@@ -3546,10 +3546,23 @@ function blindSpotNextStep(warning: string, phase: 'run' | 'start'): string {
   // fix is to re-issue, which is the same before and after.
   if (!/discards stderr/.test(warning)) return warning;
   return phase === 'run'
-    ? `${warning} This command has ALREADY FINISHED, so the fix is not to rewrite it but to ` +
-        `check it: re-run the walk with stderr to a file and compare the counts, or verify the ` +
+    ? `${warning} It is the WALKING STAGE that discards stderr — a later stage in the same ` +
+        `pipeline redirecting its own does not cover the walk. This command has ALREADY ` +
+        `FINISHED, so the fix is not to rewrite it but to check it: re-run the walk with ` +
+        `stderr to a file and compare the counts, or verify the ` +
         `total against an independent source before you report it.`
-    : `${warning} This command is ALREADY RUNNING and its stderr is being discarded as it goes. ` +
+      // Name the STAGE, because the pipeline may already handle its own.
+      //
+      // This said "its stderr is being discarded", of the whole command. A
+      // reviewer had written `find ... 2>/dev/null | xargs shasum 2>inv.err` —
+      // the walk discarded, the checksum stage did not — and called the reading
+      // partly inaccurate, fairly: "'kill it and re-issue' is heavy advice to
+      // attach to a partly-inaccurate reading." The detection was right about
+      // the real hole and they fixed it; the sentence claimed more than the
+      // detector knows. I added the kill-advice the round before, so the
+      // escalation is mine and so is the imprecision it landed on.
+    : `${warning} This command is ALREADY RUNNING and it is the WALKING STAGE whose stderr is ` +
+        `being discarded — a later stage redirecting its own does not cover the walk. ` +
         `Decide now rather than at the end: kill it and re-issue with \`2>err.log\` if it is ` +
         `long — killing it in the first minute is cheap and finding the hole after two hours is ` +
         `not — or let it run and plan to cross-check the total, knowing the errors it hit are ` +

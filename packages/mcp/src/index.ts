@@ -6,6 +6,7 @@ import {
   augmentRequestReason,
   assertRemoteConnected,
   ancestorPids,
+  pidAlive,
   attachedClientsNote,
   AthError,
   commandOutcome,
@@ -1697,29 +1698,77 @@ async function parallelHint(current: string): Promise<string> {
     // discards the shared root. The bias is deliberate: a false "not yours"
     // costs a suggestion, a false "yours" steers an agent into someone else's
     // work, so when the evidence is thin this must answer no.
+    //
+    // A DEAD creator owns nothing, and refusing its sessions is the expensive
+    // mistake — not the cheap one this comment assumed.
+    //
+    // The bias above was set on the belief that "a false 'not yours' costs a
+    // suggestion". It does not. A reviewer opened a session and found three
+    // sessions already there from a PREVIOUS run of the same audit, adopted
+    // them as the docs say to, used them all session — and was told on every
+    // `start`: "No session of YOURS is free. spare, work are idle but belong to
+    // someone else — do not run your work there. Create your own with `new`."
+    // `list` said `owner: agent` for the same sessions in the same breath.
+    //
+    // Obeying it would have created a fourth session, split the sudo timestamp
+    // across a new TTY, and cost the human a SECOND PASSWORD — which is exactly
+    // the failure the session-layout rule exists to prevent. Their verdict:
+    // "the one field that actively told me to do the wrong thing."
+    //
+    // The concurrent-agent protection stays, because that case is real and was
+    // found the hard way. What changes is the abandoned case: if none of the
+    // levels that identify a session's creator is still running, that creator
+    // is gone, the session belongs to nobody, and it is offered — labelled, so
+    // an agent knows it is adopting something rather than resuming its own.
     const chain = ancestorPids();
-    const mine = new Set(chain.slice(0, Math.max(1, chain.length - 2)));
+    const identifying = (pids: number[]): number[] =>
+      pids.slice(0, Math.max(1, pids.length - 2));
+    const mine = new Set(identifying(chain));
     const isOurs = (s: { creatorPids?: number[] }): boolean =>
       (s.creatorPids ?? []).some((pid) => mine.has(pid));
+    // Only the identifying levels: the outermost ancestors are the shared
+    // editor host, which is alive for everyone and would make every session
+    // look owned.
+    const creatorGone = (s: { creatorPids?: number[] }): boolean =>
+      !identifying(s.creatorPids ?? []).some(pidAlive);
     const ours = freeSessions.filter(isOurs).map((s) => s.name);
-    const theirs = freeSessions.filter((s) => !isOurs(s)).map((s) => s.name);
-    if (ours.length === 0 && theirs.length === 0) {
+    const orphaned = freeSessions.filter((s) => !isOurs(s) && creatorGone(s)).map((s) => s.name);
+    const theirs = freeSessions
+      .filter((s) => !isOurs(s) && !creatorGone(s))
+      .map((s) => s.name);
+    if (ours.length === 0 && orphaned.length === 0 && theirs.length === 0) {
       return `No other session is free. To run something ALONGSIDE this, create one first (\`new\`) — reusing "${current}" will be refused until this finishes.`;
+    }
+    // An abandoned session is usable, and saying so is the whole fix: creating
+    // a new one instead is what costs the extra credential prompt.
+    if (ours.length === 0 && orphaned.length > 0) {
+      return (
+        `Idle and available for work alongside this: ${orphaned.slice(0, 4).join(', ')}. ` +
+        `These were created by an agent run that has since exited, so they belong to nobody ` +
+        `now — reuse them rather than creating more, which is also what keeps a sudo ` +
+        `timestamp on one TTY. They may carry a working directory and exported variables ` +
+        `from that earlier run: check with \`pwd\` and \`env\` before trusting the context.` +
+        (theirs.length > 0
+          ? ` (${theirs.length} other idle session(s) belong to a RUNNING agent and are not offered.)`
+          : '')
+      );
     }
     if (ours.length === 0) {
       return (
         `No session of YOURS is free. ${theirs.slice(0, 3).join(', ')} ` +
         `${theirs.length === 1 ? 'is' : 'are'} idle but ` +
         `${theirs.length === 1 ? 'belongs' : 'belong'} to someone else — ` +
-        `do not run your work there. Create your own with \`new\`.`
+        `do not run your work there — that agent is still running. Create your own with \`new\`.`
       );
     }
     return (
       `Idle as of this call, for work alongside this: ${ours.slice(0, 4).join(', ')}` +
       `${ours.length > 4 ? `, +${ours.length - 4} more` : ''}. ` +
       `A session can park on a prompt between now and your next call; that is refused, not typed into.` +
-      (theirs.length > 0
-        ? ` (${theirs.length} other idle session(s) belong to someone else and are not offered.)`
+      (theirs.length + orphaned.length > 0
+        ? ` (${theirs.length + orphaned.length} other idle session(s) are not offered: ` +
+          `${theirs.length} belong to a running agent` +
+          `${orphaned.length ? `, ${orphaned.length} left behind by an exited one` : ''}.)`
         : '')
     );
   } catch {
