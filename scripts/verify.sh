@@ -370,8 +370,14 @@ chk "and names your own writes first"               "yes" \
 # Wording changed when the HUB-only scoping moved above the headline; the
 # invariant is unchanged — doctor must still state the hub's remote footprint is
 # empty.
-chk "doctor says the hub writes nothing remotely" "yes" \
-    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'The hub writes nothing' && echo yes || echo no)"
+# This asserted "The hub writes nothing" — the sentence a reviewer disproved by
+# finding ~/.zsh_history modified on the far host. A test can hold a falsehood in
+# place as firmly as it holds a truth; this one did, for months. It now asserts
+# what is actually true: no hub files, AND the shell history disclosed.
+chk "doctor says the hub writes no files of its own" "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'writes no files of its own' && echo yes || echo no)"
+chk "and discloses the remote shell history"  "yes" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'your shell writes its own' && echo yes || echo no)"
 
 # log/ must not advertise a per-file bound as though it bounded the directory.
 chk "log/ says the directory has no ceiling" "yes" \
@@ -1389,6 +1395,42 @@ chk "the CLI shows the caveat at all"        "yes" \
     "$(grep -q 'result.exitCodeCaveat' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# ---- a claim of ABSENCE must be exhaustive ----------------------------------
+#
+# `doctor` said of a remote host: "The hub writes nothing. No files, no
+# directories, no rc-file edits." A reviewer checked it the way that paragraph
+# invites — `find ~ -maxdepth 1 -newermt` on the far host — and found
+# ~/.zsh_history modified. Reproduced here: a remote session's command appears
+# in that file by name, and the mtime moves.
+#
+# The hub does not write it; the LOGIN SHELL the hub opens does. That is a real
+# distinction and also exactly the hair-splitting this section exists to refuse.
+# A claim of absence is worth nothing unless it is exhaustive, and this is the
+# claim an auditor leans on hardest.
+chk "doctor no longer claims it writes nothing" "0" \
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -c 'The hub writes nothing' | tr -d ' ')"
+chk "and discloses the shell history"         "yes" \
+    "$(grep -q 'your shell writes its own' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "naming how to verify it"                 "yes" \
+    "$(grep -q 'newermt' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and the doc says the same"               "yes" \
+    "$(grep -q 'true of the hub and not of the visit' "$SK" && echo yes || echo no)"
+
+# ---- a remedy must answer the question that was ASKED -----------------------
+#
+# The LAN warning is right about the hazard and used to end: "run the command IN
+# a --remote session on it". That answers "what is this BOUND to", not "is this
+# REACHABLE from outside" — different questions, and the reviewer had been asked
+# the second. They built the two-sided test themselves and noted nothing told
+# them to. Their verdict: "confidently wrong about the remedy rather than
+# silent, which is worse."
+chk "the LAN remedy separates the questions"  "yes" \
+    "$(grep -q 'WHICH QUESTION ARE YOU ASKING' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "naming the on-host tool for binding"     "yes" \
+    "$(grep -q 'sTCP:LISTEN' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
+chk "and saying reachability needs a router"  "yes" \
+    "$(grep -q 'cannot be answered there at all' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
 
 # ---- a compound line is flagged whatever its exit code ----------------------
 #

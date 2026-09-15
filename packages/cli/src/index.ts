@@ -1288,13 +1288,32 @@ async function main(): Promise<number> {
         // obtainable from any surface. Absence is worth printing: unverifiable
         // absence is indistinguishable from something overlooked, and an
         // auditor who cannot show a host is clean has to assume it is not.
+        // "The hub writes nothing. No files, no directories" was FALSE, and a
+        // reviewer disproved it the way this paragraph invites: they ran
+        // `find ~ -maxdepth 1 -newermt` on the far host and found
+        // `~/.zsh_history` modified. Reproduced here — a remote session's
+        // command appears in that file, by name, and the file's mtime moves.
+        //
+        // The hub does not write it; the LOGIN SHELL the hub opens does. That
+        // distinction is real and it is also exactly the hair-splitting this
+        // section exists to refuse: the hub is what opened that shell, the file
+        // is on someone else's machine, it holds command text, and it outlives
+        // the session. Their verdict was generous — "a small honesty gap in an
+        // otherwise unusually candid disclosure" — but a claim of absence is
+        // worth nothing if it is not exhaustive, and this one is the claim an
+        // auditor leans on hardest.
         for (const line of [
-          'The hub writes nothing. No files, no directories, no rc-file edits.',
+          'The hub writes no files of its own: no directories, no rc-file edits.',
           'The shell helper is TYPED into the pane — functions in memory only,',
           'gone when the shell exits. tmux, the transcript and every file above',
           'live on THIS machine; ssh carries only the connection.',
-          'Two traces are inherent to ssh and are not the hub: your login in the',
-          "host's auth log, and whatever the commands you ran did themselves.",
+          'BUT the shell it opens is a LOGIN shell, and your shell writes its own',
+          'history: commands run in a remote session land in ~/.zsh_history (or',
+          "your shell's equivalent) on THAT host, and outlive the session. Not",
+          'the hub writing, but the hub is what opened the shell — verify with',
+          '"find ~ -maxdepth 1 -newermt <when you started>".',
+          'Two further traces are ssh, not the hub: your login in the auth log,',
+          'and whatever the commands you ran did themselves.',
         ]) {
           console.log(`  ${c.dim(line)}`);
         }

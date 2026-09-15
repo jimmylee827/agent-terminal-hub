@@ -3495,10 +3495,31 @@ function networkBlindSpot(command: string, remote?: string): string | undefined 
       `subnets are ${[...new Set(here)].join(', ')}. This session is LOCAL, so the command ` +
       `runs here, and an unreachable LAN answers every probe the same way an armoured host ` +
       `does: closed, filtered, no route. A "nothing is open" result from this would be ` +
-      `INDISTINGUISHABLE from a firewall, and reporting it as one inverts the truth. If you ` +
-      `mean to ask about a machine over there, run the command IN a --remote session on it, ` +
-      `or use an address this host can actually reach (a VPN or tunnel address). If you ` +
-      `already reach ${t} by a route or VPN not visible as an interface, ignore this.`
+      `INDISTINGUISHABLE from a firewall, and reporting it as one inverts the truth. ` +
+      // THE REMEDY USED TO ANSWER A DIFFERENT QUESTION THAN THE ONE ASKED.
+      //
+      // It said: "run the command IN a --remote session on it". A reviewer
+      // followed the reasoning and found the hole: an on-host probe answers
+      // "what is this BOUND to", not "is this REACHABLE from outside", and
+      // those are different questions. The task they had been given asked the
+      // second. They built a two-sided test themselves — an on-host probe to
+      // separate wildcard from loopback binding, plus an off-host probe from a
+      // machine that could actually route there — and noted that nothing told
+      // them to.
+      //
+      // Their judgement is the one that matters here: the message was
+      // "confidently wrong about the remedy rather than silent, which is
+      // worse". A warning that is right about the hazard and wrong about the
+      // fix spends the credibility it just earned.
+      `WHICH QUESTION ARE YOU ASKING? "Is this port BOUND, and to what?" is ` +
+      `answered ON the host — a --remote session there, with \`ss -tlnp\` or ` +
+      `\`lsof -iTCP -sTCP:LISTEN\`, which also distinguishes 0.0.0.0 from 127.0.0.1. ` +
+      `"Is it REACHABLE from outside?" cannot be answered there at all, and not from ` +
+      `here either: it needs a probe FROM a host that can actually route to ${t} — a ` +
+      `VPN or tunnel address of the same machine is usually the one you have. Doing ` +
+      `both and comparing is what separates "bound to loopback" from "firewalled" from ` +
+      `"you cannot get there from here". If you already reach ${t} by a route or VPN not ` +
+      `visible as an interface, ignore this.`
     );
   }
   return undefined;

@@ -678,9 +678,18 @@ that no longer exist. `log/` is bounded per file, not in aggregate, so it is the
 one directory that otherwise only grows.
 
 `ath doctor --artifacts` prints the full list of ten, with sizes and what each
-one is bounded by, plus what is left on a REMOTE host (nothing — the helper is
-typed into the pane, not written to disk). Use it when the human asks what the
-hub left behind; do not guess from this table, which names only what survives.
+one is bounded by, plus what is left on a REMOTE host. Use it when the human
+asks what the hub left behind; do not guess from this table, which names only
+what survives.
+
+**On a remote host the hub writes no files of its own — but the shell it opens
+does.** The helper is typed into the pane and lives in memory, so there is no
+hub file to find. The session's shell is a LOGIN shell, though, and your shell
+writes its own history: commands you run in a remote session land in
+`~/.zsh_history` (or the equivalent) on THAT machine and outlive the session.
+A reviewer found it with `find ~ -maxdepth 1 -newermt`, which is the right way
+to check rather than take anyone's word. Say so if the human asks what is left
+there — "the hub wrote nothing" is true of the hub and not of the visit.
 
 A password prompt is the one safe case: it echoes nothing, so the password is
 in no file, and there is nothing to purge after a sudo handoff.
