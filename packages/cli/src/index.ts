@@ -44,6 +44,7 @@ import {
   buildStaleness,
   staleBuildNote,
   staleServers,
+  REMOTE_FOOTPRINT,
   thisServer,
   staleServersNote,
   staleServersReport,
@@ -600,6 +601,35 @@ async function main(): Promise<number> {
           const seen = await evidence();
           if (seen !== 'running') {
             console.log(session.state);
+            // THE FIELDS THE DOC PROMISES, which this surface never delivered.
+            //
+            // "Given the handle, `wait` also returns that command's OWN
+            // exit_code and took_seconds when it reports idle — so the usual
+            // 'did it work, and how long?' needs no follow-up poll."
+            //
+            // The MCP surface does that. The CLI printed the bare word `idle`
+            // and nothing else, in plain output AND under --json, so a reviewer
+            // who passed a handle had to run the follow-up poll the sentence
+            // told them they could skip. They guessed the fields might be
+            // --json-only; they are not, they were simply absent here.
+            //
+            // The doc did not qualify the claim by surface, so the doc was
+            // wrong about this one — and it is the divergence class: one
+            // capability, one surface, one sentence covering both.
+            if (handle) {
+              // An INCIDENTAL peek: this reads the exit code and duration, it does
+              // not report output. Consuming the consume-once width notice here
+              // would delete it — `consumers.js` caught exactly that, on this
+              // line, minutes after I wrote it.
+              const r = await poll(name, handle, 0, 1, { consumeNotices: false }).catch(
+                () => undefined,
+              );
+              if (r?.done) {
+                const bits = [`exit ${r.exitCode ?? 'unknown'}`];
+                if (r.elapsedSeconds !== undefined) bits.push(`${r.elapsedSeconds}s`);
+                console.error(c.dim(`[ath] ${bits.join(', ')} — this command, not the session's last.`));
+              }
+            }
             if (seen === 'unknown') {
               console.error(
                 c.dim(
@@ -1302,24 +1332,7 @@ async function main(): Promise<number> {
         // otherwise unusually candid disclosure" — but a claim of absence is
         // worth nothing if it is not exhaustive, and this one is the claim an
         // auditor leans on hardest.
-        for (const line of [
-          'The hub writes no files of its own: no directories, no rc-file edits.',
-          'The shell helper is TYPED into the pane — functions in memory only,',
-          'gone when the shell exits. tmux, the transcript and every file above',
-          'live on THIS machine; ssh carries only the connection.',
-          'BUT the shell it opens is a LOGIN shell, and your shell writes its own',
-          'history: commands run in a remote session land in ~/.zsh_history (or',
-          "your shell's equivalent) on THAT host, and outlive the session. Not",
-          'the hub writing, but the hub is what opened the shell.',
-          'WHEN it is written matters: zsh flushes history when the shell EXITS,',
-          'not per command. So checking mid-session shows NOTHING and is a false',
-          'negative — the commands appear only after the session is killed.',
-          'Assume they will be there; do not conclude from a live check that they',
-          'are not. (mtime is no help either: it can read modified from an',
-          'earlier flush while holding none of this session.)',
-          'Two further traces are ssh, not the hub: your login in the auth log,',
-          'and whatever the commands you ran did themselves.',
-        ]) {
+        for (const line of REMOTE_FOOTPRINT) {
           console.log(`  ${c.dim(line)}`);
         }
         return 0;

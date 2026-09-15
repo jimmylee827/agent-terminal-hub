@@ -252,6 +252,12 @@ corner. When that happens `wait` says so: the MCP result carries
 Exit **76** (MCP `still_running`) means still running. It is not a failure, and
 calling again is the right response.
 
+**`--timeout` is a DEFAULT of 300s, not a ceiling — raise it for a long job.**
+Every example here passes 60, and a reviewer concluded from that there was no
+unbounded wait and hand-rolled a retry loop around exit 76. They did not need
+to: `ath wait bulk --handle <h> --timeout 3600` blocks for as long as you ask.
+Use the loop only when you want to do something between checks.
+
 **A resize is reported to `poll` too, not just `run`.** A human attaching sets
 the pane size — usually to answer the prompt your job raised — and width-aware
 tools (`ps`, `docker ps`, `lsblk`) format themselves to it. `pane_width_changed` (its `explain` field is `true` the first time in a session, carrying the long note, and `false` after — the change is still reported, only the paragraph is dropped)
@@ -504,6 +510,7 @@ Fields worth checking on the `--json` form:
 | `asked_for_you` | On `list`: this session has an open request waiting on a human — filed for you, usually by a command that parked. Go and relay it. |
 | `collect_with` | The exact call that retrieves a finished command's result, for a handle you were not holding. |
 | `current_command` | What the session is running right now, when it is busy. |
+| `remote_footprint` | On `doctor`: what a REMOTE host is left with — no hub files of its own, but the login shell it opens writes your commands to that machine's shell history. The same text the CLI prints. |
 | `stale_build` | THIS process is running code older than the build on disk. A fix you expect may not be in effect here; restart the client that launched it. See also `this_server` and `stale_servers`. |
 
 ## What the shared terminal looks like

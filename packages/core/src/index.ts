@@ -25,6 +25,7 @@ export {
   buildStaleness,
   staleBuildNote,
   staleServers,
+  REMOTE_FOOTPRINT,
   thisServer,
   staleServersNote,
   staleServersReport,

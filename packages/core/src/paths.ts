@@ -277,6 +277,43 @@ export function buildStaleness(): BuildStaleness | undefined {
   return { loadedMs: BUILD_LOADED_MS, onDiskMs };
 }
 
+/**
+ * What a REMOTE host is left with. One text, both surfaces.
+ *
+ * This paragraph is the claim an auditor leans on hardest, and it has been
+ * corrected twice for accuracy — once because "the hub writes nothing" was
+ * false (the login shell writes ~/.zsh_history), once because the verification
+ * it recommended returns a false negative mid-session.
+ *
+ * Both corrections landed on the CLI. The MCP surface — the one the skill file
+ * tells agents to PREFER — never carried this paragraph at all, so an agent
+ * asking "what did you leave on my machine?" through MCP got the artifact table
+ * and nothing about the remote host. Nobody reported it; it turned up when a
+ * reviewer noted `doctor --artifacts` was "richer on the CLI".
+ *
+ * Living in core is the fix for the shape, not just this instance: a sentence
+ * that exists once cannot be corrected on one surface and left wrong on the
+ * other. See scripts/prose.js.
+ */
+export const REMOTE_FOOTPRINT: readonly string[] = [
+  'The hub writes no files of its own: no directories, no rc-file edits.',
+  'The shell helper is TYPED into the pane — functions in memory only,',
+  'gone when the shell exits. tmux, the transcript and every file above',
+  'live on THIS machine; ssh carries only the connection.',
+  'BUT the shell it opens is a LOGIN shell, and your shell writes its own',
+  'history: commands run in a remote session land in ~/.zsh_history (or',
+  'your shell\'s equivalent) on THAT host, and outlive the session. Not',
+  'the hub writing, but the hub is what opened the shell.',
+  'WHEN it is written matters: zsh flushes history when the shell EXITS,',
+  'not per command. So checking mid-session shows NOTHING and is a false',
+  'negative — the commands appear only after the session is killed.',
+  'Assume they will be there; do not conclude from a live check that they',
+  'are not. (mtime is no help either: it can read modified from an',
+  'earlier flush while holding none of this session.)',
+  'Two further traces are ssh, not the hub: your login in the auth log,',
+  'and whatever the commands you ran did themselves.',
+];
+
 export interface StaleServer {
   pid: number;
   startedMs: number;

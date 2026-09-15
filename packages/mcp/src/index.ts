@@ -33,6 +33,7 @@ import {
   buildStaleness,
   staleBuildNote,
   staleServers,
+  REMOTE_FOOTPRINT,
   thisServer,
   staleServersNote,
   staleServersReport,
@@ -1614,6 +1615,16 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         ...(doctorStale ? { stale_build: staleBuildNote(doctorStale) } : {}),
         ...(doctorServers.length ? { stale_servers: await staleServersReport(doctorServers) } : {}),
         this_server: thisServer(),
+        // The remote-host disclosure, which this surface has NEVER carried.
+        //
+        // A reviewer noticed `doctor --artifacts` was "richer on the CLI" and
+        // listed the remote paragraph as one of the differences. They were
+        // right, and it is the worst field to be missing here: this is the
+        // surface the skill file tells agents to prefer, and the paragraph is
+        // what an agent reads to answer "what did you leave on my machine?".
+        // Its accuracy has been corrected twice; both corrections went to the
+        // CLI, because that was the only place it existed.
+        remote_footprint: REMOTE_FOOTPRINT.join(' '),
         root: ATH_HOME,
         artifacts: rows,
         note: '`purge` clears only the entry marked removed_by_purge, and only for one session.',

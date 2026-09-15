@@ -1454,6 +1454,34 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- one capability, one surface, one sentence covering both ----------------
+#
+# The doc said: "Given the handle, `wait` also returns that command's OWN
+# exit_code and took_seconds when it reports idle — so the usual did-it-work
+# needs no follow-up poll." MCP did that. The CLI printed the bare word `idle`,
+# in plain output and under --json, so a reviewer who passed a handle ran the
+# follow-up poll the sentence told them they could skip.
+#
+# The dominant defect class, on a documented promise.
+chk "CLI wait --handle reports the command" "yes" \
+    "$(grep -q "this command, not the session" "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and stays bare without a handle"        "yes" \
+    "$(grep -q 'if (handle) {' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# The remote-footprint paragraph — the claim an auditor leans on hardest, whose
+# accuracy was corrected TWICE — existed only on the CLI. The MCP surface, which
+# the skill file tells agents to prefer, never carried it at all. It is one
+# shared constant now, which is the prose ratchet's own remedy applied.
+chk "the remote disclosure lives in core"    "yes" \
+    "$(grep -q 'export const REMOTE_FOOTPRINT' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+chk "and both surfaces use it"               "yes yes" \
+    "$(grep -q 'REMOTE_FOOTPRINT' "$RP/packages/cli/src/index.ts" && echo yes || echo no) $(grep -q 'REMOTE_FOOTPRINT' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+
+# --timeout is a DEFAULT, not a ceiling. Every example showed 60, so a reviewer
+# concluded no unbounded wait existed and hand-rolled a retry loop.
+chk "the doc says the timeout is raisable"   "yes" \
+    "$(grep -q 'DEFAULT of 300s, not a ceiling' "$SK" && echo yes || echo no)"
+
 # ---- a verification method that returns a FALSE NEGATIVE --------------------
 #
 # The previous round fixed a disclosure gap: `doctor` had claimed the hub writes
@@ -1472,9 +1500,9 @@ chk "and the short form after it"            "yes" \
 # A fix for a wrong claim that introduces a wrong CHECK is the same defect one
 # level up, and it was mine, one round old.
 chk "the history note says when it is written" "yes" \
-    "$(grep -q 'flushes history when the shell EXITS' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'flushes history when the shell EXITS' && echo yes || echo no)"
 chk "and warns the live check is a false negative" "yes" \
-    "$(grep -q 'false' "$RP/packages/cli/src/index.ts" && grep -q 'checking mid-session shows NOTHING' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'checking mid-session shows NOTHING' && echo yes || echo no)"
 chk "the doc no longer recommends the live check" "0" \
     "$(grep -c 'which is the right way' "$SK" | tr -d ' ')"
 chk "and states the measured result"           "yes" \
@@ -1551,9 +1579,12 @@ chk "and its count grew when it could see"   "yes" \
 chk "doctor no longer claims it writes nothing" "0" \
     "$($ATH_BIN doctor --artifacts 2>&1 | grep -c 'The hub writes nothing' | tr -d ' ')"
 chk "and discloses the shell history"         "yes" \
-    "$(grep -q 'your shell writes its own' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'your shell writes its own' && echo yes || echo no)"
+# The recommended method was REMOVED in AM — it returns a false negative
+# mid-session. What must survive is that the disclosure exists, not that it
+# names a command.
 chk "naming how to verify it"                 "yes" \
-    "$(grep -q 'newermt' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'outlive the session' && echo yes || echo no)"
 # Anchored mid-phrase: the sentence wraps, and matching across the break is the
 # mistake this file has made more than any other.
 chk "and the doc says the same"               "yes" \
