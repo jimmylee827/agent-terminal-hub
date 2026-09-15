@@ -2414,7 +2414,20 @@ async function observeWidth(
 }
 
 async function recordLast(name: string, command: string, code: number | null): Promise<void> {
-  await setMeta(name, 'last_cmd', command.slice(0, 200)).catch(() => undefined);
+  // SAY that it was shortened. `quoteForMessage` learned this and has a contract
+  // test; this site kept the bare slice, and it is the one an agent READS.
+  //
+  // A reviewer's `… | tee checksums2.txt; echo "ATH_JOB2_DONE …"` came back as
+  // `…| tee checksums2.txt` with nothing to say the sentinel had been cut, and
+  // said outright: "If I'd used that field to confirm what actually ran, I'd
+  // have concluded my sentinel wasn't there." `ath ls` cut mid-word for the same
+  // reason — "=== listener proces".
+  //
+  // The lesson was learned, tested, and applied in exactly one of the two
+  // places it applies.
+  const recorded =
+    command.length > 200 ? `${command.slice(0, 197).trimEnd()}… (truncated)` : command;
+  await setMeta(name, 'last_cmd', recorded).catch(() => undefined);
   await setMeta(name, 'last_rc', code === null ? '' : String(code)).catch(() => undefined);
 }
 

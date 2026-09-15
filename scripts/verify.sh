@@ -1550,6 +1550,56 @@ process.stdout.write(Math.abs(got-real)<10000 && t.started_utc!==t.build_utc ? "
 chk "and the loaded build is named as such" "yes" \
     "$(grep -q 'loaded_build_utc' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
 
+# ---- truncation must announce itself EVERYWHERE, not in one place -----------
+#
+# `quoteForMessage` learned this and carries a contract test, written because a
+# bare slice cut a command inside its own quoted string. `recordLast` kept the
+# bare slice — and it is the site an agent READS, via last_command in `ls` and
+# `wait`.
+#
+# A reviewer's `… | tee checksums2.txt; echo "ATH_JOB2_DONE…"` came back as
+# `…| tee checksums2.txt` with nothing saying the sentinel had been cut: "If I'd
+# used that field to confirm what actually ran, I'd have concluded my sentinel
+# wasn't there."
+#
+# The lesson was learned, tested, and applied in exactly one of the two places
+# it applies — which is this project's largest defect class, inside a single
+# file.
+TRUNC="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+(async()=>{
+  const n="trv"+process.pid; const out=[];
+  await a.create({name:n,cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get(n).catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,600));}
+  await a.run(n,"echo "+"x".repeat(240)+"; echo TAIL_SENTINEL");
+  const long=(await a.get(n)).lastCommand||"";
+  out.push(/truncated/.test(long)?"longLabelled":"LONGSILENT");
+  await a.run(n,"echo short");
+  const short=(await a.get(n)).lastCommand||"";
+  out.push(/truncated/.test(short)?"SHORTMISLABELLED":"shortClean");
+  await a.kill(n).catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "a truncated last_command says so"       "yes" "$(printf '%s' "$TRUNC" | grep -q longLabelled && echo yes || echo no)"
+chk "and a short one is left alone"          "yes" "$(printf '%s' "$TRUNC" | grep -q shortClean && echo yes || echo no)"
+
+# ---- a timeout claim must name the surface it is true of --------------------
+#
+# The doc said "--timeout is a DEFAULT of 300s, not a ceiling — 3600 blocks for
+# as long as you ask". True of the CLI. MCP `wait` clamps to 300 and
+# `await_human` to 120, because a synchronous call that blocks for an hour looks
+# like a hang. I wrote that sentence four rounds ago to answer a reviewer who
+# had hand-rolled a retry loop — verified it on the CLI and asserted it without
+# naming a surface, in a document that is otherwise careful about exactly this.
+chk "the timeout advice names the MCP limit" "yes" \
+    "$(grep -q 'On MCP, .wait. clamps' "$SK" && echo yes || echo no)"
+chk "and the schema still states its max"    "yes" \
+    "$(node -e '
+const {TOOL_DEFINITIONS}=require("'"$RP"'/packages/mcp/dist/tools.js");
+const w=TOOL_DEFINITIONS.find(t=>t.name==="wait");
+process.stdout.write(/max 300/.test(w.inputSchema.properties.timeout_seconds.description)?"yes":"no")' 2>/dev/null)"
+
 # ---- a claim must not outlive the request it names --------------------------
 #
 # `doctor --artifacts` stated the bound as "cleared when the request resolves".

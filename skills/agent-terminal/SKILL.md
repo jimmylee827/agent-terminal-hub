@@ -258,6 +258,14 @@ unbounded wait and hand-rolled a retry loop around exit 76. They did not need
 to: `ath wait bulk --handle <h> --timeout 3600` blocks for as long as you ask.
 Use the loop only when you want to do something between checks.
 
+**That is the CLI. On MCP, `wait` clamps `timeout_seconds` to 300 and
+`await_human` to 120** — an MCP call is synchronous, so an unbounded block would
+look like a hang to whatever is driving it. On that surface a long job really
+does need repeated calls, or the background-`ath await` route above if you have
+an ordinary shell alongside. A reviewer read the CLI sentence, was on MCP, and
+would have been caught out by a six-minute job; theirs took 204s and got away
+with one call.
+
 **A resize is reported to `poll` too, not just `run`.** A human attaching sets
 the pane size — usually to answer the prompt your job raised — and width-aware
 tools (`ps`, `docker ps`, `lsblk`) format themselves to it. `pane_width_changed` (its `explain` field is `true` the first time in a session, carrying the long note, and `false` after — the change is still reported, only the paragraph is dropped)
