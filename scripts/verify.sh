@@ -24,6 +24,36 @@
 # them for tidiness silently breaks those cases while the rest still passes.
 set -uo pipefail
 
+# ---- REFUSE TO RUN TWICE AT ONCE --------------------------------------------
+#
+# Two concurrent runs share ~/.ath, the tmux server and the session namespace,
+# and the result is failures that belong to neither run. It happened repeatedly
+# and I misread it twice: once as five product regressions (a probe whose
+# session name collided), once as "the fast mode is slower than the full suite",
+# a conclusion I could never explain and now attribute to contention.
+#
+# The internal modes re-invoke this script by design, so only the OUTERMOST
+# invocation takes the lock — ATH_VERIFY_LOCK is exported to the children.
+if [ "${ATH_VERIFY_LOCK:-}" = "" ]; then
+  _vlock="${TMPDIR:-/tmp}/ath-verify.lock"
+  if ! mkdir "$_vlock" 2>/dev/null; then
+    _owner="$(cat "$_vlock/pid" 2>/dev/null || echo unknown)"
+    if [ "$_owner" != "unknown" ] && kill -0 "$_owner" 2>/dev/null; then
+      echo "verify.sh: another run is in progress (pid $_owner). Refusing to start." >&2
+      echo "  Two runs share ~/.ath and the session namespace; the failures that" >&2
+      echo "  produces belong to neither. Wait for it, or kill it first." >&2
+      exit 2
+    fi
+    # The holder is gone — a killed run leaves the directory behind. Same
+    # reasoning as the dead-creator fix: a lock held by nobody is not held.
+    echo "verify.sh: clearing a lock left by dead pid $_owner" >&2
+    rm -rf "$_vlock"; mkdir "$_vlock" 2>/dev/null || { echo "verify.sh: cannot lock" >&2; exit 2; }
+  fi
+  echo "$$" > "$_vlock/pid"
+  trap 'rm -rf "$_vlock"' EXIT INT TERM
+  export ATH_VERIFY_LOCK="$_vlock"
+fi
+
 ATH_BIN="${ATH_BIN:-ath}"
 DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0; FAST=0
 
@@ -1264,6 +1294,34 @@ chk "no user-facing fact is one-sided"       "0" \
 # Run on the whole wire surface it found 20 undocumented fields, not one.
 chk "no wire field is undocumented"          "0" \
     "$(node "$RP/scripts/docdrift.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# ---- the auditors must prove they can FAIL ----------------------------------
+#
+# Counting 38 rounds, the largest defect class is one fact living on two
+# surfaces (18 occurrences) — and `surfaces.js`, written for exactly that,
+# matches core EXPORT NAMES and so cannot see the common case: a sentence
+# authored straight into a surface file. 321 of those exist. `docdrift` was
+# blind in the same way for weeks and reported "all documented" over text it had
+# never read.
+#
+# So every auditor now carries --selftest: break the invariant, assert it is
+# REPORTED, then assert a clean input passes. An auditor that has never been
+# watched failing is indistinguishable from no auditor — which was the literal
+# state of all four until now.
+for a in parity consumers surfaces docdrift prose; do
+  chk "$a can prove it fails"              "0" \
+      "$(node "$RP/scripts/$a.js" --selftest >/dev/null 2>&1 && echo 0 || echo 1)"
+done
+
+# ---- prose must not accumulate in a surface ---------------------------------
+#
+# A sentence that exists once cannot diverge. The ratchet holds today's counts
+# (142 CLI / 179 MCP / 20 prose-greps) and fails if any rises, so no NEW
+# divergence can be introduced; the existing debt burns down on touch. It also
+# bans a habit that has broken assertions here more than any other: matching
+# message text against SOURCE, where a wrapped line silently stops matching.
+chk "no new prose in a surface layer"        "0" \
+    "$(node "$RP/scripts/prose.js" >/dev/null 2>&1 && echo 0 || echo 1)"
 chk "the doc names the host fields"          "yes" \
     "$(grep -q 'cwd_host' "$SK" && echo yes || echo no)"
 chk "and no longer calls cwd the one place" "0" \

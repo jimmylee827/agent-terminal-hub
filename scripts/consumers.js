@@ -70,6 +70,20 @@ function caseBlocks(src) {
   return out;
 }
 
+// --selftest: a handler that polls and never publishes must be caught.
+if (process.argv.includes('--selftest')) {
+  const bad = "case 'x': { const r = await poll(s, h); return json({ ok: true }); }";
+  const good = "case 'y': { const r = await poll(s, h); return json({ paneWidthChanged: r.paneWidthChanged }); }";
+  const n = NOTICES[0];
+  const catchesBad = n.consumedBy.test(bad) && !n.published.test(bad);
+  const passesGood = n.consumedBy.test(good) && n.published.test(good);
+  const ok = catchesBad && passesGood;
+  console.log(ok
+    ? 'consumers --selftest: OK — catches a poll that swallows the notice, passes one that publishes'
+    : `consumers --selftest: FAILED — bad=${catchesBad} good=${passesGood}`);
+  process.exit(ok ? 0 : 1);
+}
+
 let checked = 0;
 const holes = [];
 

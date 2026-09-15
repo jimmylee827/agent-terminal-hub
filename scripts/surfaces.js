@@ -46,6 +46,31 @@ for (const line of barrel.split('\n')) {
   if (m && USER_FACING.test(m[1])) names.push(m[1]);
 }
 
+// --selftest: run the REAL classification over synthetic surfaces.
+//
+// A first version of this asserted that a name absent from a file reads as
+// absent — true by construction, and therefore worthless. That is the same
+// "passes without doing anything" failure this whole exercise is about, so it
+// now drives the actual rule: one-sided is a hole, two-sided is not.
+if (process.argv.includes('--selftest')) {
+  const classify = (name, inC, inM) => {
+    const c = inC ? `uses ${name} here` : 'nothing';
+    const m = inM ? `uses ${name} here` : 'nothing';
+    const seenC = new RegExp(`\\b${name}\\b`).test(c);
+    const seenM = new RegExp(`\\b${name}\\b`).test(m);
+    return seenC && seenM ? 'ok' : 'hole';
+  };
+  const catchesOneSided = classify('SOME_ADVICE', false, true) === 'hole';
+  const passesTwoSided = classify('SOME_ADVICE', true, true) === 'ok';
+  const ok = catchesOneSided && passesTwoSided;
+  console.log(
+    ok
+      ? 'surfaces --selftest: OK — a one-sided fact is a hole, a two-sided one is not'
+      : `surfaces --selftest: FAILED — oneSided=${catchesOneSided} twoSided=${passesTwoSided}`,
+  );
+  process.exit(ok ? 0 : 1);
+}
+
 const holes = [];
 let checked = 0;
 for (const n of names) {

@@ -75,6 +75,23 @@ for (const m of mcp.matchAll(/[{,]\s*([a-z][a-z0-9_]{2,})\s*:\s*(?!\s*$)/g)) fou
 // convention here. camelCase in this file is internal.
 const fields = [...found].filter((f) => /^[a-z]+(_[a-z0-9]+)+$/.test(f) && !EXEMPT.has(f));
 
+// --selftest: prove this can FAIL before believing that it passes.
+//
+// This auditor shipped BLIND for weeks — its scan could not see fields declared
+// in an inline ternary spread, so it reported "all documented" over a surface it
+// had never read. A check nobody has watched fail is indistinguishable from no
+// check, and that is not a figure of speech here: it is what happened.
+if (process.argv.includes('--selftest')) {
+  const bogus = 'a_field_that_is_certainly_not_documented_anywhere';
+  const caughtMissing = !skill.includes(bogus);
+  const seesSpread = /[{,]\s*([a-z][a-z0-9_]{2,})\s*:/.test('...(x ? { empty_tail: true } : {})');
+  const ok = caughtMissing && seesSpread;
+  console.log(ok
+    ? 'docdrift --selftest: OK — flags an undocumented field, and sees ternary-spread declarations'
+    : `docdrift --selftest: FAILED — missing=${caughtMissing} spread=${seesSpread}`);
+  process.exit(ok ? 0 : 1);
+}
+
 const missing = fields.filter((f) => !skill.includes(f));
 
 if (!fields.length) {

@@ -83,6 +83,25 @@ const CHECKS = [
  * Tools whose payload is hand-built from a session rather than a result type,
  * with the fields they must carry when the underlying data exists.
  */
+// --selftest: prove the omission detector reacts.
+//
+// parity checks that every result field reaches a surface. If it cannot notice
+// a field that does NOT, it is asserting nothing — which is the state all four
+// auditors here were in until this was written.
+if (process.argv.includes('--selftest')) {
+  const payload = 'return json({ session, exit_code: code, took_seconds: t });';
+  const reaches = (f) => new RegExp(`\\b${f}\\b`).test(payload);
+  const catchesMissing = !reaches('a_field_that_never_reaches_the_wire');
+  const passesPresent = reaches('took_seconds');
+  const ok = catchesMissing && passesPresent;
+  console.log(
+    ok
+      ? 'parity --selftest: OK — notices a field that never reaches the payload'
+      : `parity --selftest: FAILED — missing=${catchesMissing} present=${passesPresent}`,
+  );
+  process.exit(ok ? 0 : 1);
+}
+
 const HAND_BUILT = [
   ['wait', ['exit_code', 'exit_code_covers', 'verified', 'last_command']],
   ['poll', ['progress']],
