@@ -145,9 +145,7 @@ including one with no `--since`, so that is where your first one comes from.
 **Two offsets, and they point opposite ways.** `run` returns both. `log_offset`
 marks where that command's own output BEGINS; `next_offset` marks where the
 output AFTER it starts. Pass `next_offset` forward to `read --since` or `poll`.
-Passing `log_offset` re-reads the command you just ran — a reviewer did exactly
-that, reasonably, because the names are one word apart and only one of them was
-documented. `read` and `poll` return `next_offset` only, so there is nothing to
+Passing `log_offset` re-reads the command you just ran. `read` and `poll` return `next_offset` only, so there is nothing to
 confuse there.
 
 Both are CUMULATIVE COUNTERS, not file sizes, and they keep climbing across a
@@ -253,18 +251,14 @@ Exit **76** (MCP `still_running`) means still running. It is not a failure, and
 calling again is the right response.
 
 **`--timeout` is a DEFAULT of 300s, not a ceiling — raise it for a long job.**
-Every example here passes 60, and a reviewer concluded from that there was no
-unbounded wait and hand-rolled a retry loop around exit 76. They did not need
-to: `ath wait bulk --handle <h> --timeout 3600` blocks for as long as you ask.
+`ath wait bulk --handle <h> --timeout 3600` blocks for as long as you ask.
 Use the loop only when you want to do something between checks.
 
 **That is the CLI. On MCP, `wait` clamps `timeout_seconds` to 300 and
 `await_human` to 120** — an MCP call is synchronous, so an unbounded block would
 look like a hang to whatever is driving it. On that surface a long job really
 does need repeated calls, or the background-`ath await` route above if you have
-an ordinary shell alongside. A reviewer read the CLI sentence, was on MCP, and
-would have been caught out by a six-minute job; theirs took 204s and got away
-with one call.
+an ordinary shell alongside.
 
 **A resize is reported to `poll` too, not just `run`.** A human attaching sets
 the pane size — usually to answer the prompt your job raised — and width-aware
@@ -611,12 +605,6 @@ leaves the rest untouched. This is the opposite of a dropped LINK, which takes
 every session on the host together — a deliberate kill is safe, a dead network
 is not.
 
-**`claim/` and `election/` coordinate editor windows, not sessions.** When
-several editor windows are open on the same machine, one is elected to own
-request notifications so a single credential prompt raises one ping rather than
-one per window; `claim/` records which window owns a given request. Nothing an
-agent does depends on them, and neither holds command text.
-
 **One command per session at a time, which pulls against the advice not to
 batch.** Both are real: a session runs one command, and chaining with `;` makes
 the exit code meaningless. The resolution is not to pick a side — it is that
@@ -658,13 +646,6 @@ before its timeout you get **both** true — and the human request is still file
 because parking is what files it. Act on `needs_input` first: a timeout you can
 retry, a prompt you cannot. Only `timed_out` alone means "still running".
 
-**A prompt has to be quiet to count.** Detection is pattern-based over the last
-pane line, unwrapped first so a hard-wrapped line is not mistaken for two. But a
-match alone is not enough — output must go quiet for **1.2 s** before a
-prompt-shaped line is treated as parked. So a command printing a prompt-like
-string in a stream of output does not trip it, and a genuinely slow command is
-never mistaken for a parked one unless it also stops printing.
-
 **`took_seconds` is measured by the shell that ran the command, not estimated
 by the hub.** It is exact and does not depend on how often you polled — a
 44-second job polled once, ten seconds late, still reports 44.
@@ -676,12 +657,6 @@ shell has no `date`. If you do get a bracket, treat it as "when the hub
 looked", not as a duration — its upper bound is the first moment *any* code
 path noticed the command had finished, which may be the editor's watcher rather
 than your own call, so it can be far wider than your polling interval.
-
-**Two remote sessions to the same host share one ssh connection, not one
-shell.** `ControlMaster` keeps a single TCP connection per host, so the second
-session costs no handshake — but each gets its own channel and its own TTY.
-That is why the sudo timestamp does *not* carry across them and each needs its
-own password. One connection, two terminals.
 
 ## What this leaves on disk
 
@@ -731,10 +706,7 @@ would report "nothing left in shell history" and be wrong.
 **A live count is evidence of nothing in either direction.** Zero does not mean
 your commands are absent — they have not flushed yet. Non-zero does not mean
 they are present: it can be an earlier session of yours that exited, or another
-agent's run whose directory name collided with yours. A reviewer measured 7
-matches for their run name with all sessions alive and read it as disproving the
-mechanism; the 7 belonged to a previous agent who had used the identical
-date-based path. Verified directly instead — a fresh marker gives 0 while the
+agent's run whose directory name collided with yours. Verified directly instead — a fresh marker gives 0 while the
 session lives and 1 after it is killed. An earlier version of this paragraph
 recommended `find ~ -maxdepth 1 -newermt` as the way to check, which is the
 trap — mtime can read modified from a previous flush while holding none of the

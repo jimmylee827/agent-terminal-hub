@@ -84,6 +84,17 @@ for (const m of verify.matchAll(/grep -[qc]+ .([^'"]{30,}). "\$RP\/packages\/[^"
 }
 counts['scripts/verify.sh (prose greps)'] = proseGreps;
 
+// The document an agent reads before its first command, in words.
+//
+// Eight reviewers in a row have named its volume as the reason the score is 8
+// and not 9, while every one of them rated "would choose again" at 9. The
+// instruction now is explicit: do not write new prose, delete claims, let this
+// shrink rather than grow. So it is ratcheted like the rest — it may only fall.
+counts['skills/agent-terminal/SKILL.md (words)'] = readFileSync(
+  join(root, 'skills/agent-terminal/SKILL.md'),
+  'utf8',
+).split(/\s+/).filter(Boolean).length;
+
 
 if (process.argv.includes('--record')) {
   writeFileSync(BASELINE_FILE, `${JSON.stringify(counts, null, 2)}\n`);

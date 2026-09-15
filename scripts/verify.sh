@@ -1377,6 +1377,13 @@ done
 # divergence can be introduced; the existing debt burns down on touch. It also
 # bans a habit that has broken assertions here more than any other: matching
 # message text against SOURCE, where a wrapped line silently stops matching.
+# The doc is ratcheted too: it may only shrink. Eight reviewers running have
+# named its volume as what holds the score at 8, while rating "would choose
+# again" 9 every time. Deleted so far: two facts that were stated twice in the
+# same section because I appended an answer already present, one internal
+# explanation `doctor` still gives at the moment it is asked, and four passages
+# of provenance — the incident that produced a rule, which the reader does not
+# need and which belongs in a code comment that never ships.
 chk "no new prose in a surface layer"        "0" \
     "$(node "$RP/scripts/prose.js" >/dev/null 2>&1 && echo 0 || echo 1)"
 
@@ -1966,8 +1973,13 @@ chk "the doc says width survives a detach"   "yes" \
     "$(grep -q 'STAYS resized after the human detaches' "$SK" && echo yes || echo no)"
 chk "and that kill spares the other sessions" "yes" \
     "$(grep -q 'does not disturb the others on that host' "$SK" && echo yes || echo no)"
+# Moved OUT of the doc, not lost. `claim/` and `election/` are internal editor
+# coordination an agent never acts on, and every reviewer listed them among what
+# they read and never needed. `doctor --artifacts` still describes both, at the
+# moment someone asks what is on disk — which is when the question is actually
+# asked. Asserted there now, so the fact is still pinned, just not pre-read.
 chk "and what claim/ and election/ are for"  "yes" \
-    "$(grep -q 'coordinate editor windows, not sessions' "$SK" && echo yes || echo no)"
+    "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'which editor window owns a request' && echo yes || echo no)"
 chk "and names the batching tension"         "yes" \
     "$(grep -q 'pulls against the advice not to' "$SK" && echo yes || echo no)"
 
