@@ -717,9 +717,17 @@ of the hub and not of the visit.
 
 **Do not try to verify this mid-session — you will get a false negative.** zsh
 flushes history when the shell EXITS, not per command, so a check while your
-sessions are still alive finds nothing and an agent tidying up would report
-"nothing left in shell history" and be wrong. Measured: 0 occurrences with the
-session open, 1 after killing it. An earlier version of this paragraph
+sessions are still alive finds nothing of THIS session, and an agent tidying up
+would report "nothing left in shell history" and be wrong.
+
+**A live count is evidence of nothing in either direction.** Zero does not mean
+your commands are absent — they have not flushed yet. Non-zero does not mean
+they are present: it can be an earlier session of yours that exited, or another
+agent's run whose directory name collided with yours. A reviewer measured 7
+matches for their run name with all sessions alive and read it as disproving the
+mechanism; the 7 belonged to a previous agent who had used the identical
+date-based path. Verified directly instead — a fresh marker gives 0 while the
+session lives and 1 after it is killed. An earlier version of this paragraph
 recommended `find ~ -maxdepth 1 -newermt` as the way to check, which is the
 trap — mtime can read modified from a previous flush while holding none of the
 current session's commands, so the two signals disagree and both are correct.
@@ -733,6 +741,12 @@ in no file, and there is nothing to purge after a sudo handoff.
 - Commands run in the session's own shell so `cd` and `export` persist. That
   also means `exit` really exits — use a subshell (`(exit 1)`) to return a code
   without ending the session.
+- **That state is per SESSION, not per host.** Four sessions on the same machine
+  are four shells: an `export` in one is invisible in the others, and a `cd` in
+  one does not move the rest. A reviewer set `$AUDIT_DIR` in one session and had
+  to spell the literal path out in another — "obvious once stated, nowhere
+  stated". If several sessions need the same value, set it in each, or pass the
+  path literally.
 - A session can be killed by the human mid-command. You get `session_gone`.
   Say so rather than silently recreating it.
 - If a session is `busy`, either wait (`--wait`) or look at it (`ath read`);

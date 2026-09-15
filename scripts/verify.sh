@@ -60,13 +60,52 @@ if [ "${ATH_VERIFY_LOCK:-}" = "" ]; then
   #
   # Every session this suite makes carries $$ in its name, so this removes
   # exactly its own and can never touch a human's or another agent's.
+  # Matching on the outer pid was not enough: the orchestrator re-invokes itself
+  # (`bash "$0" --contract`), and those children create sessions under THEIR pid
+  # while the trap lives in the parent. A first attempt cleaned nothing — 5 log
+  # files before a contract run, 30 after.
+  #
+  # So match the test-name PREFIXES instead, and only where the session is
+  # already gone. A human does not name a session `_tc4821` or `dh-9930`, and
+  # requiring it to be dead means nothing live is ever touched. New probes must
+  # use one of these prefixes to be cleaned up.
+  # SNAPSHOT, not a prefix list.
+  #
+  # Two earlier attempts enumerated name prefixes and both left files behind —
+  # the probes in this file and in scripts/*.js use a dozen ad-hoc names, and
+  # the list was stale as soon as a probe was added. Whack-a-mole with a regex
+  # is the wrong shape.
+  #
+  # Record what the log directory holds BEFORE the run; on exit, remove only
+  # what appeared since AND is not a live session. That is exactly the suite's
+  # own output, needs no list to maintain, and cannot touch anything that was
+  # already there or anything still running.
+  _vbefore="$(ls "${ATH_HOME:-$HOME/.ath}/log" 2>/dev/null | sort)"
   _vcleanup() {
     rm -rf "$_vlock"
-    "$ATH_BIN" ls --json 2>/dev/null \
+    _live="$("$ATH_BIN" ls --json 2>/dev/null \
       | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{
-          JSON.parse(d).map(s=>s.name).filter(n=>n.includes(process.argv[1])).forEach(n=>console.log(n));
-        }catch(e){}})' "$$" 2>/dev/null \
-      | while read -r _s; do [ -n "$_s" ] && "$ATH_BIN" kill "$_s" --force >/dev/null 2>&1; done
+          process.stdout.write(JSON.parse(d).map(s=>s.name).join("\n"));}catch(e){}})' 2>/dev/null)"
+    ls "${ATH_HOME:-$HOME/.ath}/log" 2>/dev/null | sort \
+      | comm -13 <(printf '%s\n' "$_vbefore") - 2>/dev/null \
+      | sed 's/\.log$//;s/\.trim$//' | sort -u \
+      | while read -r _s; do
+          [ -n "$_s" ] || continue
+          printf '%s\n' "$_live" | grep -qx "$_s" && continue   # never touch a live one
+          "$ATH_BIN" kill "$_s" --force >/dev/null 2>&1
+          # REMOVE the transcript, do not merely empty it.
+          #
+          # `ath purge <name>` blanks the contents and leaves the file; only
+          # `purge --dead` unlinks, and that would take a human's dead sessions
+          # with it. The complaint was about COUNT and attribution — a reviewer
+          # accounting for disk found hundreds of `_t*`, `dc-*`, `zt*` logs
+          # "indistinguishable from real sessions", 230 of 323 files — so empty
+          # files left behind would not fix it.
+          #
+          # Direct unlink of this suite's own names only, and only once the
+          # session is gone.
+          rm -f "${ATH_HOME:-$HOME/.ath}/log/$_s.log" "${ATH_HOME:-$HOME/.ath}/log/$_s.trim"
+        done
   }
   trap '_vcleanup' EXIT INT TERM
   export ATH_VERIFY_LOCK="$_vlock"
@@ -1511,6 +1550,26 @@ process.stdout.write(Math.abs(got-real)<10000 && t.started_utc!==t.build_utc ? "
 chk "and the loaded build is named as such" "yes" \
     "$(grep -q 'loaded_build_utc' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
 
+# ---- the suite must leave NO transcripts of its own --------------------------
+#
+# A reviewer accounting for disk found hundreds of `_t*`, `_tc*`, `dc-*`, `zt*`
+# logs and said they were "indistinguishable from real sessions". 230 of 323
+# files, 99 MB — all mine. `kill` keeps a transcript on purpose, which is right
+# for a human's session and wrong for a test's, so every run left one file per
+# session forever.
+#
+# Two attempts at a prefix list both left files behind; the probes use a dozen
+# ad-hoc names and the list was stale as soon as one was added. It snapshots the
+# directory instead and removes only what appeared during the run and is not
+# live — exactly its own output, no list to maintain. Verified: 5 files before a
+# contract run, 5 after, and those five belong to the reviewer.
+chk "the suite snapshots the log directory"  "yes" \
+    "$(grep -q '_vbefore=' "$RP/scripts/verify.sh" && echo yes || echo no)"
+chk "and unlinks rather than empties"        "yes" \
+    "$(grep -q 'rm -f "\${ATH_HOME:-\$HOME/.ath}/log/\$_s.log"' "$RP/scripts/verify.sh" && echo yes || echo no)"
+chk "never touching a live session"          "yes" \
+    "$(grep -q 'never touch a live one' "$RP/scripts/verify.sh" && echo yes || echo no)"
+
 # ---- an interrupted suite must not leave sessions behind --------------------
 #
 # A killed run left `_tc74688` idle in the listing. A reviewer found it, could
@@ -1572,8 +1631,15 @@ chk "and warns the live check is a false negative" "yes" \
     "$($ATH_BIN doctor --artifacts 2>&1 | grep -q 'checking mid-session shows NOTHING' && echo yes || echo no)"
 chk "the doc no longer recommends the live check" "0" \
     "$(grep -c 'which is the right way' "$SK" | tr -d ' ')"
-chk "and states the measured result"           "yes" \
-    "$(grep -q '0 occurrences with the' "$SK" && echo yes || echo no)"
+# Re-anchored after the paragraph was rewritten. The property that matters is
+# no longer the raw measurement but its SCOPE: a reviewer measured 7 matches
+# with sessions alive and read it as disproving the mechanism, when the 7
+# belonged to a previous agent whose date-based run directory collided with
+# theirs. A live count is evidence in neither direction.
+chk "and says a live count proves nothing"    "yes" \
+    "$(grep -q 'evidence of nothing in either direction' "$SK" && echo yes || echo no)"
+chk "naming the collision that misled one"    "yes" \
+    "$(grep -q 'whose directory name collided' "$SK" && echo yes || echo no)"
 
 # ---- say which case a caveat applies to -------------------------------------
 #
