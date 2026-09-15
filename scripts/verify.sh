@@ -1396,6 +1396,26 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- say which case a caveat applies to -------------------------------------
+#
+# The `wait` paragraph opens "Without the handle, treat an idle as a guess" and
+# then explains the tail-scan limitation. A reviewer WITH a handle, whose job
+# printed 117 MB, got verified: true, read the explanation, and could not tell
+# whether that was robustness or luck — "I cannot predict when it would silently
+# downgrade". Verified here: with a handle the markers are read directly and
+# volume is irrelevant. The scope was correct and the reader still mis-applied
+# it, which makes it a wording problem rather than a reader problem.
+chk "the doc says a handle makes volume irrelevant" "yes" \
+    "$(grep -q 'volume is irrelevant' "$SK" && echo yes || echo no)"
+chk "and scopes the tail-scan caveat"         "yes" \
+    "$(grep -q 'about the case where you did NOT pass one' "$SK" && echo yes || echo no)"
+# The layout rule reasons about privilege and occupancy. It never said which
+# MACHINE a session speaks from — and a reachability question cannot be answered
+# on the host itself, which the network warning now says but the layout rule did
+# not. A reviewer planned three remote sessions correctly, then needed a fourth.
+chk "the layout rule covers the routing axis" "yes" \
+    "$(grep -q 'which MACHINE a session can' "$SK" && echo yes || echo no)"
+
 # ---- the same number, qualified on every surface ----------------------------
 #
 # `exit_code` on run/poll/requests carries `exit_code_covers`; `last_exit_code`

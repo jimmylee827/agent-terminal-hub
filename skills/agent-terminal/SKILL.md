@@ -29,6 +29,12 @@ else — you say so, and they type it into the same terminal you are using.
    for EVERYTHING, not just for privileged work — an agent followed the old
    count of two, had `work` park on sudo while `bulk` ran its long job, and was
    left with zero usable sessions in the middle of its audit.
+   One more axis the count above does not cover: **which MACHINE a session can
+   speak from.** "Is this port reachable from outside?" cannot be answered on
+   the host itself, so if the task asks that, plan a session on a machine that
+   can actually route to it — often a local one — alongside the remote ones. A
+   reviewer planned three remote sessions correctly and then discovered they
+   needed a fourth, local, for exactly this.
 2. **Reuse sessions.** Run `ath ls` first. Creating a session per command
    throws away the state that makes this useful.
 3. **Never type a credential.** Not passwords, passphrases, PINs, OTPs, or
@@ -226,10 +232,17 @@ Given the handle, `wait` also returns that command's **own** `exit_code` and
 long?" needs no follow-up `poll`. Without a handle you get `last_exit_code`,
 which is the SESSION's last recorded code and may belong to something else.
 
-**Without the handle, treat an `idle` from `wait` as a guess.** The check
-scans the tail of the log for the command's markers, and a command that prints
-a lot pushes its own start marker out of that window — so the answer falls
-back to the pane, which is the thing that was wrong to begin with. Installers
+**Without the handle, treat an `idle` from `wait` as a guess.** WITH a handle
+the markers are read directly and volume is irrelevant — a reviewer whose job
+printed 117 MB got `verified: true`, read this paragraph, and could not tell
+whether that was robustness or luck. It is robustness: the handle names the
+command, so the answer never depends on what is still visible. Everything below
+is about the case where you did NOT pass one.
+
+Without it, the check scans the tail of the log for the command's markers, and
+a command that prints a lot pushes its own start marker out of that window — so
+the answer falls back to the pane, which is the thing that was wrong to begin
+with. Installers
 and builds are exactly the chatty case, so this is the norm for them, not a
 corner. When that happens `wait` says so: the MCP result carries
 `verified: false` with an `unverified_because`, and the CLI prints an
