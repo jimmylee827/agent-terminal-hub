@@ -320,6 +320,22 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           pane_width: s.paneWidth,
           last_command: s.lastCommand,
           last_exit_code: s.lastExitCode,
+          // The SAME hazard `run` and `poll` qualify, on the same number.
+          //
+          // A reviewer put the shape precisely: "the field with the
+          // authoritative name is the misleading one, and the correction rides
+          // alongside it rather than replacing it" — and then named the surface
+          // where the correction is not even alongside. `last_exit_code` is
+          // reported bare here while `exit_code` on `run`, `poll` and
+          // `requests` all carry the marker. Same number, same trap, qualified
+          // on some surfaces and not others, which is the divergence this
+          // project keeps finding.
+          //
+          // The TOKEN only, never the prose: a listing is scanned, and three
+          // words per row is the whole budget.
+          ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
+            ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand) }
+            : {}),
           summary: summarize(s),
         })),
       );
@@ -1433,6 +1449,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             verified: true,
             last_command: s.lastCommand,
             last_exit_code: s.lastExitCode,
+            ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
+              ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand) }
+              : {}),
           });
         }
         if (s.state === 'idle') {
@@ -1471,6 +1490,9 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               // The SESSION's last recorded code — not necessarily the command
               // you waited on. `exit_code` above, when present, is that one.
               last_exit_code: s.lastExitCode,
+              ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
+                ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand) }
+                : {}),
               ...(seen === 'unknown'
                 ? {
                     unverified_because:

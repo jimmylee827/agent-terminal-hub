@@ -486,7 +486,12 @@ Fields worth checking on the `--json` form:
 | `offset_beyond_end` | The `since` you passed is past the end of the log. Nothing is wrong; there is simply nothing there yet. |
 | `this_server` | Which build is answering: pid, load time, build time, and whether it is current. A long-lived MCP server keeps the code it booted with. |
 | `stale_servers` | Other MCP servers running older code, with how far behind and what has landed since. Said once per server process; `doctor` repeats it on demand. |
-| `already_open` | On `request_human`: a request for this command was already filed, so nothing new was raised and the human was not pinged twice. |
+| `already_open` / `reason_added` | On `request_human`: a request for this command was already filed, so nothing new was raised and the human was not pinged twice. `reason_added` means your wording was merged into the existing request. |
+| `last_exit_code_covers` | On `list` and `wait`: the same warning `exit_code_covers` gives, for the session's LAST recorded code. A bare `last_exit_code: 0` from a pipeline says only that its final stage succeeded. |
+| `asked_for_you` | On `list`: this session has an open request waiting on a human — filed for you, usually by a command that parked. Go and relay it. |
+| `collect_with` | The exact call that retrieves a finished command's result, for a handle you were not holding. |
+| `current_command` | What the session is running right now, when it is busy. |
+| `stale_build` | THIS process is running code older than the build on disk. A fix you expect may not be in effect here; restart the client that launched it. See also `this_server` and `stale_servers`. |
 
 ## What the shared terminal looks like
 

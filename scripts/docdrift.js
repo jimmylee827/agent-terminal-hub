@@ -54,10 +54,22 @@ const EXEMPT = new Set([
   'requests_cleared',
 ]);
 
-// `payload.foo =`, `foo:` inside a json({...}), and `{ foo: ... }` spreads.
+// Three shapes, because two were not enough and the gap was invisible.
+//
+// The line-start pattern misses every field declared inside an inline ternary
+// spread — `...(cond ? { empty_tail: true } : {})` puts the key after `? {` on
+// the same line. That is the most common way an optional field is written here,
+// so the auditor was silently under-counting the wire surface it claimed to
+// cover, and reported "all documented" while two fields it had never seen went
+// out undocumented. Found by adding a field, watching the check pass, and not
+// believing it.
+//
+// An object key anywhere, then: preceded by `{` or `,`. The snake_case filter
+// below keeps internal single-word literals out.
 const found = new Set();
 for (const m of mcp.matchAll(/payload\.([a-z][a-z0-9_]*)\s*=/g)) found.add(m[1]);
 for (const m of mcp.matchAll(/^\s*([a-z][a-z0-9_]{2,})\s*:\s*(?!\s*$)/gm)) found.add(m[1]);
+for (const m of mcp.matchAll(/[{,]\s*([a-z][a-z0-9_]{2,})\s*:\s*(?!\s*$)/g)) found.add(m[1]);
 
 // Only names that look like OUTPUT fields: snake_case, which is the wire
 // convention here. camelCase in this file is internal.

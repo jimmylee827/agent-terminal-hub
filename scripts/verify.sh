@@ -1396,6 +1396,42 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- the same number, qualified on every surface ----------------------------
+#
+# `exit_code` on run/poll/requests carries `exit_code_covers`; `last_exit_code`
+# on `list` and `wait` carried nothing. A reviewer named the shape — "the field
+# with the authoritative name is the misleading one, and the correction rides
+# alongside it rather than replacing it" — and then pointed at the surface where
+# the correction was not even alongside. A pipeline whose middle stage fails
+# shows `last_exit_code: 0` in a listing.
+chk "list qualifies last_exit_code"          "yes" \
+    "$(grep -q 'last_exit_code_covers' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+chk "on every surface that reports it"       "3" \
+    "$(grep -c 'last_exit_code_covers: compoundExitCaveat' "$RP/packages/mcp/src/index.ts" | tr -d ' ')"
+
+# ---- the doc auditor must SEE the whole wire surface ------------------------
+#
+# docdrift reported "all documented" while two fields it had never seen shipped
+# undocumented. Its line-start pattern missed every field written as an inline
+# ternary spread — `...(cond ? { empty_tail: true } : {})` puts the key after
+# `? {` on the same line — which is the most common way an optional field is
+# declared here. Found by adding a field, watching the check pass, and not
+# believing it. Closing the gap surfaced SIX more, including `asked_for_you` and
+# `stale_build`: fields explained at length in commit messages and never in the
+# document a cold agent reads.
+#
+# A check that passes without seeing its subject is worse than no check: it
+# reports safety it never established.
+chk "docdrift sees ternary-spread fields"    "yes" \
+    "$(node -e '
+const fs=require("fs");
+const mcp=fs.readFileSync("'"$RP"'/packages/mcp/src/index.ts","utf8");
+const f=new Set();
+for (const m of mcp.matchAll(/[{,]\s*([a-z][a-z0-9_]{2,})\s*:\s*(?!\s*$)/g)) f.add(m[1]);
+process.stdout.write(f.has("empty_tail")&&f.has("last_exit_code_covers")?"yes":"no")' 2>/dev/null)"
+chk "and its count grew when it could see"   "yes" \
+    "$(node "$RP/scripts/docdrift.js" 2>/dev/null | grep -qE ': 4[0-9] wire field' && echo yes || echo no)"
+
 # ---- a claim of ABSENCE must be exhaustive ----------------------------------
 #
 # `doctor` said of a remote host: "The hub writes nothing. No files, no
