@@ -6,6 +6,7 @@ import {
   augmentRequestReason,
   assertRemoteConnected,
   ancestorPids,
+  identifyingPids,
   pidAlive,
   attachedClientsNote,
   AthError,
@@ -904,9 +905,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           bytes: p.bytes,
           seconds: p.seconds,
           bytes_per_second: p.bytesPerSecond,
-          summary: `${fmtBytes(p.bytes)} produced in ${p.seconds}s (${fmtBytes(
+          // Say WHAT produced it. `progress.bytes` is measured from this
+          // command's start offset; `next_offset` is the session-lifetime
+          // counter and includes every earlier command. A reviewer got
+          // "56 MiB produced in 82s" beside "next_offset": 76265130 for the
+          // same job and had to work out which was which — 58,395,274 against
+          // 76,265,130, the gap being a run they had killed earlier. Both
+          // numbers were right and neither said what it counted. That was the
+          // one and only thing in their audit they had to derive rather than
+          // read.
+          summary: `${fmtBytes(p.bytes)} from THIS command in ${p.seconds}s (${fmtBytes(
             p.bytesPerSecond,
-          )}/s)`,
+          )}/s) — next_offset counts the whole session, so the two differ`,
         };
       }
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
@@ -1785,8 +1795,7 @@ async function parallelHint(current: string): Promise<string> {
     // is gone, the session belongs to nobody, and it is offered — labelled, so
     // an agent knows it is adopting something rather than resuming its own.
     const chain = ancestorPids();
-    const identifying = (pids: number[]): number[] =>
-      pids.slice(0, Math.max(1, pids.length - 2));
+    const identifying = identifyingPids;
     const mine = new Set(identifying(chain));
     const isOurs = (s: { creatorPids?: number[] }): boolean =>
       (s.creatorPids ?? []).some((pid) => mine.has(pid));

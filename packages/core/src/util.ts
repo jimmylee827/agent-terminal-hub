@@ -125,6 +125,24 @@ export function resolveBackspaces(line: string): string {
  * Captured eagerly because the creating process is usually short-lived: by the
  * time a prompt appears the chain would no longer be walkable.
  */
+/**
+ * The levels of an ancestor chain that actually identify a creator.
+ *
+ * The OUTERMOST ancestors are shared by everything and prove nothing: two
+ * concurrent agents both descend from the same editor host, so matching on any
+ * shared pid classified a stranger's sessions as mine — their chain was
+ * 20620,20488,20129,67739 and mine 29623,29621,54680,54436,67739, intersecting
+ * only at that last entry. Dropping the outermost two leaves the levels that
+ * identify the creator and discards the shared root.
+ *
+ * Lifted out of `parallelHint` so there is ONE copy. It was about to have two:
+ * the exit-code caveat needs the same "which agent run is this" answer, and a
+ * second implementation of this rule is the project's most common defect shape.
+ */
+export function identifyingPids(pids: number[]): number[] {
+  return pids.slice(0, Math.max(1, pids.length - 2));
+}
+
 export function ancestorPids(pid: number = process.pid, ppidOf?: Map<number, number>): number[] {
   const parents = ppidOf ?? readProcessTree();
   const chain: number[] = [];

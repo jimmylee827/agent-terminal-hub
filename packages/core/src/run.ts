@@ -53,7 +53,16 @@ import type {
   Session,
   StartResult,
 } from './types';
-import { randomNonce, shellQuote, sleep, stripAnsi, toLines, trimBlankEdges } from './util';
+import { createHash } from 'node:crypto';
+import {
+  identifyingPids,
+  randomNonce,
+  shellQuote,
+  sleep,
+  stripAnsi,
+  toLines,
+  trimBlankEdges,
+} from './util';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_MS = 90;
@@ -625,6 +634,19 @@ async function readLogCapped(
   // both from one number here makes divergence impossible rather than
   // unlikely.
   logicalBase = 0,
+  // Drop the EXPLANATION once it has been given, keeping every fact.
+  //
+  // A reviewer polling a chatty job got "~700 bytes of warning for ~60 bytes of
+  // data" on every single call, and drew the conclusion that matters: "the
+  // progress instrument isn't poll" — they went to another session and ran
+  // `wc -l` on the output file instead. The marker is right and the advice is
+  // right; repeating the advice verbatim on a follow loop is what made the tool
+  // it is attached to useless for following.
+  //
+  // Same decay as the exit-code caveat, for the same reason and with the same
+  // rule: the FACTS — how many bytes, the offset, whether a trim is about to
+  // destroy them — ride every marker. Only the paragraph stops.
+  brief = false,
 ): Promise<CappedSlice> {
   const start = Math.max(0, Math.min(since, size));
   const available = size - start;
@@ -702,7 +724,11 @@ async function readLogCapped(
   // route instead of offering an offset that is about to expire.
   const trimIsClose = size > LOG_MAX_BYTES - LOG_MAX_BYTES / 4;
   const prospect = trimProspect(size);
-  const note = trimIsClose
+  const note = brief
+    ? `[ath: ${bytes} bytes omitted here — since=${logicalResume}` +
+      (trimIsClose ? `, AT RISK: log past the trim threshold` : '') +
+      `]`
+    : trimIsClose
     ? `[ath: ${bytes} bytes omitted here. ${prospect.clause}. ` +
       (prospect.past
         ? `So these bytes are likely to be DESTROYED before you can read them — ` +
@@ -2848,7 +2874,11 @@ export async function poll(
   const size = await fileSize(log);
   const at = await resolveOffset(clean, since);
   const discarded = at.logicalEnd - size;
-  const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded);
+  // The paragraph once per agent, the facts every time. A follow loop polls the
+  // same session repeatedly by design, so this is where the repetition lands.
+  const omitSeen = await caveatPeek(clean, 'omit').catch(() => 1);
+  const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded, omitSeen > 0);
+  if (slice.omitted !== undefined) await caveatCountFor(clean, 'omit').catch(() => undefined);
   const output = trimToCommandWindow(slice.raw, handle);
 
   let exitCode: number | null = null;
@@ -3285,8 +3315,65 @@ export function compoundExitCaveat(command: string): string | undefined {
  * command and stays machine-readable; only the prose stops. Deliberate
  * information loss, traded for being read at all.
  */
+/**
+ * Which AGENT RUN this session belongs to, for counting a caveat once per agent
+ * rather than once per session.
+ *
+ * The decay above is keyed on the session name, and a reviewer running a
+ * four-session layout was handed the same ~90-word paragraph four times: "the
+ * exit_code_caveat paragraph is ~90 words and fires once per session, four
+ * times across four sessions. Correct content, but I'd read it on the first
+ * one." A second reviewer in the same round reached the sharper end of it —
+ * "by the tenth time it was noise I was skipping, which is how a warning gets
+ * missed on the occasion it matters."
+ *
+ * They are right, and the grain was wrong rather than the budget. The paragraph
+ * explains how SHELLS treat `;` and `|`. That is a property of the reader, not
+ * of the session, so four sessions is four repetitions of one fact — and the
+ * session-layout rule this tool pushes hardest is what guarantees there will be
+ * several.
+ *
+ * `creatorPids` is recorded at creation, so every session an agent makes shares
+ * its identifying levels; that is the identity to count against. Falls back to
+ * the session name when the chain is unavailable, which is the behaviour this
+ * replaces — so the failure mode is the status quo, not a silent hazard.
+ */
+async function caveatScope(session: string): Promise<string> {
+  try {
+    const pids = (await get(session)).creatorPids ?? [];
+    const key = identifyingPids(pids).join('-');
+    if (key) return `agent-${createHash('sha1').update(key).digest('hex').slice(0, 12)}`;
+  } catch {
+    /* fall through to the per-session key */
+  }
+  return session;
+}
+
+/**
+ * How many times WITHOUT counting this one.
+ *
+ * The budget must only be spent on calls that actually show the thing. The
+ * comment above `caveatSeen` already says so for the exit-code caveat — "a
+ * session full of simple commands does not burn through the budget before it
+ * ever sees one" — and wiring the omission marker to `caveatCountFor` broke
+ * exactly that rule: a follow loop polling a quiet job would have exhausted the
+ * prose on calls that omitted nothing, so the one poll that DID drop bytes got
+ * the short form and the reader never saw the advice at all.
+ *
+ * So the caller peeks to choose the wording, and spends the budget afterwards
+ * only if something was really omitted.
+ */
+async function caveatPeek(session: string, kind = 'caveat'): Promise<number> {
+  const flag = path.join(RC_DIR, `${await caveatScope(session)}.${kind}.n`);
+  try {
+    return Number(await fs.readFile(flag, 'utf8')) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function caveatCountFor(session: string, kind = 'caveat'): Promise<number> {
-  const flag = path.join(RC_DIR, `${session}.${kind}.n`);
+  const flag = path.join(RC_DIR, `${await caveatScope(session)}.${kind}.n`);
   let n = 0;
   try {
     n = Number(await fs.readFile(flag, 'utf8')) || 0;
@@ -4075,7 +4162,9 @@ export async function readSince(
   // Capped for the same reason `poll` is, and it must be BOTH: this is the
   // other half of the documented follow loop, so bounding one and leaving the
   // other just moves the flood to whichever the caller happened to pick.
-  const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded);
+  const readOmitSeen = await caveatPeek(clean, 'omit').catch(() => 1);
+  const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded, readOmitSeen > 0);
+  if (slice.omitted !== undefined) await caveatCountFor(clean, 'omit').catch(() => undefined);
   return {
     output: cleanSlice(slice.raw),
     nextOffset: at.logicalEnd,

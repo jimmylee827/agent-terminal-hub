@@ -150,6 +150,7 @@ export { Watcher } from './watch';
 export type { WatcherOptions } from './watch';
 export {
   ancestorPids,
+  identifyingPids,
   bestPathAffinity,
   formatDuration,
   pathContains,

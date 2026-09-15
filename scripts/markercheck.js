@@ -51,6 +51,7 @@ if (process.argv.includes('--selftest')) {
 
 (async () => {
   const n = `mk-${process.pid}`;
+  const cleanup = [n];
   const out = [];
   try {
     await core.kill(n).catch(() => {});
@@ -76,10 +77,47 @@ if (process.argv.includes('--selftest')) {
     // A run that never reached the cap would pass vacuously.
     out.push(seen > 0 ? 'sawMarker' : 'NOMARKER');
     out.push(spliced === 0 ? 'ownLine' : `SPLICED${spliced}`);
+
+    // THE EXPLANATION DECAYS, THE FACTS DO NOT.
+    //
+    // A reviewer polling a chatty job got "~700 bytes of warning for ~60 bytes
+    // of data" every call and concluded "the progress instrument isn't poll" —
+    // they left for another session to `wc -l` the output file. A follow loop
+    // polls the same session by design, so this is exactly where repetition
+    // lands.
+    // A SECOND session, because the cap loop above has already spent this
+    // session's budget — the first version of this assertion measured the
+    // decayed form as if it were the first and reported a hole that was its own
+    // ordering.
+    const d = `${n}-decay`;
+    cleanup.push(d);
+    await core.create({ name: d, cwd: '/tmp', creatorPids: [process.pid, process.pid + 1, 991001, 991002] });
+    for (let i = 0; i < 20; i++) {
+      const sd = await core.get(d).catch(() => null);
+      if (sd && sd.state === 'idle') break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    const sd = await core.start(d, `awk 'BEGIN{for(i=0;i<2000;i++) ${LINE}}'`);
+    await new Promise((r) => setTimeout(r, 2500));
+    const markers = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await core.poll(d, sd.handle, 0, 2048);
+      const m = (r.output ?? '').match(/\[ath:[^\]]*\]/);
+      if (m) markers.push(m[0]);
+    }
+    if (markers.length >= 3) {
+      out.push(/read them with|durable storage|too much to read/.test(markers[0]) ? 'firstExplains' : 'FIRSTTERSE');
+      out.push(markers[2].length < markers[0].length / 2 ? 'laterBrief' : 'LATERSTILLLONG');
+      // Both facts must survive the shortening, or this traded noise for a hole.
+      out.push(/\d+ bytes omitted/.test(markers[2]) ? 'briefKeepsBytes' : 'BRIEFLOSTBYTES');
+      out.push(/since=\d+/.test(markers[2]) ? 'briefKeepsOffset' : 'BRIEFLOSTOFFSET');
+    } else {
+      out.push(`ONLY${markers.length}MARKERS`);
+    }
   } catch (e) {
     out.push(`THREW:${String(e.message).slice(0, 40)}`);
   } finally {
-    await core.kill(n).catch(() => {});
+    for (const c of cleanup) await core.kill(c).catch(() => {});
     // Remove this probe's own transcript.
     //
     // `kill` ends the session and LEAVES the log; only `purge --dead` unlinks,
@@ -89,11 +127,13 @@ if (process.argv.includes('--selftest')) {
     // the user's ~/.ath/log. A reviewer counted exactly this class of litter
     // and called the directory unbounded; a test harness should not be adding
     // to the pile it is meant to police.
-    for (const suffix of ['.log', '.trim']) {
-      try {
-        unlinkSync(core.logPath(n).replace(/\.log$/, suffix));
-      } catch {
-        /* never existed, which is the good case */
+    for (const c of cleanup) {
+      for (const suffix of ['.log', '.trim']) {
+        try {
+          unlinkSync(core.logPath(c).replace(/\.log$/, suffix));
+        } catch {
+          /* never existed, which is the good case */
+        }
       }
     }
   }

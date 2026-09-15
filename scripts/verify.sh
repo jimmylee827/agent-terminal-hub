@@ -1186,20 +1186,24 @@ chk "parallel_work checks provenance"     "yes" \
 # agent's sessions as mine — the two chains intersected only at the editor host
 # — so the filter written to stop offering other people's sessions would have
 # gone on offering them. Only visible with two agents running at once.
-# The drop-two rule moved into `identifying()` when liveness needed the same
-# levels; the property is unchanged and is now applied in both places.
-chk "and ignores the shared root ancestors" "yes" \
-    "$(grep -q 'pids.length - 2' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
-PROV="$(node -e "
-const c=[29623,29621,54680,54436,67739];
-const mine=new Set(c.slice(0,c.length-2));
-const theirs=[20620,20488,20129,67739];
-const ours=[22892,22890,54680,54436,67739];
-const r=(a)=>a.some(p=>mine.has(p))?'MINE':'THEIRS';
-process.stdout.write(r(theirs)+' '+r(ours));
-" 2>/dev/null)"
-chk "two unrelated chains do not match" "THEIRS" "$(printf '%s' "$PROV" | awk '{print $1}')"
-chk "a related chain still matches"     "MINE"   "$(printf '%s' "$PROV" | awk '{print $2}')"
+# The drop-two rule lives in core as `identifyingPids` and is called by BOTH the
+# ownership filter and the exit-code caveat's per-agent scope. It used to be a
+# private helper in the MCP file, and the caveat work was one edit away from
+# writing a second implementation of it -- the project's most common defect
+# shape. Asserted by CALLING it rather than grepping for `pids.length - 2`,
+# which pinned a location instead of a property and broke the moment the
+# property moved.
+PROV="$(node "$RP/scripts/provcheck.js" 2>/dev/null)"
+chk "a stranger's chain is not claimed as mine" "yes" \
+    "$(printf '%s' "$PROV" | grep -q strangerNotMine && echo yes || echo no)"
+chk "a sibling session still reads as mine"     "yes" \
+    "$(printf '%s' "$PROV" | grep -q siblingIsMine && echo yes || echo no)"
+chk "the drop-two rule is one shared function"  "yes" \
+    "$(printf '%s' "$PROV" | grep -q dropsTwo && echo yes || echo no)"
+chk "a short chain keeps an identity"           "yes" \
+    "$(printf '%s' "$PROV" | grep -q keepsShortChain && echo yes || echo no)"
+chk "and the MCP file keeps no private copy"    "yes" \
+    "$(grep -q 'pids.length - 2' "$RP/packages/mcp/src/index.ts" && echo no || echo yes)"
 
 # Re-anchored: "belong to someone else" was the wording that told a reviewer to
 # abandon sessions they were using. The property being tested is that a session
@@ -1950,6 +1954,18 @@ chk "a recreated session starts over"        "yes" \
 chk "the first affected one is the full text" "yes" "$(printf '%s' "$DECAY" | grep -q firstIsFull && echo yes || echo no)"
 chk "the next two are one line"              "yes" "$(printf '%s' "$DECAY" | grep -q thenTwoLines && echo yes || echo no)"
 chk "and after that the token alone"         "yes" "$(printf '%s' "$DECAY" | grep -q thenTokenOnly && echo yes || echo no)"
+# ONCE PER AGENT, not once per session. The decay was keyed on the session name,
+# so a reviewer running the four-session layout this tool recommends got the same
+# ~90-word paragraph four times -- "correct content, but I'"'"'d read it on the first
+# one". A second reviewer the same round: "by the tenth time it was noise I was
+# skipping, which is how a warning gets missed on the occasion it matters." The
+# paragraph explains how SHELLS treat `;` -- a property of the reader, not of the
+# session, and the session-layout rule guarantees there are several.
+chk "an agent is told once"                  "yes" "$(printf '%s' "$DECAY" | grep -q agentGetsParagraph && echo yes || echo no)"
+chk "its second session stays quiet"         "yes" "$(printf '%s' "$DECAY" | grep -q secondSessionQuiet && echo yes || echo no)"
+# Silencing a cold agent is the expensive direction of this change.
+chk "a DIFFERENT agent is still told"        "yes" "$(printf '%s' "$DECAY" | grep -q otherAgentStillTold && echo yes || echo no)"
+chk "the marker rides every command anyway"  "yes" "$(printf '%s' "$DECAY" | grep -q markerEveryCommand && echo yes || echo no)"
 
 # ---- a warning must say WHERE IN THE COMMAND'"'"'S LIFE it arrived ------------------
 #
@@ -2216,6 +2232,14 @@ chk "it stays off REMOTE sessions"           "yes" \
 MARKER="$(node "$RP/scripts/markercheck.js" 2>/dev/null)"
 chk "a capped poll reaches the marker at all" "yes" "$(printf '%s' "$MARKER" | grep -q sawMarker && echo yes || echo no)"
 chk "and the marker never splices into a line" "yes" "$(printf '%s' "$MARKER" | grep -q ownLine && echo yes || echo no)"
+# The explanation decays; the facts do not. A reviewer polling a chatty job got
+# "~700 bytes of warning for ~60 bytes of data" every call and concluded "the
+# progress instrument isn't poll" -- they left for another session to wc -l the
+# output file instead.
+chk "the first omission explains itself"      "yes" "$(printf '%s' "$MARKER" | grep -q firstExplains && echo yes || echo no)"
+chk "a follow loop gets the short form"       "yes" "$(printf '%s' "$MARKER" | grep -q laterBrief && echo yes || echo no)"
+chk "the short form keeps the byte count"     "yes" "$(printf '%s' "$MARKER" | grep -q briefKeepsBytes && echo yes || echo no)"
+chk "and keeps the resume offset"             "yes" "$(printf '%s' "$MARKER" | grep -q briefKeepsOffset && echo yes || echo no)"
 
 # ---- guidance is serialized before the numbers it explains -------------------
 #
