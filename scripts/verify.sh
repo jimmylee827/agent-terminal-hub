@@ -1396,6 +1396,32 @@ chk "the CLI shows the caveat at all"        "yes" \
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 
+# ---- a verification method that returns a FALSE NEGATIVE --------------------
+#
+# The previous round fixed a disclosure gap: `doctor` had claimed the hub writes
+# nothing on a remote host, and a reviewer disproved it by finding
+# ~/.zsh_history modified. The fix added the disclosure AND recommended their
+# method — `find ~ -maxdepth 1 -newermt` — as the way to check.
+#
+# The next reviewer ran exactly that, mid-session, and got ZERO. zsh flushes
+# history when the shell EXITS, not per command. Measured here: 0 occurrences
+# with the session alive, 1 after killing it. So the recommended check fails at
+# precisely the moment an agent would run it — tidying up, before killing its
+# sessions — and produces a confident "nothing left in shell history" that is
+# false. mtime compounds it: it can read modified from an earlier flush while
+# holding none of the current session.
+#
+# A fix for a wrong claim that introduces a wrong CHECK is the same defect one
+# level up, and it was mine, one round old.
+chk "the history note says when it is written" "yes" \
+    "$(grep -q 'flushes history when the shell EXITS' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "and warns the live check is a false negative" "yes" \
+    "$(grep -q 'false' "$RP/packages/cli/src/index.ts" && grep -q 'checking mid-session shows NOTHING' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+chk "the doc no longer recommends the live check" "0" \
+    "$(grep -c 'which is the right way' "$SK" | tr -d ' ')"
+chk "and states the measured result"           "yes" \
+    "$(grep -q '0 occurrences with the' "$SK" && echo yes || echo no)"
+
 # ---- say which case a caveat applies to -------------------------------------
 #
 # The `wait` paragraph opens "Without the handle, treat an idle as a guess" and
@@ -1470,8 +1496,10 @@ chk "and discloses the shell history"         "yes" \
     "$(grep -q 'your shell writes its own' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "naming how to verify it"                 "yes" \
     "$(grep -q 'newermt' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+# Anchored mid-phrase: the sentence wraps, and matching across the break is the
+# mistake this file has made more than any other.
 chk "and the doc says the same"               "yes" \
-    "$(grep -q 'true of the hub and not of the visit' "$SK" && echo yes || echo no)"
+    "$(grep -q 'of the hub and not of the visit' "$SK" && echo yes || echo no)"
 
 # ---- a remedy must answer the question that was ASKED -----------------------
 #

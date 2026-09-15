@@ -705,9 +705,18 @@ does.** The helper is typed into the pane and lives in memory, so there is no
 hub file to find. The session's shell is a LOGIN shell, though, and your shell
 writes its own history: commands you run in a remote session land in
 `~/.zsh_history` (or the equivalent) on THAT machine and outlive the session.
-A reviewer found it with `find ~ -maxdepth 1 -newermt`, which is the right way
-to check rather than take anyone's word. Say so if the human asks what is left
-there — "the hub wrote nothing" is true of the hub and not of the visit.
+Say so if the human asks what is left there — "the hub wrote nothing" is true
+of the hub and not of the visit.
+
+**Do not try to verify this mid-session — you will get a false negative.** zsh
+flushes history when the shell EXITS, not per command, so a check while your
+sessions are still alive finds nothing and an agent tidying up would report
+"nothing left in shell history" and be wrong. Measured: 0 occurrences with the
+session open, 1 after killing it. An earlier version of this paragraph
+recommended `find ~ -maxdepth 1 -newermt` as the way to check, which is the
+trap — mtime can read modified from a previous flush while holding none of the
+current session's commands, so the two signals disagree and both are correct.
+Assume the commands will be there.
 
 A password prompt is the one safe case: it echoes nothing, so the password is
 in no file, and there is nothing to purge after a sudo handoff.
