@@ -2371,8 +2371,19 @@ chk "the doc answers having nothing to do"   "yes" \
     "$(grep -q 'end your turn — that is the answer' "$SK" && echo yes || echo no)"
 chk "and names the shell-tool bridge"        "yes" \
     "$(grep -q 'you are not' "$SK" && grep -q 'background job and let your harness' "$SK" && echo yes || echo no)"
+# Re-pointed after the duplicate was cut. `owner` was explained TWICE -- once in
+# the field list and again as a bolded paragraph -- and the second copy carried
+# the incident that produced it. Three reviewers in a row listed `owner` as read
+# and never needed, and the third was precise about why: it is emitted by `list`
+# alone, so an agent that creates sessions and works never sees it. What agents
+# DO act on is the half that survived: there is no field for live human
+# presence, and a resize is the evidence. That is the property worth pinning.
 chk "the doc explains what owner means"      "yes" \
-    "$(grep -q 'says who CREATED the session' "$SK" && echo yes || echo no)"
+    "$(grep -q 'who the terminal belongs to, not' "$SK" && echo yes || echo no)"
+chk "and that no field proves a human is there" "yes" \
+    "$(grep -q 'No field tells you a human is present' "$SK" && echo yes || echo no)"
+chk "naming the resize as the real evidence"  "yes" \
+    "$(grep -q 'a resize is real' "$SK" && echo yes || echo no)"
 chk "and that a noisy prompt is not detected" "yes" \
     "$(grep -q 'must go QUIET to be detected' "$SK" && echo yes || echo no)"
 chk "and that one ssh link carries them all" "yes" \

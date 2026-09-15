@@ -615,14 +615,10 @@ outright. Reach for a chain when the parts are quick and you want them all to
 run regardless; reach for another session when you need the exit code to mean
 something, or when one part is slow enough to block the rest.
 
-**`owner` says who CREATED the session, not who is using it.** It is set once,
-at creation, and never changes — so an agent-created session reads `agent`
-forever, including while a human is attached to it and typing in it. A reviewer
-watched you attach to answer a prompt and reasonably expected the field to
-move; it cannot. There is no field that tells you a human is present right now,
-and the one that used to imply it (`attached_clients`) was removed for counting
-the editor's own panel as a person. What you CAN rely on: a resize is real
-evidence someone attached, and it is reported to `run`, `poll` and `await`.
+**No field tells you a human is present right now.** `owner` is set at creation
+and never moves, and `attached_clients` was removed for counting the editor's
+own panel as a person. What you CAN rely on: a resize is real evidence someone
+attached, and it is reported to `run`, `poll` and `await`.
 
 **A prompt must go QUIET to be detected, so a noisy one is not.** Detection
 needs about 1.2 seconds of silence after prompt-shaped text, plus a command
