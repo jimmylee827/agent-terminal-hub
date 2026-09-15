@@ -165,7 +165,40 @@ if (process.argv.includes('--selftest')) {
       compare('wait --handle: its duration', /\d+s/.test(c), /"took_seconds"/.test(m));
     }
 
-    // 3. The exit-code caveat on a compound line. Absent from CLI text mode for
+    // 3. `this_server.started_utc` must be a real process start, and must agree
+    //    with what the CLI's stale-server report says about the same pid.
+    //
+    //    It did not. MCP reported one time, the CLI another, 78 minutes apart
+    //    for one process, and a reviewer could not tell which to believe. The
+    //    MCP field was the BUILD's mtime wearing a start-time name — visible in
+    //    the payload, because started_utc and build_utc were the same string.
+    {
+      const m = mcpFacts(await mcp([call(2, 'doctor', {})], 3000));
+      let started = null;
+      let loaded = null;
+      // Parse the WHOLE payload. The doctor result is pretty-printed JSON over
+      // many lines, so taking the first line that starts with `{` yields the
+      // bare brace and throws — which reported both facts as missing on a build
+      // where they were present. Third detection bug in this file; each one
+      // found only by running it against a KNOWN-BAD build as well as a good
+      // one, which is why both directions are always exercised.
+      try {
+        const j = JSON.parse(m.slice(m.indexOf('{'), m.lastIndexOf('}') + 1));
+        started = j.this_server?.started_utc ?? null;
+        loaded = j.this_server?.loaded_build_utc ?? null;
+      } catch {
+        /* reported as a hole below */
+      }
+      compare('this_server: reports a start time at all', !!started, !!started);
+      // The tell: two differently-named fields holding one value.
+      compare(
+        'this_server: start time is not just the build mtime',
+        started !== null && started !== loaded,
+        started !== null && started !== loaded,
+      );
+    }
+
+    // 4. The exit-code caveat on a compound line. Absent from CLI text mode for
     //    twenty-seven rounds while MCP carried it the whole time.
     {
       const c = cliAll(['run', n, '--', 'echo a; echo b']);

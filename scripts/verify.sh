@@ -50,7 +50,25 @@ if [ "${ATH_VERIFY_LOCK:-}" = "" ]; then
     rm -rf "$_vlock"; mkdir "$_vlock" 2>/dev/null || { echo "verify.sh: cannot lock" >&2; exit 2; }
   fi
   echo "$$" > "$_vlock/pid"
-  trap 'rm -rf "$_vlock"' EXIT INT TERM
+  # Clean up OUR OWN test sessions even when killed.
+  #
+  # A normal run tidies up; an interrupted one leaves its sessions behind, and I
+  # interrupted several during a timing investigation. A reviewer then found an
+  # idle `_tc74688` in their listing, could not attribute it, and correctly
+  # refused to kill it — the rule says do not kill what you did not create. So
+  # my debris became a thing a cold agent had to reason about and leave.
+  #
+  # Every session this suite makes carries $$ in its name, so this removes
+  # exactly its own and can never touch a human's or another agent's.
+  _vcleanup() {
+    rm -rf "$_vlock"
+    "$ATH_BIN" ls --json 2>/dev/null \
+      | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{
+          JSON.parse(d).map(s=>s.name).filter(n=>n.includes(process.argv[1])).forEach(n=>console.log(n));
+        }catch(e){}})' "$$" 2>/dev/null \
+      | while read -r _s; do [ -n "$_s" ] && "$ATH_BIN" kill "$_s" --force >/dev/null 2>&1; done
+  }
+  trap '_vcleanup' EXIT INT TERM
   export ATH_VERIFY_LOCK="$_vlock"
 fi
 
@@ -1471,6 +1489,37 @@ chk "the CLI shows the caveat at all"        "yes" \
     "$(grep -q 'result.exitCodeCaveat' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
 chk "and the short form after it"            "yes" \
     "$(grep -q 'result.exitCodeShortNote' "$RP/packages/cli/src/index.ts" && echo yes || echo no)"
+
+# ---- a field must mean what its name says ------------------------------------
+#
+# `this_server.started_utc` MEANT when the process started and reported the
+# build's mtime. A reviewer read it from MCP, then read the CLI naming the same
+# pid with a start time 78 minutes different, and could not tell which was
+# wrong. It was the MCP one, and it was never a start time.
+#
+# The tell was in the payload: `started_utc` and `build_utc` were the SAME
+# STRING, because both read BUILD_LOADED_MS. Two differently-named fields
+# holding one value is the shape of a mislabel, and it shipped anyway.
+chk "started_utc is the process start"       "yes" \
+    "$(node -e '
+const c=require("'"$RP"'/packages/core/dist/index.js");
+const t=c.thisServer();
+const real=Date.now()-process.uptime()*1000;
+const got=Date.parse(t.started_utc.replace(" ","T")+"Z");
+// within a few seconds of the real start, and NOT equal to the build mtime
+process.stdout.write(Math.abs(got-real)<10000 && t.started_utc!==t.build_utc ? "yes":"no")' 2>/dev/null)"
+chk "and the loaded build is named as such" "yes" \
+    "$(grep -q 'loaded_build_utc' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+
+# ---- an interrupted suite must not leave sessions behind --------------------
+#
+# A killed run left `_tc74688` idle in the listing. A reviewer found it, could
+# not attribute it, and correctly refused to kill it — the rule says do not kill
+# what you did not create. My debris became something a cold agent had to reason
+# about and then leave. Every session this suite creates carries its pid, so the
+# EXIT trap removes exactly its own.
+chk "the suite cleans its own sessions on exit" "yes" \
+    "$(grep -q '_vcleanup' "$RP/scripts/verify.sh" && echo yes || echo no)"
 
 # ---- one capability, one surface, one sentence covering both ----------------
 #

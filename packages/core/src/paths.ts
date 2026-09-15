@@ -439,7 +439,13 @@ export async function staleServersReport(servers: StaleServer[]): Promise<string
  * the notice "reports two stale pids; it doesn't say which server is serving
  * this call" — and had to run `ps` to answer it.
  */
-export function thisServer(): { pid: number; started_utc: string; build_utc: string; current: boolean } {
+export function thisServer(): {
+  pid: number;
+  started_utc: string;
+  loaded_build_utc: string;
+  build_utc: string;
+  current: boolean;
+} {
   const iso = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
   let built = 0;
   try {
@@ -447,9 +453,26 @@ export function thisServer(): { pid: number; started_utc: string; build_utc: str
   } catch {
     built = 0;
   }
+  // `started_utc` MEANT when this process started, and reported the build's
+  // mtime instead.
+  //
+  // A reviewer read `this_server` from MCP — "started_utc 08:29:27" — and then
+  // the CLI's stale-server report naming the same pid as "started 09:47:55".
+  // 78 minutes apart, about one process. They could not tell which was wrong
+  // and said so; it is the MCP one, and it was never a start time at all.
+  //
+  // The tell was visible in the payload and I never looked: `started_utc` and
+  // `build_utc` were the SAME STRING, because both read BUILD_LOADED_MS. Two
+  // differently-named fields holding one value is the shape of a mislabel.
+  //
+  // `process.uptime()` is the real answer, exact and free. The build this
+  // process LOADED is still worth reporting — it is what staleness compares —
+  // so it keeps a name that says what it is.
+  const startedMs = Date.now() - process.uptime() * 1000;
   return {
     pid: process.pid,
-    started_utc: iso(BUILD_LOADED_MS),
+    started_utc: iso(startedMs),
+    loaded_build_utc: iso(BUILD_LOADED_MS),
     build_utc: iso(built || BUILD_LOADED_MS),
     current: buildStaleness() === undefined,
   };
