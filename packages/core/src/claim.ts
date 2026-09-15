@@ -40,6 +40,51 @@ function sanitize(key: string): string {
   return key.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 180) || '_';
 }
 
+/**
+ * Drop claims whose request is gone.
+ *
+ * `doctor --artifacts` states the bound as "cleared when the request resolves",
+ * and that is not what happens: a claim is released by the editor WINDOW that
+ * holds it, so a window which exits without releasing — closed, crashed,
+ * reloaded — leaves the file behind for good. A reviewer accounting for disk
+ * found three, two of them hours old, and pointed out that they outlive the
+ * requests they describe, against their stated bound.
+ *
+ * Same resolution as the rc/ sentinels: rather than soften the sentence, make
+ * it true. A claim names exactly one request, so a claim with no request is
+ * unambiguously dead — no liveness guess, no pid check, nothing to race.
+ */
+export async function reapOrphanClaims(): Promise<number> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(CLAIM_DIR);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    const m = entry.match(/^request\.([A-Za-z0-9_-]+)\.claim$/);
+    if (!m) continue;
+    const request = path.join(ATH_HOME, 'requests', `${m[1]}.json`);
+    try {
+      await fs.access(request);
+      continue; // the request is still on disk; the claim is legitimate
+    } catch {
+      /* no request — the claim describes nothing */
+    }
+    try {
+      await fs.unlink(path.join(CLAIM_DIR, entry));
+      await fs.unlink(path.join(ELECTION_DIR, `${entry.replace(/\.claim$/, '')}.election`)).catch(
+        () => undefined,
+      );
+      removed++;
+    } catch {
+      /* raced another reaper */
+    }
+  }
+  return removed;
+}
+
 function claimPath(key: string): string {
   return path.join(CLAIM_DIR, `${sanitize(key)}.claim`);
 }

@@ -27,6 +27,7 @@ import { classify, isNesting, isShell, looksLikeCredentialPrompt } from './state
 import { FS, tmux } from './tmux';
 import type { CreateOptions, Session } from './types';
 import { ancestorPids, shellQuote, sleep, stripAnsi } from './util';
+import { reapOrphanClaims } from './claim';
 
 const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -407,6 +408,11 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   // the right moment: infrequent, already doing filesystem work, and the point
   // at which the directory is about to grow again.
   await reapStaleRc().catch(() => 0);
+  // Same moment, same reasoning: a claim whose request is gone describes
+  // nothing, and `doctor` states the bound as "cleared when the request
+  // resolves". It is released by the editor window that holds it, so a window
+  // that exits without releasing left one behind permanently.
+  await reapOrphanClaims().catch(() => 0);
   await setMeta(name, 'pinned', opts.pin ? '1' : '0');
   await setMeta(name, 'owner', opts.owner || 'agent');
   // Where the session was created FROM, which is usually the project it belongs

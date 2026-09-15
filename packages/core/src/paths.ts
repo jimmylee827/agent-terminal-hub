@@ -123,7 +123,7 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     holds: 'which editor window owns a request — pid and timestamp only',
     purged: false,
     sensitive: false,
-    bounded: 'cleared when the request resolves',
+    bounded: 'released by the window holding it; any left orphaned are swept when a session is next created',
   },
   {
     name: 'election/',

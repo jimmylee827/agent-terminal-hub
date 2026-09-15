@@ -1550,6 +1550,46 @@ process.stdout.write(Math.abs(got-real)<10000 && t.started_utc!==t.build_utc ? "
 chk "and the loaded build is named as such" "yes" \
     "$(grep -q 'loaded_build_utc' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
 
+# ---- a claim must not outlive the request it names --------------------------
+#
+# `doctor --artifacts` stated the bound as "cleared when the request resolves".
+# It is not: a claim is released by the editor WINDOW holding it, so a window
+# that exits without releasing — closed, crashed, reloaded — leaves the file
+# permanently. A reviewer accounting for disk found three, two of them hours
+# old, and noted they outlive the requests they describe.
+#
+# Same resolution as the rc/ sentinels: make the sentence true rather than
+# soften it. A claim names exactly one request, so a claim with no request is
+# unambiguously dead — no liveness guess and nothing to race.
+CLAIMS="$(node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const fs=require("fs"), os=require("os"), path=require("path");
+const dir=path.join(process.env.ATH_HOME||path.join(os.homedir(),".ath"),"claim");
+(async()=>{
+  const out=[];
+  fs.mkdirSync(dir,{recursive:true});
+  const orphan=path.join(dir,"request.zzselftest.claim");
+  fs.writeFileSync(orphan,JSON.stringify({pid:999999,at:1}));
+  await a.reapOrphanClaims();
+  out.push(fs.existsSync(orphan)?"ORPHANKEPT":"orphanSwept");
+  // one whose request exists must survive
+  const n="clv"+process.pid;
+  await a.create({name:n,cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get(n).catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,600));}
+  const r=await a.requestHuman(n,"probe");
+  const live=path.join(dir,"request."+r.id+".claim");
+  fs.writeFileSync(live,JSON.stringify({pid:process.pid,at:Date.now()}));
+  await a.reapOrphanClaims();
+  out.push(fs.existsSync(live)?"liveKept":"LIVESWEPT");
+  await a.kill(n).catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+chk "an orphaned claim is swept"             "yes" "$(printf '%s' "$CLAIMS" | grep -q orphanSwept && echo yes || echo no)"
+chk "a claim with a live request is kept"    "yes" "$(printf '%s' "$CLAIMS" | grep -q liveKept && echo yes || echo no)"
+chk "and the stated bound names who clears"  "yes" \
+    "$(grep -q 'released by the window holding it' "$RP/packages/core/src/paths.ts" && echo yes || echo no)"
+
 # ---- the suite must leave NO transcripts of its own --------------------------
 #
 # A reviewer accounting for disk found hundreds of `_t*`, `_tc*`, `dc-*`, `zt*`

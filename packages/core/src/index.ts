@@ -117,6 +117,7 @@ export {
   reapClaimsForDeadSessions,
   releaseClaim,
   releaseOwnClaim,
+  reapOrphanClaims,
 } from './claim';
 export type { ClaimInfo, ClaimOptions, Election } from './claim';
 export {
