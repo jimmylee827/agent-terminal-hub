@@ -4053,7 +4053,12 @@ export function inheritedContextNote(
     const vars = (s.remoteEnv ?? '')
       .split('\n')
       .filter(Boolean)
-      .map((a) => {
+      .map((raw) => {
+        // Stored VERBATIM, `export` and all, because replay has to restore the
+        // assignment as it was — see `envAssignments`. For DISPLAY that prefix
+        // is redundant beside the word "env" and reads as a stutter:
+        // "env export ATH_AUDIT_RUN=…". Dropped here only.
+        const a = raw.replace(/^export\s+/, '');
         const eq = a.indexOf('=');
         if (eq < 0) return a;
         const k = a.slice(0, eq);
