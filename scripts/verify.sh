@@ -1308,7 +1308,7 @@ chk "no wire field is undocumented"          "0" \
 # REPORTED, then assert a clean input passes. An auditor that has never been
 # watched failing is indistinguishable from no auditor — which was the literal
 # state of all four until now.
-for a in parity consumers surfaces docdrift prose; do
+for a in parity consumers surfaces docdrift prose twosurface; do
   chk "$a can prove it fails"              "0" \
       "$(node "$RP/scripts/$a.js" --selftest >/dev/null 2>&1 && echo 0 || echo 1)"
 done
@@ -1322,6 +1322,24 @@ done
 # message text against SOURCE, where a wrapped line silently stops matching.
 chk "no new prose in a surface layer"        "0" \
     "$(node "$RP/scripts/prose.js" >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# ---- the two surfaces must report the same FACTS ----------------------------
+#
+# Divergence has two halves and they need different instruments. `prose.js`
+# ratchets COMMISSION — a sentence authored into one surface — and proving that
+# just now, adding a sentence to MCP alone fails it. It is blind to OMISSION,
+# one surface simply lacking what the other has, and omission is what every
+# recent finding actually was: the remote-footprint disclosure on the CLI alone
+# while its accuracy was corrected twice; `wait --handle` returning the
+# command's outcome on MCP and the bare word `idle` on the CLI; the exit-code
+# caveat absent from CLI text mode for twenty-seven rounds.
+#
+# Source greps cannot see omission — a thing that is absent leaves nothing to
+# match, which is why `surfaces.js` passed through all of it. This drives BOTH
+# surfaces for real and compares what each emits. Demonstrated failing on both
+# of those regressions, in both directions, before being trusted here.
+chk "both surfaces report the same facts"    "0" \
+    "$(node "$RP/scripts/twosurface.js" >/dev/null 2>&1 && echo 0 || echo 1)"
 chk "the doc names the host fields"          "yes" \
     "$(grep -q 'cwd_host' "$SK" && echo yes || echo no)"
 chk "and no longer calls cwd the one place" "0" \
