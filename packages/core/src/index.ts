@@ -98,6 +98,7 @@ export {
   readTail,
   tailIsAllFurniture,
   EMPTY_TAIL_ADVICE,
+  inheritedContextNote,
   logNearTrimNote,
   trimProspect,
   run,

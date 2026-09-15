@@ -18,6 +18,7 @@
 // the filter is real and must keep working:
 //   creator EXITED  -> offered, and labelled as inherited
 //   creator RUNNING -> withheld, and said to belong to a running agent
+const { unlinkSync } = require('node:fs');
 const path = require('node:path');
 const core = require(path.join(__dirname, '..', 'packages', 'core', 'dist', 'index.js'));
 
@@ -47,10 +48,44 @@ const OTHER_LIVE = [live, live, 999003, 999004];
     const orphan = list.find((s) => s.name === 'oc-orphan');
     out.push(orphan ? 'orphanExists' : 'ORPHANMISSING');
     out.push(gone(orphan?.creatorPids ?? []) ? 'orphanClassifiedFree' : 'ORPHANWITHHELD');
+
+    // What the adopted session is CARRYING, rather than an instruction to go
+    // and find out. `parallel_work` used to say the session "may carry a
+    // working directory and exported variables... check with `pwd` and `env`
+    // before trusting the context". A reviewer read that, did not check, and
+    // discovered by accident at the end of its audit that the session it had
+    // adopted still held AUDIT_RUN from a PREVIOUS run of the same task. It
+    // escaped damage only by having spelled a literal path instead of using
+    // $AUDIT_DIR. The hub records both facts already, so it was asking the
+    // agent to discover something it knew.
+    const carried = core.inheritedContextNote([
+      { name: 'bulk', remote: 'h', remoteCwd: '/tmp/old', remoteEnv: 'AUDIT_RUN=stale-value' },
+    ]);
+    out.push(/AUDIT_RUN=stale-value/.test(carried) ? 'showsStaleVar' : 'HIDESSTALEVAR');
+    out.push(/cwd \/tmp\/old/.test(carried) ? 'showsCwd' : 'HIDESCWD');
+    // Absence must not read as "nothing is set": env is harvested for ssh
+    // replay, so a LOCAL session has none recorded and must say so rather than
+    // list nothing.
+    const localCarried = core.inheritedContextNote([{ name: 'l', cwd: '/tmp' }]);
+    out.push(/not tracked for local sessions/.test(localCarried) ? 'localSaysUntracked' : 'LOCALSILENT');
+    // And a closing clause must not contradict the item it closes.
+    const emptyCarried = core.inheritedContextNote([{ name: 'e', remote: 'h', remoteCwd: '/x' }]);
+    out.push(/ALREADY SET/.test(emptyCarried) ? 'CLAIMSSETWITHNONE' : 'noFalseSetClaim');
   } catch (e) {
     out.push(`THREW:${String(e.message).slice(0, 50)}`);
   } finally {
     for (const n of names) await core.kill(n).catch(() => {});
+    // This probe's own transcripts. `kill` leaves them; only `purge --dead`
+    // unlinks, and that would take a human's dead sessions with it.
+    for (const n of names) {
+      for (const suffix of ['.log', '.trim']) {
+        try {
+          unlinkSync(core.logPath(n).replace(/\.log$/, suffix));
+        } catch {
+          /* never existed, which is the good case */
+        }
+      }
+    }
   }
   process.stdout.write(out.join(' '));
 })();

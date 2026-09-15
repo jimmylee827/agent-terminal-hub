@@ -585,6 +585,32 @@ function dropLeadingMarkerFragment(raw: string): string {
   return raw.slice(firstSentinel + SENTINEL.length);
 }
 
+/**
+ * Join head, marker and tail so the marker OWNS a line.
+ *
+ * Both cap sites align their cut to a line boundary, and both fall back to an
+ * arbitrary byte when the head window holds no newline at all — a single line
+ * longer than the window, which is ordinary for `shasum` output, a long JSON
+ * line, or any small `max_bytes`. The fallback then splices the marker into the
+ * middle of a line:
+ *
+ *   …a316643c6d36a61829b51d6d4838736  /System/L[ath: 26238934 bytes omitted…]
+ *
+ * A reviewer hit exactly that and named the real cost: they were READING, so it
+ * only looked wrong, "but if I had been parsing the poll stream rather than
+ * reading it, this would have corrupted it silently". A checksum line that
+ * exists whole in neither half is the same loss `readLogCapped` already refuses
+ * to accept at its aligned cut — the fallback just wasn't held to it.
+ *
+ * Guaranteeing the leading newline costs one byte and makes the marker
+ * line-addressable: a line-oriented reader can now drop it on the `[ath:`
+ * prefix instead of finding it welded to real output.
+ */
+function withMarkerOnOwnLine(head: string, note: string, tail: string): string {
+  const lead = head.length === 0 || head.endsWith('\n') ? '' : '\n';
+  return `${head}${lead}${note}\n${tail}`;
+}
+
 async function readLogCapped(
   file: string,
   since: number,
@@ -706,7 +732,7 @@ async function readLogCapped(
       : `[ath: ${bytes} bytes omitted here — on disk as of this call, read them with ` +
         `since=${logicalResume}. A later trim can still discard them; read now if you need them.]`;
   return {
-    raw: `${dropLeadingMarkerFragment(head)}${note}\n${tail}`,
+    raw: withMarkerOnOwnLine(dropLeadingMarkerFragment(head), note, tail),
     // `atRisk` travels WITH the numbers, because the caller that renders them
     // has no way to work it out. The MCP layer built its own `omitted_note`
     // from a flat string saying the bytes are "NOT lost", while this function's
@@ -789,7 +815,11 @@ function capRunOutput(
       `this gap. A later trim can discard it. For output this size, redirect it to a file on ` +
       `the host instead of reading it back through the transcript.]`;
   return {
-    text: `${buf.subarray(0, headBytes).toString('utf8')}${note}\n${buf.subarray(tailFrom).toString('utf8')}`,
+    text: withMarkerOnOwnLine(
+      buf.subarray(0, headBytes).toString('utf8'),
+      note,
+      buf.subarray(tailFrom).toString('utf8'),
+    ),
     omittedBytes,
   };
 }
@@ -3879,6 +3909,87 @@ export function logNearTrimNote(bytes: number): string {
       : `This is the warning you get while there is still time to act. `) +
     `If you need this job's output, write it to a file on the host now, ` +
     `${p.past ? 'while it is still here' : 'rather than relying on the transcript'}.`
+  );
+}
+
+/**
+ * What an adopted session is CARRYING — not an instruction to go find out.
+ *
+ * `parallel_work` offers sessions left behind by an exited run, and told the
+ * agent they "may carry a working directory and exported variables from that
+ * earlier run: check with `pwd` and `env` before trusting the context."
+ *
+ * A reviewer read that, did not check, and found out at the very end of its
+ * audit — by accident, through an unrelated cross-session probe — that the
+ * session it had adopted still held `AUDIT_RUN='ath-audit-20260915'` from a
+ * previous run of the same task. It escaped damage only because it had spelled
+ * a literal path instead of using `$AUDIT_DIR`; with `cd "$AUDIT_DIR"` it would
+ * have written 55 MiB into the previous run's directory and reported on the
+ * wrong files. Their own verdict was "the tool told me and I didn't listen".
+ *
+ * That is the correct reading of the incident and the wrong conclusion to draw
+ * from it. The hub RECORDS both facts — `remoteCwd` and `remoteEnv` are session
+ * metadata it maintains for replay after a reconnect — so it was asking the
+ * agent to go and discover something it already knew. An instruction that can
+ * be ignored is strictly worse than a value that has to be read past, and this
+ * also gives `remote_env` the accessor a reviewer noted it never had: "the only
+ * piece of session state with no accessor".
+ *
+ * Bounded deliberately. The point is to make a stale variable VISIBLE, not to
+ * paste an environment into a tool result.
+ */
+const INHERITED_VARS_SHOWN = 6;
+const INHERITED_VALUE_CHARS = 40;
+
+export function inheritedContextNote(
+  sessions: { name: string; cwd?: string; remote?: string; remoteCwd?: string; remoteEnv?: string }[],
+): string {
+  const described: string[] = [];
+  // "These are ALREADY SET" is false when the list is "no exported variables
+  // recorded", and a closing clause that contradicts the item it closes is the
+  // same defect this whole note exists to remove.
+  let anyVars = false;
+  for (const s of sessions) {
+    const bits: string[] = [];
+    const dir = s.remoteCwd || s.cwd;
+    if (dir) bits.push(`cwd ${dir}`);
+    // Env is harvested for REPLAY across an ssh reconnect, so it is recorded
+    // for remote sessions only. On a local one there is nothing to show, and
+    // showing nothing would read as "nothing is set" — the absence-as-evidence
+    // mistake this project has now made in three separate messages. Say which
+    // it is.
+    if (!s.remote) {
+      bits.push('env not tracked for local sessions — check with `env`');
+      if (bits.length) described.push(`${s.name}: ${bits.join(', ')}`);
+      continue;
+    }
+    const vars = (s.remoteEnv ?? '')
+      .split('\n')
+      .filter(Boolean)
+      .map((a) => {
+        const eq = a.indexOf('=');
+        if (eq < 0) return a;
+        const k = a.slice(0, eq);
+        const v = a.slice(eq + 1);
+        return `${k}=${v.length > INHERITED_VALUE_CHARS ? `${v.slice(0, INHERITED_VALUE_CHARS)}…` : v}`;
+      });
+    if (vars.length) {
+      anyVars = true;
+      const shown = vars.slice(0, INHERITED_VARS_SHOWN).join(' ');
+      bits.push(
+        vars.length > INHERITED_VARS_SHOWN
+          ? `env ${shown} +${vars.length - INHERITED_VARS_SHOWN} more`
+          : `env ${shown}`,
+      );
+    } else {
+      bits.push('no exported variables recorded');
+    }
+    if (bits.length) described.push(`${s.name}: ${bits.join(', ')}`);
+  }
+  if (!described.length) return '';
+  return (
+    ` Carrying from that run — ${described.join('; ')}.` +
+    (anyVars ? ' These are ALREADY SET in the shell you would be adopting.' : '')
   );
 }
 

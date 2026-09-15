@@ -1898,9 +1898,21 @@ chk "parallel_work separates the two cases"  "yes" \
     "$(grep -q 'left behind by an exited one' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
 chk "and says a withheld one is still owned" "yes" \
     "$(grep -q 'that agent is still running' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
-# Adopting a stranger's shell means adopting its cwd and exports.
-chk "and warns about inherited context"      "yes" \
-    "$(grep -q 'before trusting the context' "$RP/packages/mcp/src/index.ts" && echo yes || echo no)"
+# Adopting a stranger's shell means adopting its cwd and exports — so SHOW
+# them. This used to assert the sentence "check with `pwd` and `env` before
+# trusting the context", which a reviewer read, did not act on, and was then
+# bitten by: the adopted session still held AUDIT_RUN from a previous run of
+# the same audit. The hub records cwd and env already; asking the agent to go
+# and discover them was asking it to rediscover what the tool knew.
+chk "inherited context is shown, not asked for" "yes" \
+    "$(printf '%s' "$OWNER" | grep -q showsStaleVar && echo yes || echo no)"
+chk "including the working directory"        "yes" \
+    "$(printf '%s' "$OWNER" | grep -q showsCwd && echo yes || echo no)"
+# Absence must not read as evidence of absence.
+chk "a local session says env is untracked"  "yes" \
+    "$(printf '%s' "$OWNER" | grep -q localSaysUntracked && echo yes || echo no)"
+chk "and nothing claims vars are set when none are" "yes" \
+    "$(printf '%s' "$OWNER" | grep -q noFalseSetClaim && echo yes || echo no)"
 
 # ---- name the stage, not the whole pipeline ---------------------------------
 #
@@ -2191,6 +2203,32 @@ chk "it stays off REMOTE sessions"           "yes" \
 # the noise earlier rounds complained about. Driven against this machine's REAL
 # interfaces — an off-subnet RFC1918 address must warn, and a public address, a
 # CGNAT/VPN address and a plain command must not.
+# ---- an omission marker must OWN its line ------------------------------------
+#
+# Both cap sites align their cut to a line boundary and both fall back to an
+# arbitrary byte when the head window holds no newline — one line longer than
+# the window, ordinary for `shasum` output or any small max_bytes. The marker
+# was then welded into the middle of a line:
+#   ...4838736  /System/L[ath: 26238934 bytes omitted here...]
+# The reviewer who hit it was reading, so it merely looked wrong, then named the
+# real cost: "if I had been parsing the poll stream rather than reading it, this
+# would have corrupted it silently."
+MARKER="$(node "$RP/scripts/markercheck.js" 2>/dev/null)"
+chk "a capped poll reaches the marker at all" "yes" "$(printf '%s' "$MARKER" | grep -q sawMarker && echo yes || echo no)"
+chk "and the marker never splices into a line" "yes" "$(printf '%s' "$MARKER" | grep -q ownLine && echo yes || echo no)"
+
+# ---- guidance is serialized before the numbers it explains -------------------
+#
+# `exit_code` is the second key of a run result and `what_to_do` was assigned
+# much later, so a sudo refusal returned "exit_code": 0 near the top and the
+# explanation near the bottom. The 0 belonged to a trailing echo, exactly as
+# exit_code_covers said; a reviewer read the guidance first as instructed and
+# still called the object "contradictory on its face".
+ORDER="$(node "$RP/scripts/ordercheck.js" 2>/dev/null)"
+chk "a refusal still carries guidance"        "yes" "$(printf '%s' "$ORDER" | grep -q sawGuidance && echo yes || echo no)"
+chk "guidance is the first key, not the last" "yes" "$(printf '%s' "$ORDER" | grep -q guidanceFirst && echo yes || echo no)"
+chk "both payload serializers order it"       "yes" "$(printf '%s' "$ORDER" | grep -q bothSerializers && echo yes || echo no)"
+
 NETW="$(node "$RP/scripts/netcheck.js" 2>/dev/null)"
 chk "an off-subnet LAN probe warns"          "yes" "$(printf '%s' "$NETW" | grep -q offSubnetWarns && echo yes || echo no)"
 chk "a public address does not"              "yes" "$(printf '%s' "$NETW" | grep -q publicQuiet   && echo yes || echo no)"

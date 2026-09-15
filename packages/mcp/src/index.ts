@@ -30,6 +30,7 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  inheritedContextNote,
   buildStaleness,
   staleBuildNote,
   staleServers,
@@ -67,8 +68,38 @@ function text(body: string, isError = false): ToolResult {
   return { content: [{ type: 'text', text: body }], ...(isError ? { isError: true } : {}) };
 }
 
+/**
+ * Serialize `what_to_do` FIRST, because that is the order the reader is told to
+ * use.
+ *
+ * The documentation says to read `what_to_do` before the numbers. The payload
+ * said the opposite: `exit_code` is the second key in every run result, and
+ * `what_to_do` is assigned much later, so it lands near the bottom of a long
+ * object. A reviewer's very first probe was a `sudo` refusal and came back as
+ *
+ *   "exit_code": 0, … "what_to_do": "…needs a credential only you can type…"
+ *
+ * — the 0 belonging to a trailing `echo`, exactly as `exit_code_covers` said.
+ * They read the guidance first, as instructed, and still called the object
+ * "contradictory on its face", noting that "the ordering of those fields is
+ * doing a lot of work".
+ *
+ * It was, and it was doing it against the reader. Both facts are true and both
+ * stay; only the order changes, so the first thing read is the field that
+ * explains the rest. Done in the shared serializer rather than at the ~20 sites
+ * that set `what_to_do`, because a rule applied per-site is a rule that holds
+ * at nineteen of them.
+ */
+function actionFirst(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const v = value as Record<string, unknown>;
+  if (!('what_to_do' in v)) return value;
+  const { what_to_do, ...rest } = v;
+  return { what_to_do, ...rest };
+}
+
 function json(value: unknown): ToolResult {
-  return text(JSON.stringify(value, null, 2));
+  return text(JSON.stringify(actionFirst(value), null, 2));
 }
 
 /**
@@ -186,7 +217,7 @@ function jsonWithOutput(
           : '(no output — the command printed nothing)\n',
     });
   }
-  blocks.push({ type: 'text', text: `--- ath ---\n${JSON.stringify(value, null, 2)}` });
+  blocks.push({ type: 'text', text: `--- ath ---\n${JSON.stringify(actionFirst(value), null, 2)}` });
   return { content: blocks };
 }
 
@@ -1765,7 +1796,8 @@ async function parallelHint(current: string): Promise<string> {
     const creatorGone = (s: { creatorPids?: number[] }): boolean =>
       !identifying(s.creatorPids ?? []).some(pidAlive);
     const ours = freeSessions.filter(isOurs).map((s) => s.name);
-    const orphaned = freeSessions.filter((s) => !isOurs(s) && creatorGone(s)).map((s) => s.name);
+    const orphanedSessions = freeSessions.filter((s) => !isOurs(s) && creatorGone(s));
+    const orphaned = orphanedSessions.map((s) => s.name);
     const theirs = freeSessions
       .filter((s) => !isOurs(s) && !creatorGone(s))
       .map((s) => s.name);
@@ -1779,8 +1811,8 @@ async function parallelHint(current: string): Promise<string> {
         `Idle and available for work alongside this: ${orphaned.slice(0, 4).join(', ')}. ` +
         `These were created by an agent run that has since exited, so they belong to nobody ` +
         `now — reuse them rather than creating more, which is also what keeps a sudo ` +
-        `timestamp on one TTY. They may carry a working directory and exported variables ` +
-        `from that earlier run: check with \`pwd\` and \`env\` before trusting the context.` +
+        `timestamp on one TTY.` +
+        inheritedContextNote(orphanedSessions.slice(0, 4)) +
         (theirs.length > 0
           ? ` (${theirs.length} other idle session(s) belong to a RUNNING agent and are not offered.)`
           : '')

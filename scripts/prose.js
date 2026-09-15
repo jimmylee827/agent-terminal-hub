@@ -167,8 +167,16 @@ if (risen.length) {
   process.exit(1);
 }
 
-const total = Object.values(counts).reduce((a, b) => a + b, 0);
+// Reported per dimension, not summed.
+//
+// This printed one total across every key — adding SKILL.md's WORD count to the
+// surfaces' SENTENCE counts and labelling the result "surface sentence(s)". It
+// said 9055 when there were 324, a number belonging to no measurement at all.
+// Harmless to the ratchet, which compares each key separately, and exactly the
+// kind of confidently-worded false figure this script was built to stop.
+const sentences = SURFACES.reduce((a, rel) => a + counts[rel], 0);
+const docWords = counts['skills/agent-terminal/SKILL.md (words)'];
 console.log(
-  `prose: ${total} surface sentence(s), at or below baseline` +
+  `prose: ${sentences} surface sentence(s), ${docWords} doc word(s), at or below baseline` +
     (fell.length ? ` — down: ${fell.join(', ')}` : ''),
 );

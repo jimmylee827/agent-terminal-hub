@@ -38,6 +38,13 @@ const EXCUSED = new Map([
       'marker in the output stream, which is the same fact in the place a ' +
       'terminal reader actually looks.',
   ],
+  [
+    'inheritedContextNote',
+    'MCP only: it qualifies `parallel_work`, which exists because a tool-calling ' +
+      'agent cannot see the other sessions on the box. A human running `ath ' +
+      'start` is already in a shell and can read its own `pwd` and `env`; the ' +
+      'CLI has no parallel-work surface for this to attach to.',
+  ],
 ]);
 
 const names = [];

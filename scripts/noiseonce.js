@@ -80,6 +80,19 @@ const call = (id, name, args) => ({
   } finally {
     const core = require(path.join(__dirname, '..', 'packages', 'core', 'dist', 'index.js'));
     for (const n of made) await core.kill(n).catch(() => {});
+    // And this probe's transcripts. `kill` leaves them behind; three `no*.log`
+    // files per run is the same unbounded-log-directory litter a reviewer
+    // counted and called out.
+    const { unlinkSync } = require('node:fs');
+    for (const n of made) {
+      for (const suffix of ['.log', '.trim']) {
+        try {
+          unlinkSync(core.logPath(n).replace(/\.log$/, suffix));
+        } catch {
+          /* never existed, which is the good case */
+        }
+      }
+    }
   }
   process.stdout.write(out.join(' '));
 })();
