@@ -4513,26 +4513,38 @@ printf '%s' "$err" | grep -q "session_gone" && ok "killed session reports sessio
 
 echo
 echo "-- the tag line cannot fail in ANY shell"
-# It used to call a FUNCTION, so a shell without that function answered
-# "command not found" in the human's console. `:` is a POSIX builtin that
-# exists everywhere, so the tag is now a no-op that cannot error.
+# The tag line runs `↓↓↓`, a no-op that each hook body defines — and that bash
+# also EXPORTS, or a child shell inherits the hooks without it and every tag
+# answers "command not found" (38 times in one battery). The hub sends the tag
+# only to a shell whose hooks it has confirmed, and waits for the `<ATHT:…>`
+# acknowledgement before sending the command, so a shell without the no-op
+# never receives a command it would then run unframed.
+#
+# This check imported both functions from dist/index.js, which has never
+# exported either. The call threw, a TypeError contains no "BAD", and the check
+# reported ok for as long as it existed. It also still asserted an older design
+# — a `: ` tag and NO function — so it could not have passed had it ever run.
+# It now reads the module that exports them and passes only on an explicit
+# DONE, so a crash is a failure rather than silence.
 hookchk=$(node -e "
-const {frameHooksFor,agentTagLine}=require('$REPO/packages/core/dist/index.js');
+const {frameHooksFor,agentTagLine}=require('$REPO/packages/core/dist/paths.js');
 const out=[];
 const tag=agentTagLine('deadbeefcafe');
-out.push(tag.startsWith(': ')?'noop-ok':'noop-BAD:'+tag);
+out.push(tag.startsWith('\\u2193\\u2193\\u2193 AGENT INPUT ID: deadbeefcafe')?'tag-ok':'tag-BAD:'+tag);
 for (const sh of ['zsh','bash']) {
   const h=frameHooksFor(sh,'t');
-  out.push(/\\u2193\\u2193\\u2193\\(\\)/.test(h)?sh+'-fn-BAD':sh+'-nofn-ok');
+  out.push(h.includes('\\u2193\\u2193\\u2193() { :; }')?sh+'-noop-ok':sh+'-noop-BAD');
   out.push(h.includes('ATHT:')?sh+'-ack-ok':sh+'-ack-BAD');
 }
+out.push(/export -f \\u2193\\u2193\\u2193 /.test(frameHooksFor('bash','t'))?'bash-exports-noop-ok':'bash-exports-noop-BAD');
 out.push(/add-zsh-hook preexec/.test(frameHooksFor('zsh','t'))?'zsh-hooks-ok':'zsh-hooks-BAD');
 out.push(!/trap /.test(frameHooksFor('bash','t'))?'bash-notrap-ok':'bash-notrap-BAD');
-console.log(out.join(' '));
+console.log(out.join(' ')+' DONE');
 " 2>&1)
 case "$hookchk" in
-  *BAD*) bad "tag line is a no-op that cannot error" "no BAD entries" "$hookchk" ;;
-  *)     ok  "tag line is a no-op that cannot error" ;;
+  *BAD*) bad "tag line runs a no-op every hooked shell defines" "no BAD entries, then DONE" "$hookchk" ;;
+  *DONE) ok  "tag line runs a no-op every hooked shell defines" ;;
+  *)     bad "tag line runs a no-op every hooked shell defines" "no BAD entries, then DONE" "$hookchk" ;;
 esac
 
 echo
