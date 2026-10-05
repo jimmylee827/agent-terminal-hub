@@ -1406,10 +1406,21 @@ chk "no wire field is undocumented"          "0" \
 # REPORTED, then assert a clean input passes. An auditor that has never been
 # watched failing is indistinguishable from no auditor — which was the literal
 # state of all four until now.
-for a in parity consumers surfaces docdrift prose twosurface; do
+for a in parity consumers surfaces docdrift prose twosurface posixgolden; do
   chk "$a can prove it fails"              "0" \
       "$(node "$RP/scripts/$a.js" --selftest >/dev/null 2>&1 && echo 0 || echo 1)"
 done
+
+# ---- what a POSIX shell receives must not change by accident -----------------
+#
+# The wrapper, hooks, probe, tag and launch payload are shell source built from
+# template literals, and `frameHooksFor` slices one of them on literal text.
+# They moved out of paths.ts into a dialect so a PowerShell one could sit
+# beside them; this pins every byte, so that move — and every Windows change
+# landing next to it — is checked rather than reviewed. An intended change is
+# re-recorded with `node scripts/posixgolden.js --write`.
+chk "the POSIX protocol text is byte-identical"  "0" \
+    "$(node "$RP/scripts/posixgolden.js" >/dev/null 2>&1 && echo 0 || echo 1)"
 
 # ---- prose must not accumulate in a surface ---------------------------------
 #

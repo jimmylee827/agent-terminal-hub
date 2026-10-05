@@ -3,14 +3,12 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
+import { posixDialect } from './dialect';
 import { withSessionLock } from './lock';
 import {
-  HELPER_ONELINE,
   LOG_MAX_BYTES,
   RC_DIR,
-  agentTagLine,
   ensureLayout,
-  frameHooksFor,
   discardedBytes,
   logPath,
   widthLogPath,
@@ -33,7 +31,7 @@ import {
   shellDepth,
   validateName,
 } from './session';
-import { ensureControlDir, sshLaunchLine } from './ssh';
+import { ensureControlDir } from './ssh';
 import { clearRequest, listRequests, requestHuman } from './requests';
 import {
   INTERACTIVE_COMMANDS,
@@ -1402,11 +1400,7 @@ async function runLocked(
     const bootFile = `${RC_DIR}/${clean}.boot`;
     await sendLine(
       clean,
-      sshLaunchLine(
-        session.remote,
-        `PROMPT_COMMAND=; unset ATH_B; ${HELPER_ONELINE}; export -f __ath 2>/dev/null; ${frameHooksFor('bash', readyToken)}`,
-        bootFile,
-      ),
+      posixDialect.launchLine(session.remote, posixDialect.launchPayload(readyToken), bootFile),
     );
     const reconnectDeadline = Date.now() + 20_000;
     for (;;) {
@@ -1487,7 +1481,7 @@ async function runLocked(
   let usedFraming = false;
   let enteredUnknownShell = false;
   if (framed) {
-    await sendLine(clean, agentTagLine(nonce));
+    await sendLine(clean, posixDialect.tagLine(nonce));
 
     // WAIT for the tag to acknowledge before sending the bare command.
     //
@@ -2567,7 +2561,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     const bare = commandLine(nonce, command);
     let framed = false;
     if (bare !== undefined && (await hooksActive(clean, session))) {
-      await sendLine(clean, agentTagLine(nonce));
+      await sendLine(clean, posixDialect.tagLine(nonce));
       // Same reasoning as `run`: latency is not evidence of a missing helper.
       framed = await awaitTagAck(clean, nonce, session.remote ? 4000 : 1500);
       if (!framed) framed = await awaitTagAck(clean, nonce, 1500);
