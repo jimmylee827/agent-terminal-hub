@@ -5,9 +5,6 @@ import * as os from 'node:os';
 import { AthError, InvalidName, SessionExists, SessionGone } from './errors';
 import {
   reapStaleRc,
-  frameHooksFor,
-  shellProbeLine,
-  HELPER_ONELINE,
   HELPER_PATH,
   LOG_DIR,
   RC_DIR,
@@ -21,7 +18,8 @@ import {
   logicalName,
   tmuxName,
 } from './paths';
-import { ensureControlDir, ensureMaster, sshLaunchLine } from './ssh';
+import { posixDialect } from './dialect';
+import { ensureControlDir, ensureMaster } from './ssh';
 import { clearRequest, listRequests } from './requests';
 import { classify, isNesting, isShell, looksLikeCredentialPrompt } from './state';
 import { FS, tmux } from './tmux';
@@ -492,9 +490,9 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
     // always needs it. Without this a nested shell inherited the hooks but not
     // the wrapper, and every multi-line command printed
     // "__ath: command not found" and re-typed 400 characters of shell.
-    const payload = `PROMPT_COMMAND=; unset ATH_B; ${HELPER_ONELINE}; export -f __ath 2>/dev/null; ${frameHooksFor('bash', ready)}`;
+    const payload = posixDialect.launchPayload(ready);
     const bootFile = `${RC_DIR}/${name}.boot`;
-    await sendLine(name, sshLaunchLine(opts.remote, payload, bootFile));
+    await sendLine(name, posixDialect.launchLine(opts.remote, payload, bootFile));
 
     // A marker means the far side is bash and the hooks took. Silence means a
     // shell that ignores PROMPT_COMMAND (zsh, fish), or ssh still sitting on a
@@ -1008,15 +1006,15 @@ export async function installHelper(
   await assertNotCredentialPrompt(name);
 
   if (!opts.hooksOnly) {
-    await sendLine(name, HELPER_ONELINE).catch(() => undefined);
+    await sendLine(name, posixDialect.helperOneline()).catch(() => undefined);
     const token = randomToken();
-    await sendLine(name, `printf '<ATHR:${token}:ok>\\r\\x1b[K'`).catch(() => undefined);
+    await sendLine(name, posixDialect.ackLine(token)).catch(() => undefined);
     await awaitMarker(name, token, 6000);
   }
   if (opts.wrapperOnly) return;
 
   const probe = randomToken();
-  await sendLine(name, shellProbeLine(probe)).catch(() => undefined);
+  await sendLine(name, posixDialect.probeLine(probe)).catch(() => undefined);
   const shell = await awaitMarker(name, probe, 8000);
   if (shell !== 'zsh' && shell !== 'bash') return; // no hooks available here
 
@@ -1034,8 +1032,10 @@ export async function installHelper(
   const depth = await shellDepth(name).catch(() => 1);
   const offset = Math.max(0, depth - 1);
   const ready = randomToken();
-  const baseline = offset > 0 ? `__ath_lvl0=$((SHLVL-${offset})); export __ath_lvl0; ` : '';
-  await sendLine(name, baseline + frameHooksFor(shell, ready)).catch(() => undefined);
+  await sendLine(
+    name,
+    posixDialect.depthBaseline(offset) + posixDialect.frameHooks(shell, ready),
+  ).catch(() => undefined);
   if ((await awaitMarker(name, ready, 8000)) === undefined) return;
 
   const current = await get(name)
