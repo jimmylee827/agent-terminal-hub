@@ -17,6 +17,7 @@ import {
   agentPrompt,
   commandFinished,
   create,
+  parseOsOption,
   doctor,
   gc,
   get,
@@ -115,7 +116,7 @@ function paintState(state: string): string {
 const HELP = `${c.bold('ath')} — long-lived terminals shared by agents and humans
 
 ${c.bold('Sessions')}
-  ath new [name] [--cwd DIR] [--remote HOST] [--pin] [--label TEXT]
+  ath new [name] [--cwd DIR] [--remote HOST [--os windows|posix]] [--pin] [--label TEXT]
        [--width N]                 pane columns (default 200; wider = less truncation)
   ath ls [--json]
   ath kill <name> · ath rename <old> <new> · ath pin|unpin <name>
@@ -172,6 +173,7 @@ async function main(): Promise<number> {
         name: positional[0],
         cwd: flagString(flags, 'cwd') ?? process.cwd(),
         remote: flagString(flags, 'remote'),
+        os: parseOsOption(flagString(flags, 'os')),
         label: flagString(flags, 'label'),
         pin: flagBool(flags, 'pin'),
         width: flagNumber(flags, 'width', 0) || undefined,

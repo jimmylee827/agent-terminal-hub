@@ -55,6 +55,11 @@ export const TOOL_DEFINITIONS = [
             'you intend to parse, prefer --json/--format/-o over column layout.',
         },
         remote: { type: 'string', description: 'Host to ssh into immediately, e.g. "myserver".' },
+        os: {
+          type: 'string',
+          enum: ['windows', 'posix'],
+          description: 'What the remote host runs. Omit it to have it detected.',
+        },
         pin: { type: 'boolean', description: 'Protect from automatic cleanup.' },
         label: { type: 'string', description: 'Human-readable note shown in the GUI.' },
       },

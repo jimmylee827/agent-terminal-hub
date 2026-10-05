@@ -752,6 +752,75 @@ chk "and ssh really got as far as connecting"             "yes" \
 chk "without the override the same line is refused"       "yes" \
     "$(printf '%s' "$RCMD" | grep -q controlFails   && echo yes || echo no)"
 
+# ---- a Windows host is recognised, launched as PowerShell, and never typed at -
+#
+# Windows sshd hands commands to cmd.exe, and ConPTY re-renders everything, so a
+# Windows session needs its own launch (see scripts/conpty-probe.js for what
+# survives the trip). Recognising one has two routes and both are pure text, so
+# they are checked here without a host:
+#
+# - the probe line, which every shell answers differently;
+# - ConPTY's own greeting, which is how a PASSWORD host is recognised after a
+#   POSIX launch fails on it — but only right after the hub's launch line, or a
+#   person ssh'ing into Windows by hand from a POSIX session would be misread
+#   as the session itself being Windows.
+#
+# Nothing below Phase 2 speaks PowerShell yet, and the self-heal's job is to
+# TYPE POSIX shell into whatever it finds. So a Windows session must refuse
+# `run` and `start` before a single byte reaches the pane.
+WINCHK="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athwin$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const ssh=require("'"$RP"'/packages/core/dist/ssh.js");
+const ps=require("'"$RP"'/packages/core/dist/powershell.js");
+const d=require("'"$RP"'/packages/core/dist/dialect.js");
+const fs=require("fs"), out=[];
+const say=(ok,yes,no)=>out.push(ok?yes:no);
+say(ssh.parseOsProbe("Windows_NT $env:OS\n")==="windows","probeCmd","PROBECMD");
+say(ssh.parseOsProbe("%OS%\nWindows_NT\n")==="windows","probePwsh","PROBEPWSH");
+say(ssh.parseOsProbe("%OS% :OS\n")==="posix","probePosix","PROBEPOSIX");
+say(ssh.parseOsProbe("Permission denied (publickey).")===undefined,"probeUnsure","PROBEGUESSED");
+const H=ps.CONPTY_HELLO, A="box.boot";
+say(ps.conptyAnnounced("$ ssh … "+A+"\r\n"+H+"\x1b]0;conhost\x07","box.boot"),"helloSeen","HELLOMISSED");
+say(!ps.conptyAnnounced(H+"old windows session\n$ ssh … "+A+"\r\nLinux 6.1\n","box.boot"),"helloBeforeLaunchIgnored","OLDHELLOCOUNTED");
+say(!ps.conptyAnnounced("$ ssh … "+A+"\r\n"+"x".repeat(9000)+H,"box.boot"),"handTypedSshIgnored","LATEHELLOCOUNTED");
+say(!ps.conptyAnnounced(H,"box.boot"),"noLaunchNoVerdict","NOANCHORCOUNTED");
+const cmd=ps.psRemoteCommand(ps.psLaunchScript("0123456789ab"));
+say(cmd.length<ps.CMD_LINE_MAX && cmd.startsWith("powershell -NoLogo -NoExit -EncodedCommand "),"fitsCmdExe","OVERCEILING");
+say(!/-NoProfile/.test(cmd),"keepsProfile","DROPSPROFILE");
+const script=Buffer.from(cmd.split(" ").pop(),"base64").toString("utf16le");
+say(/OutputEncoding = \[Text\.UTF8Encoding\]/.test(script) && /InputEncoding = \[Text\.UTF8Encoding\]/.test(script),"forcesUtf8","NOUTF8");
+say(script.includes("<ATHR:0123456789ab:") && /\]777;ath;/.test(script),"readyViaOsc","NOREADY");
+say(/& pwsh .*-EncodedCommand/.test(script),"upgradesToPwsh","NOUPGRADE");
+say(d.dialectFor(undefined).id==="posix" && d.dialectFor("windows").id==="powershell","dialectFor","DIALECTFOR");
+say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
+try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.code==="invalid_option","typoRefused","TYPOWRONGCODE"); }
+(async()=>{
+  await a.create({name:"wg",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("wg").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  await a.setMeta("wg","ros","windows");
+  say((await a.get("wg")).remoteOs==="windows","metaRoundTrips","METALOST");
+  // From a SETTLED log: zsh redraws its prompt after reporting idle, and
+  // counting that as typing would blame the guard for the shell.
+  const log=a.logPath("wg"); let before=-1;
+  for (let i=0;i<30;i++){ const s=fs.statSync(log).size; if(s===before) break; before=s; await new Promise(r=>setTimeout(r,1000)); }
+  for (const call of [()=>a.run("wg","echo SHOULD-NOT-RUN",{timeoutMs:8000}), ()=>a.start("wg","echo SHOULD-NOT-RUN")]) {
+    try { await call(); out.push("RANONWINDOWS"); } catch(e){ out.push(e.code==="windows_not_ready"?"refused":"WRONGERROR:"+e.code); }
+  }
+  await new Promise(r=>setTimeout(r,800));
+  say(fs.statSync(log).size===before,"nothingTyped","TYPEDINTOIT");
+  await a.setMeta("wg","ros","");
+  say((await a.get("wg")).remoteOs===undefined,"blankMeansPosix","BLANKREADASWINDOWS");
+  await a.kill("wg").catch(()=>{});
+  process.stdout.write(out.join(" "));
+})();
+' 2>/dev/null)"
+for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
+         handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
+         upgradesToPwsh dialectFor osOptionOk typoRefused metaRoundTrips nothingTyped blankMeansPosix; do
+  chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
+done
+chk "windows: run AND start both refuse"  "2" "$(printf '%s' "$WINCHK" | grep -o '\brefused\b' | wc -l | tr -d ' ')"
+
 # ---- no surface may promise a sudo timeout it cannot know --------------------
 #
 # Five places said the timestamp lasts "~15 min". `man sudoers` says the

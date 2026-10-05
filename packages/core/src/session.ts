@@ -18,8 +18,8 @@ import {
   logicalName,
   tmuxName,
 } from './paths';
-import { posixDialect } from './dialect';
-import { ensureControlDir, ensureMaster } from './ssh';
+import { dialectFor, posixDialect } from './dialect';
+import { ensureControlDir, ensureMaster, probeRemoteOs } from './ssh';
 import { clearRequest, listRequests } from './requests';
 import { classify, isNesting, isShell, looksLikeCredentialPrompt } from './state';
 import { FS, tmux } from './tmux';
@@ -56,6 +56,7 @@ const FIELDS = [
   '#{@ath_renv}',
   '#{@ath_frame}',
   '#{@ath_wrap}',
+  '#{@ath_ros}',
 ].join(FS);
 
 export interface ListOptions {
@@ -112,6 +113,7 @@ function parseRow(line: string, paneTail: string): Session | undefined {
     remoteEnv: decodeMeta(parts[16]),
     frameShell: parts[17] || undefined,
     wrapperInstalled: parts[18] === '1',
+    remoteOs: parts[19] === 'windows' ? 'windows' : undefined,
     creatorPids: (parts[14] || '')
       .split(',')
       .map(Number)
@@ -332,6 +334,19 @@ function nonPosixShellFallback(): string | undefined {
   return undefined;
 }
 
+/**
+ * Read an `os` option as either surface received it.
+ *
+ * Here rather than in each surface so the two cannot disagree about what is
+ * accepted — or about what they say when it is not. A typo fails loudly: read
+ * as "not given", `--os windwos` would quietly fall back to detection.
+ */
+export function parseOsOption(value: unknown): 'windows' | 'posix' | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === 'windows' || value === 'posix') return value;
+  throw new AthError('invalid_option', `os must be "windows" or "posix", not ${JSON.stringify(value)}.`);
+}
+
 export async function create(opts: CreateOptions = {}): Promise<Session> {
   await ensureLayout();
 
@@ -490,15 +505,29 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
     // always needs it. Without this a nested shell inherited the hooks but not
     // the wrapper, and every multi-line command printed
     // "__ath: command not found" and re-typed 400 characters of shell.
-    const payload = posixDialect.launchPayload(ready);
+    //
+    // Which payload depends on what the far side runs. An explicit `os` wins;
+    // otherwise ask over the master. No answer — a password host, whose master
+    // does not exist yet — means launching as POSIX, exactly as before: a
+    // Windows host then announces itself through its ConPTY, and the next
+    // command relaunches it (see `conptyAnnounced`).
+    const os = opts.os ?? (await probeRemoteOs(opts.remote));
+    if (os === 'windows') await setMeta(name, 'ros', 'windows');
+    const dialect = dialectFor(os === 'windows' ? 'windows' : undefined);
+    const payload = dialect.launchPayload(ready);
     const bootFile = `${RC_DIR}/${name}.boot`;
-    await sendLine(name, posixDialect.launchLine(opts.remote, payload, bootFile));
+    await sendLine(name, dialect.launchLine(opts.remote, payload, bootFile));
 
     // A marker means the far side is bash and the hooks took. Silence means a
     // shell that ignores PROMPT_COMMAND (zsh, fish), or ssh still sitting on a
     // password or host-key prompt — the case the hub exists to serve. Either
     // way we type NOTHING; the first command self-heals into the wrapper.
-    if ((await awaitMarker(name, ready, 5000)) !== undefined) {
+    //
+    // PowerShell gets longer: 5.1 starts, loads the profile, hands over to pwsh,
+    // which loads its own. And it records no hooks or wrapper, because it has
+    // neither yet.
+    const readyMarker = await awaitMarker(name, ready, dialect.id === 'posix' ? 5000 : 20_000);
+    if (readyMarker !== undefined && dialect.id === 'posix') {
       const shell = await get(name)
         .then((sess) => sess.currentCommand)
         .catch(() => '');

@@ -53,7 +53,9 @@ import {
   assertNotCredentialPrompt,
   start,
   summarize,
-  effectiveCwd,} from '@ath/core';
+  effectiveCwd,
+  parseOsOption,
+} from '@ath/core';
 
 import { TOOL_DEFINITIONS } from './tools';
 
@@ -387,6 +389,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         name: (args.name ?? args.session) as string | undefined,
         cwd: args.cwd as string | undefined,
         remote: args.remote as string | undefined,
+        os: parseOsOption(args.os),
         label: args.label as string | undefined,
         pin: Boolean(args.pin),
         width: args.width === undefined ? undefined : Number(args.width),

@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
-import { posixDialect } from './dialect';
+import { dialectFor, posixDialect } from './dialect';
+import { conptyAnnounced } from './powershell';
 import { withSessionLock } from './lock';
 import {
   LOG_MAX_BYTES,
@@ -1386,6 +1387,7 @@ async function runLocked(
   // Reconnect first, and refuse rather than run if that does not work.
   let reconnected = false;
   if (session.remote && !isNesting(session.currentCommand)) {
+    const host = session.remote;
     await ensureControlDir();
     // Reconnect the SAME way the session was created: the hooks ride the ssh
     // command line and install themselves before the first prompt.
@@ -1398,18 +1400,37 @@ async function runLocked(
     // wrong and the human is most likely to be looking.
     const readyToken = randomNonce();
     const bootFile = `${RC_DIR}/${clean}.boot`;
-    await sendLine(
-      clean,
-      posixDialect.launchLine(session.remote, posixDialect.launchPayload(readyToken), bootFile),
-    );
+    // A POSIX launch that landed on Windows says so: cmd.exe cannot run the
+    // POSIX payload and the link closes, but the far side's ConPTY greeted us
+    // first. That is how a password host — which no probe can authenticate to —
+    // is recognised, and why it is relaunched here rather than refused. The
+    // master the first attempt authenticated is still up, so nobody is asked
+    // for the password twice.
+    if (
+      session.remoteOs !== 'windows' &&
+      conptyAnnounced(await readLogTailBytes(logPath(clean), 32 * 1024), `${clean}.boot`)
+    ) {
+      await setMeta(clean, 'ros', 'windows').catch(() => undefined);
+      session = { ...session, remoteOs: 'windows' };
+    }
+    const dialect = dialectFor(session.remoteOs);
+    await sendLine(clean, dialect.launchLine(host, dialect.launchPayload(readyToken), bootFile));
     const reconnectDeadline = Date.now() + 20_000;
     for (;;) {
       await sleep(300);
       session = await get(clean);
-      // Both conditions matter: `ssh` appears the instant the process starts,
-      // long before the remote shell is at a prompt. Sending then puts the
-      // command into the handshake, where it is simply swallowed.
-      if (isNesting(session.currentCommand) && session.state === 'idle') {
+      // PowerShell reports ready itself, and is judged on nothing else. A
+      // prompt-shaped pane proves nothing there, and restoring state would TYPE
+      // POSIX setup into a person's PowerShell — there is none to restore yet.
+      if (dialect.id === 'powershell') {
+        if ((await readLogTailBytes(logPath(clean), 8192)).includes(`<ATHR:${readyToken}:`)) {
+          reconnected = true;
+          break;
+        }
+      } else if (isNesting(session.currentCommand) && session.state === 'idle') {
+        // Both conditions matter: `ssh` appears the instant the process starts,
+        // long before the remote shell is at a prompt. Sending then puts the
+        // command into the handshake, where it is simply swallowed.
         reconnected = true;
         // Did the hooks take on their own? If so nothing needs typing at all.
         const raw = await fs.readFile(logPath(clean), 'utf8').catch(() => '');
@@ -1445,6 +1466,11 @@ async function runLocked(
       }
     }
   }
+
+  // A PowerShell session is connected and usable by a person, but nothing below
+  // speaks PowerShell yet: the self-heal would type POSIX shell into it. Refuse
+  // before a single character is sent.
+  refuseWindowsSession(clean, session);
 
   // Safe here and nowhere else: we hold the lock, so no offset is in flight.
   const trim = await rotateIfNeeded(clean).catch(() => undefined);
@@ -2527,6 +2553,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // exactly what a cold agent hit: its `sudo -v` prompt was "dismissed before
     // you could type".
     await assertNotCredentialPrompt(clean);
+    refuseWindowsSession(clean, session);
 
     const startTrim = await rotateIfNeeded(clean).catch(() => undefined);
     const startTrimmedBytes =
@@ -3829,6 +3856,24 @@ async function raiseHumanWall(
  * line early. The rule was right; the list was one character short.
  */
 const TTY_EATS_RE = /[\t\v\f\r\x00-\x08\x0e-\x1f]/;
+
+/**
+ * Refuse to type into a PowerShell session until something here speaks it.
+ *
+ * The session itself works — created, reconnected, usable by a person who
+ * attaches. What does not exist yet is a command path: the markers, the
+ * wrapper and the self-heal are POSIX, and the self-heal's whole job is to
+ * type them into whatever shell it finds.
+ */
+function refuseWindowsSession(name: string, session: Session): void {
+  if (session.remoteOs !== 'windows') return;
+  throw new AthError(
+    'windows_not_ready',
+    `Session "${name}" is on a Windows host ("${session.remote}"), so its shell is PowerShell. ` +
+      `It is connected and a person can use it with "ath attach ${name}", but this build ` +
+      `cannot run commands in PowerShell yet. Nothing was sent.`,
+  );
+}
 
 function commandLine(nonce: string, command: string): string | undefined {
   // Multi-line commands cannot be typed as one line, so they keep the wrapper.

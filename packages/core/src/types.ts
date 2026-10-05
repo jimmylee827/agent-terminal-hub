@@ -94,6 +94,15 @@ export interface Session {
    * "__ath: command not found" before the self-heal runs.
    */
   wrapperInstalled?: boolean;
+  /**
+   * The far side is Windows, so the session speaks PowerShell, not POSIX.
+   *
+   * Absent means POSIX, which is every session that predates this field. Set
+   * when the OS probe says so at creation, or when the far side's ConPTY
+   * announces itself after a POSIX launch it could not run (the password-auth
+   * case, where no probe can authenticate). Never re-probed afterwards.
+   */
+  remoteOs?: 'windows';
   label?: string;
   lastCommand?: string;
   lastExitCode?: number;
@@ -452,6 +461,11 @@ export interface CreateOptions {
   creatorPids?: number[];
   /** Host to `ssh` into as the session's first act. */
   remote?: string;
+  /**
+   * What the remote host runs, when the caller knows better than the probe.
+   * Omitted, it is detected; see `Session.remoteOs`.
+   */
+  os?: 'windows' | 'posix';
   pin?: boolean;
   owner?: string;
   label?: string;

@@ -58,6 +58,7 @@ export {
   assertRemoteConnected,
   capturePane,
   create,
+  parseOsOption,
   doctor,
   exists,
   gc,
