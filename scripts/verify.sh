@@ -8,6 +8,7 @@
 #   verify.sh --all-remote                 every reachable host in ~/.ssh/config
 #   verify.sh --all                        local and every reachable host
 #   verify.sh --session NAME [LABEL]       an existing session, as it stands
+#   verify.sh --remote-windows HOST        ConPTY probes against a Windows host
 #
 # `--session` is the one that cannot be automated away: testing a NESTED shell
 # or a container means putting a session into that state first, which only you
@@ -112,13 +113,14 @@ if [ "${ATH_VERIFY_LOCK:-}" = "" ]; then
 fi
 
 ATH_BIN="${ATH_BIN:-ath}"
-DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0; FAST=0
+DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0; FAST=0; WINHOST=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --local)      DO_LOCAL=1; EXPLICIT=1; shift ;;
     --remote)     HOSTS="${2:-}"; EXPLICIT=1; shift 2 ;;
+    --remote-windows) WINHOST="${2:-}"; EXPLICIT=1; shift 2 ;;
     --all-remote) ALL_REMOTE=1; EXPLICIT=1; shift ;;
     --all)        DO_LOCAL=1; ALL_REMOTE=1; EXPLICIT=1; shift ;;
     --session)    SESSION="${2:-}"; SLABEL="${3:-$2}"; shift 2; [ $# -gt 0 ] && shift ;;
@@ -5275,5 +5277,13 @@ for h in $HOSTS; do
   $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
 done
 unset IFS
+
+# A Windows host gets probes, not the POSIX battery: its ConPTY re-renders
+# everything, so what must be proven first is which channels survive at all.
+# See scripts/conpty-probe.js.
+if [ -n "$WINHOST" ]; then
+  echo "═══ WINDOWS $WINHOST ═══"
+  node "$(dirname "$0")/conpty-probe.js" "$WINHOST" || rc=1
+fi
 
 exit $rc
