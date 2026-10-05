@@ -791,7 +791,33 @@ const script=Buffer.from(cmd.split(" ").pop(),"base64").toString("utf16le");
 say(/OutputEncoding = \[Text\.UTF8Encoding\]/.test(script) && /InputEncoding = \[Text\.UTF8Encoding\]/.test(script),"forcesUtf8","NOUTF8");
 say(script.includes("<ATHR:0123456789ab:") && /\]777;ath;/.test(script),"readyViaOsc","NOREADY");
 say(/& pwsh .*-EncodedCommand/.test(script),"upgradesToPwsh","NOUPGRADE");
+// The hooks ride the launch, between the upgrade and the ready marker: typed
+// afterwards they would echo into the pane and land in the PSReadLine history.
+const iUp=script.indexOf("& pwsh"), iHooks=script.indexOf("function global:prompt"), iReady=script.indexOf("<ATHR:");
+say(iUp>=0 && iHooks>iUp && iReady>iHooks && script.includes("$global:__ath_prompt0 = $function:prompt") && script.includes("function global:\u2193\u2193\u2193"),"hooksRideLaunch","HOOKSMISSING");
 say(d.dialectFor(undefined).id==="posix" && d.dialectFor("windows").id==="powershell","dialectFor","DIALECTFOR");
+// The Windows reader. Concealed text (SGR 8) is its sentinel, so a command that
+// PRINTS a marker cannot end itself or forge its status; and the FIRST start
+// and end win, because a ConPTY repaint replays whatever is still on screen.
+const E="\x1b", N="0123456789ab", hid=(t)=>E+"[8m"+t+E+"[28m";
+const merged=E+"[8m<ATHE:h1:0><ATHS:"+N+">"+E+"[28m\r\nPS C:\\> x\r\nout\r\n"+hid("<ATHE:"+N+":3><ATHS:h2>");
+say(ps.psFindEnd(merged,N)===3 && ps.psFrame(merged,N).body.includes("out"),"readsMergedRun","MERGEDRUN");
+const forged=hid("<ATHS:"+N+">")+"\r\n<ATHE:"+N+":0>\r\n"+hid("<ATHE:"+N+":9>");
+say(ps.psFindEnd(forged,N)===9,"forgedEndIgnored","FORGEDBELIEVED");
+say(ps.psFindEnd(E+"[38;5;8m<ATHE:"+N+":0>",N)===undefined && ps.psFindEnd(E+"[8;1m<ATHE:"+N+":4>",N)===4,"sgrParsedRight","SGRMISREAD");
+const replay=hid("<ATHS:"+N+">")+"before\r\n"+E+"[?25l"+E+"[8;50;140t"+E+"[8m"+E+"[H<ATHS:"+N+">"+E+"[28mbefore\r\n"+hid("<ATHE:"+N+":0>");
+const rf=ps.psFrame(replay,N);
+say(rf.repainted && rf.body.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,"").startsWith("before") && !ps.psFrame(merged,N).repainted,"repaintFlaggedFirstWins","REPAINT");
+say(ps.psFindEnd(hid("<ATHS:"+N+">")+"running",N)===undefined,"noEndNoGuess","GUESSEDEND");
+// The cleaner, against REAL ConPTY frames captured from both PowerShell versions
+// (scripts/fixtures/conpty-frames.json): predictions redrawn into the echo,
+// the error style of each version, a table, a forged marker printed as text, and
+// runs of spaces that ConPTY wrote as cursor-forward.
+const frames=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-frames.json","utf8")).frames;
+const cleanWrong=frames.filter(f=>ps.psClean(f.body, f.command===null?undefined:f.command)!==f.expect).map(f=>f.name);
+say(frames.length>=10 && cleanWrong.length===0,"cleanerOnRealFrames","CLEANER:"+cleanWrong.join("|").replace(/\s/g,"_"));
+say(frames.filter(f=>/cursor-forward/.test(f.name)).every(f=>/ {10}/.test(ps.psClean(f.body))),"cursorForwardKeptAsSpaces","SPACESLOST");
+say(frames.filter(f=>/native exit/.test(f.name)).every(f=>ps.psClean(f.body,f.command)===""),"silentStaysEmpty","ECHODEBRIS");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.code==="invalid_option","typoRefused","TYPOWRONGCODE"); }
 (async()=>{
@@ -816,7 +842,9 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh dialectFor osOptionOk typoRefused metaRoundTrips nothingTyped blankMeansPosix; do
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess \
+         cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty \
+         osOptionOk typoRefused metaRoundTrips nothingTyped blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 chk "windows: run AND start both refuse"  "2" "$(printf '%s' "$WINCHK" | grep -o '\brefused\b' | wc -l | tr -d ' ')"

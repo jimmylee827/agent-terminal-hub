@@ -22,7 +22,7 @@
 // "survived load" result measured on an idle machine is the vacuous pass this
 // repo keeps finding in its own checks.
 //
-//   node scripts/conpty-probe.js HOST [--keep] [--only baseline,order,burst,repaint,input,hub,stress]
+//   node scripts/conpty-probe.js HOST [--keep] [--only baseline,order,burst,repaint,input,matrix,hub,stress]
 //
 // Needs key auth (BatchMode — it must never sit at a password prompt). Writes
 // nothing on the host; the probe scripts travel as -EncodedCommand and are
@@ -45,6 +45,17 @@ if (!host || host.startsWith('-')) {
 
 const SOCK = `athprobe${process.pid}`;
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'athprobe-'));
+
+// Isolate the hub's own code BEFORE anything loads it. paths.js reads ATH_HOME
+// once, when first required, so whichever probe loads core first decides where
+// every later probe's sessions live — and a probe that loaded it with no
+// isolation would point the rest at the user's real ~/.ath. The home is short
+// and under /tmp because ssh refuses a control socket path over 104 bytes.
+const hubHome = fs.mkdtempSync('/tmp/athe2e-');
+process.env.ATH_HOME = hubHome;
+process.env.ATH_SOCKET = `athe2e${process.pid}`;
+const CORE = path.join(__dirname, '..', 'packages', 'core', 'dist');
+
 const W = 200;
 const H = 50;
 const UTF8_HEX = 'e4b8ade69687e29c93'; // 中文✓
@@ -57,6 +68,7 @@ const info = (name, detail) => results.push({ kind: 'info', name, detail });
 
 function cleanup() {
   tmux('kill-server');
+  fs.rmSync(hubHome, { recursive: true, force: true });
   if (!keep) fs.rmSync(work, { recursive: true, force: true });
 }
 process.on('SIGINT', () => {
@@ -440,18 +452,12 @@ async function probeInput(shell, utf8In) {
 /**
  * The hub itself against the host: both ways a Windows session comes to exist.
  *
- * Isolated in its own ATH_HOME and tmux socket so it can never touch a real
- * session. The home is short and under /tmp because ssh refuses a control
- * socket path over 104 bytes, and a macOS temp dir plus a 40-character hash
- * is over it.
+ * Runs in the isolated ATH_HOME and tmux socket set up at the top of this file,
+ * so it can never touch a real session.
  */
 async function probeHub(hasPwsh) {
-  const home = fs.mkdtempSync('/tmp/athe2e-');
-  process.env.ATH_HOME = home;
-  process.env.ATH_SOCKET = `athe2e${process.pid}`;
-  const dist = path.join(__dirname, '..', 'packages', 'core', 'dist');
-  const a = require(path.join(dist, 'index.js'));
-  const ssh = require(path.join(dist, 'ssh.js'));
+  const a = require(path.join(CORE, 'index.js'));
+  const ssh = require(path.join(CORE, 'ssh.js'));
   const expectShell = hasPwsh ? 'pwsh' : 'powershell';
   const readyIn = (name) => (/<ATHR:[0-9a-z]+:(pwsh|powershell)>/.exec(fs.readFileSync(a.logPath(name), 'latin1')) || [])[1];
   const attempt = async (name) => {
@@ -467,6 +473,17 @@ async function probeHub(hasPwsh) {
     const probed = await a.create({ name: 'e2e-probe', remote: host });
     gate('hub: a key-auth Windows host is recognised before launch', probed.remoteOs === 'windows', `remoteOs=${probed.remoteOs}`);
     gate(`hub: it comes up as PowerShell (${expectShell})`, readyIn('e2e-probe') === expectShell, readyIn('e2e-probe') || 'no ready marker');
+    // The hooks rode the launch: the chained prompt opened its first frame —
+    // concealed, after the ready marker — and the user's own prompt still drew.
+    {
+      const psm = require(path.join(CORE, 'powershell.js'));
+      for (let i = 0; i < 20 && !/PS [A-Z]:\\[^\r\n]*>/.test(fs.readFileSync(a.logPath('e2e-probe'), 'latin1')); i++) await sleep(500);
+      const raw = fs.readFileSync(a.logPath('e2e-probe'), 'latin1');
+      const ready = raw.search(/<ATHR:[0-9a-z]+:(pwsh|powershell)>/);
+      const first = raw.indexOf('<ATHS:h1>', ready);
+      gate('hub: the hooks are live at the first prompt (concealed <ATHS:h1>)', ready >= 0 && first > ready && psm.concealedAt(raw, first), first > ready ? 'found, not concealed' : 'missing');
+      gate("hub: and the user's own prompt still draws", /PS [A-Z]:\\[^\r\n]*>/.test(raw.slice(Math.max(first, 0))));
+    }
     gate('hub: run refuses instead of typing into it', (await attempt('e2e-probe')) === 'windows_not_ready');
 
     // The password-host route, forced: launch as POSIX onto Windows. cmd.exe
@@ -485,7 +502,100 @@ async function probeHub(hasPwsh) {
   } finally {
     for (const n of ['e2e-probe', 'e2e-detect']) await a.kill(n).catch(() => undefined);
     await ssh.closeSharedConnection(host).catch(() => undefined);
-    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The exit-code matrix: the place PowerShell would be quietly wrong.
+ *
+ * A native command sets `$LASTEXITCODE`; a cmdlet sets only `$?` and may
+ * throw instead; and `$LASTEXITCODE` is sticky, so after a failing native
+ * command every later failure would report that command's code. Each case
+ * below exists for one of those, run IN ORDER (the sticky cases depend on
+ * it), through the real hooks from core, on both paths an agent's command can
+ * take: typed bare after the tag line, and through the wrapper.
+ */
+const MATRIX = [
+  ['native exit 0', 'cmd /c exit 0', 0],
+  ['native exit 3', 'cmd /c exit 3', 3],
+  ['cmdlet success', 'Get-Date | Out-Null', 0],
+  ['terminating throw', "throw 'boom'", 1],
+  ['non-terminating cmdlet error', 'Get-Item C:\\no\\such\\ath-path', 1],
+  ['native 7 (makes $LASTEXITCODE sticky)', 'cmd /c exit 7', 7],
+  ['then a succeeding cmdlet', 'Get-Date | Out-Null', 0],
+  ['then a FAILING cmdlet: 1, not the sticky 7', 'Get-Item C:\\no\\such\\ath-path', 1],
+  ['$? false without a throw', "Write-Error 'soft'", 1],
+  ['compound, last part a succeeding cmdlet', 'cmd /c exit 3; Get-Date | Out-Null', 0],
+  ['compound, last part native', 'Get-Date | Out-Null; cmd /c exit 4', 4],
+  ['an assignment', '$athv = 42', 0],
+  ['and it persists into the next command', "if ($athv -ne 42) { throw 'lost' }", 0],
+  ['a pipeline that yields nothing', "'a','b' | Where-Object { $_ -eq 'c' }", 0],
+];
+
+async function probeMatrix(shell) {
+  const ps = require(path.join(CORE, 'powershell.js'));
+  const tag = shell === 'pwsh' ? 'pwsh' : 'ps51';
+  const nonce = () => [...Array(12)].map(() => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
+  const results = { framed: [], wrapper: [] };
+  await capture(
+    `matrix-${tag}`,
+    [UTF8_OUT, ps.psHooksScript(), "Write-Host 'ATHPROBE-READY'"].join('\n'),
+    {
+      shell,
+      interactive: true,
+      timeoutMs: 30_000,
+      during: async (ctx) => {
+        if (!(await ctx.waitFor(/<ATHS:h1>/, 30_000))) return;
+        await sleep(500);
+        // One command, one way; resolves to its exit code and frame.
+        const drive = async (via, command) => {
+          const n = nonce();
+          const text = command.split('NONCE').join(n);
+          if (via === 'framed') {
+            ctx.keys(`\u2193\u2193\u2193 AGENT INPUT ID: ${n} \u2193\u2193\u2193`);
+            ctx.enter();
+            if (!(await ctx.waitFor(new RegExp(`<ATHT:${n}>`), 10_000))) return { err: 'no tag ack' };
+            ctx.keys(text);
+          } else {
+            ctx.keys(`. __ath ${n} ${Buffer.from(text, 'utf8').toString('base64')}`);
+          }
+          ctx.enter();
+          for (const deadline = Date.now() + 20_000; Date.now() < deadline; await sleep(150)) {
+            const rc = ps.psFindEnd(ctx.read(), n);
+            if (rc !== undefined) {
+              await sleep(300);
+              return { rc, frame: ps.psFrame(ctx.read(), n) };
+            }
+          }
+          return { err: 'no end marker' };
+        };
+        for (const via of ['framed', 'wrapper']) {
+          for (const [name, command, want] of MATRIX) results[via].push({ name, want, ...(await drive(via, command)) });
+          // The end marker must not be forgeable by the command being measured:
+          // this one PRINTS a matching marker as text, then really exits 9.
+          results[via].push({ name: 'forged end marker', want: 9, ...(await drive(via, "Write-Host ('<ATHE:'+'NONCE'+':0>'); cmd /c exit 9")) });
+          // Output must be fully rendered BEFORE the end marker. Bare objects, no
+          // formatter: PowerShell then waits up to 300 ms to measure columns, which
+          // is exactly when a marker written meanwhile would overtake the table. An
+          // explicit Format-Table renders at once and could not catch it.
+          const table = await drive(via, "[pscustomobject]@{Col='tbl-x'},[pscustomobject]@{Col='tbl-y'}");
+          results[via].push({ name: 'table', want: 0, ...table });
+          results[via].table = table;
+        }
+        // Only the wrapper can carry a command that spans lines.
+        results.wrapper.push({ name: 'multi-line command', want: 3, ...(await drive('wrapper', '$a = 1\n$b = 2\ncmd /c exit ($a + $b)')) });
+        ctx.keys('exit');
+        ctx.enter();
+        await sleep(1500);
+      },
+    },
+  );
+  for (const via of ['framed', 'wrapper']) {
+    const rows = results[via];
+    const wrong = rows.filter((r) => r.rc !== r.want).map((r) => `${r.name}: ${r.err ?? `got ${r.rc}`}, want ${r.want}`);
+    gate(`${tag} ${via}: every exit code exact (${rows.length} cases)`, rows.length > 0 && wrong.length === 0, wrong.length ? wrong.slice(0, 3).join('; ') : `${rows.length}/${rows.length}`);
+    const t = results[via].table;
+    gate(`${tag} ${via}: a table is fully rendered before the end marker`, !!t && !!t.frame && t.frame.body.includes('tbl-y'), t && t.err ? t.err : '');
   }
 }
 
@@ -522,6 +632,7 @@ async function probeHub(hasPwsh) {
       else info(`${r.tag}: typed 中文✓ arrives as`, r.got === UTF8_HEX ? `UTF-8 ${line}` : line);
     }
   }
+  if (want('matrix')) for (const shell of hasPwsh ? ['powershell', 'pwsh'] : ['powershell']) await probeMatrix(shell);
   if (want('hub')) await probeHub(hasPwsh);
   if (want('stress')) await probeStress();
 
