@@ -22,7 +22,7 @@
 // "survived load" result measured on an idle machine is the vacuous pass this
 // repo keeps finding in its own checks.
 //
-//   node scripts/conpty-probe.js HOST [--keep] [--only baseline,order,burst,repaint,input,stress]
+//   node scripts/conpty-probe.js HOST [--keep] [--only baseline,order,burst,repaint,input,hub,stress]
 //
 // Needs key auth (BatchMode — it must never sit at a password prompt). Writes
 // nothing on the host; the probe scripts travel as -EncodedCommand and are
@@ -437,6 +437,58 @@ async function probeInput(shell, utf8In) {
   return { tag, got, psrl };
 }
 
+/**
+ * The hub itself against the host: both ways a Windows session comes to exist.
+ *
+ * Isolated in its own ATH_HOME and tmux socket so it can never touch a real
+ * session. The home is short and under /tmp because ssh refuses a control
+ * socket path over 104 bytes, and a macOS temp dir plus a 40-character hash
+ * is over it.
+ */
+async function probeHub(hasPwsh) {
+  const home = fs.mkdtempSync('/tmp/athe2e-');
+  process.env.ATH_HOME = home;
+  process.env.ATH_SOCKET = `athe2e${process.pid}`;
+  const dist = path.join(__dirname, '..', 'packages', 'core', 'dist');
+  const a = require(path.join(dist, 'index.js'));
+  const ssh = require(path.join(dist, 'ssh.js'));
+  const expectShell = hasPwsh ? 'pwsh' : 'powershell';
+  const readyIn = (name) => (/<ATHR:[0-9a-z]+:(pwsh|powershell)>/.exec(fs.readFileSync(a.logPath(name), 'latin1')) || [])[1];
+  const attempt = async (name) => {
+    try {
+      await a.run(name, 'echo hub-must-not-run-this', { timeoutMs: 60_000 });
+      return 'ran';
+    } catch (e) {
+      return e.code || String(e);
+    }
+  };
+  try {
+    // Key auth: the probe answers over the master, before anything is launched.
+    const probed = await a.create({ name: 'e2e-probe', remote: host });
+    gate('hub: a key-auth Windows host is recognised before launch', probed.remoteOs === 'windows', `remoteOs=${probed.remoteOs}`);
+    gate(`hub: it comes up as PowerShell (${expectShell})`, readyIn('e2e-probe') === expectShell, readyIn('e2e-probe') || 'no ready marker');
+    gate('hub: run refuses instead of typing into it', (await attempt('e2e-probe')) === 'windows_not_ready');
+
+    // The password-host route, forced: launch as POSIX onto Windows. cmd.exe
+    // rejects the payload and the link closes; the next command must read the
+    // ConPTY greeting, relaunch as PowerShell, and still refuse.
+    await a.create({ name: 'e2e-detect', remote: host, os: 'posix' });
+    for (let i = 0; i < 40; i++) {
+      if ((await a.get('e2e-detect')).currentCommand !== 'ssh') break;
+      await sleep(500);
+    }
+    const code = await attempt('e2e-detect');
+    const detected = await a.get('e2e-detect');
+    gate('hub: a POSIX launch that lands on Windows is recognised from ConPTY', detected.remoteOs === 'windows', `remoteOs=${detected.remoteOs}`);
+    gate('hub: and relaunched as PowerShell', readyIn('e2e-detect') === expectShell, readyIn('e2e-detect') || 'no ready marker');
+    gate('hub: then refused, not typed into', code === 'windows_not_ready', code);
+  } finally {
+    for (const n of ['e2e-probe', 'e2e-detect']) await a.kill(n).catch(() => undefined);
+    await ssh.closeSharedConnection(host).catch(() => undefined);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 // ---- main ---------------------------------------------------------------------
 
 (async () => {
@@ -470,6 +522,7 @@ async function probeInput(shell, utf8In) {
       else info(`${r.tag}: typed 中文✓ arrives as`, r.got === UTF8_HEX ? `UTF-8 ${line}` : line);
     }
   }
+  if (want('hub')) await probeHub(hasPwsh);
   if (want('stress')) await probeStress();
 
   let pass = 0;

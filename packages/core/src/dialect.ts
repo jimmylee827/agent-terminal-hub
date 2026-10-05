@@ -7,6 +7,7 @@ import {
   launchPayload,
   shellProbeLine,
 } from './posix';
+import { psLaunchLine, psLaunchScript } from './powershell';
 import { sshLaunchLine } from './ssh';
 
 /**
@@ -19,9 +20,20 @@ import { sshLaunchLine } from './ssh';
  * rather than a branch at each call site.
  *
  * Members are added in the phase that first needs them, each backed by code
- * that already exists — never as a placeholder for one that does not.
+ * that already exists — never as a placeholder for one that does not. Every
+ * dialect can launch its shell; only POSIX can, so far, install itself into a
+ * shell it did not launch, so those members live on `PosixDialect` until
+ * PowerShell has real implementations to put beside them.
  */
 export interface ShellDialect {
+  readonly id: 'posix' | 'powershell';
+  /** What rides the ssh line so the remote shell comes up already integrated. */
+  launchPayload(token: string): string;
+  /** The line typed to start that remote shell. Writes `bootFile`. */
+  launchLine(host: string, payload: string, bootFile: string): string;
+}
+
+export interface PosixDialect extends ShellDialect {
   readonly id: 'posix';
   /** The fallback wrapper, defined in one line. */
   helperOneline(): string;
@@ -31,17 +43,13 @@ export interface ShellDialect {
   frameHooks(shell: 'zsh' | 'bash', token: string): string;
   /** Typed before each agent command, announcing whose it is. */
   tagLine(nonce: string): string;
-  /** What rides the ssh line so the remote shell comes up already integrated. */
-  launchPayload(token: string): string;
-  /** The line typed to start that remote shell. Writes `bootFile`. */
-  launchLine(host: string, payload: string, bootFile: string): string;
   /** Typed after the wrapper, so the hub knows the shell read it. */
   ackLine(token: string): string;
   /** Re-bases the hooks' depth for a shell nested `offset` levels down. */
   depthBaseline(offset: number): string;
 }
 
-export const posixDialect: ShellDialect = {
+export const posixDialect: PosixDialect = {
   id: 'posix',
   helperOneline: () => HELPER_ONELINE,
   probeLine: shellProbeLine,
@@ -52,3 +60,14 @@ export const posixDialect: ShellDialect = {
   ackLine,
   depthBaseline,
 };
+
+export const powershellDialect: ShellDialect = {
+  id: 'powershell',
+  launchPayload: psLaunchScript,
+  launchLine: psLaunchLine,
+};
+
+/** The dialect a session's far side speaks. Absent means POSIX. */
+export function dialectFor(remoteOs: 'windows' | undefined): ShellDialect {
+  return remoteOs === 'windows' ? powershellDialect : posixDialect;
+}

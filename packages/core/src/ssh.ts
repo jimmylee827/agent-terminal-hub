@@ -104,7 +104,16 @@ export function sshLaunchLine(host: string, payload: string, bootFile: string): 
   // as much as the `$`: `\$(` leaves an UNQUOTED `(`, which is a syntax error,
   // not a command substitution deferred to later.
   const boot = 'eval\\ \\"\\$\\(echo\\ \\$ATH_B\\|base64\\ -d\\)\\"';
-  const remote = `ATH_B=${b64} PROMPT_COMMAND=${boot} exec "$SHELL" -i`;
+  return launchFromBootFile(host, `ATH_B=${b64} PROMPT_COMMAND=${boot} exec "$SHELL" -i`, bootFile);
+}
+
+/**
+ * The line to type that runs `remote` on `host`, without typing `remote`.
+ *
+ * Shared by every dialect: what the far side runs differs, how it gets there
+ * does not.
+ */
+export function launchFromBootFile(host: string, remote: string, bootFile: string): string {
   writeFileSync(bootFile, remote, { mode: 0o600 });
 
   // The remote command is read from a LOCAL file rather than typed.
@@ -208,6 +217,55 @@ export async function ensureMaster(host: string): Promise<void> {
   await run('ssh', [...sshOptions(), '-M', '-N', '-f', '-o', 'BatchMode=yes', host]).catch(
     () => undefined,
   );
+}
+
+/**
+ * One line every shell answers differently: cmd expands `%OS%`, PowerShell
+ * expands `$env:OS`, and a POSIX shell expands neither name — leaving the
+ * literal `%OS%` — so whichever shell sshd hands it, the answer is readable.
+ */
+const OS_PROBE = 'echo %OS% $env:OS';
+
+/** What `OS_PROBE` printed means. `undefined` when it proves nothing. */
+export function parseOsProbe(output: string): 'windows' | 'posix' | undefined {
+  if (/Windows_NT/.test(output)) return 'windows';
+  if (/%OS%/.test(output)) return 'posix';
+  return undefined;
+}
+
+/**
+ * What the far side runs, asked over the shared connection — or `undefined`.
+ *
+ * Only asked when the master is ALREADY up, so it never authenticates on its
+ * own. A host that needs a password has no master at this point, and every
+ * batch-mode attempt against it is one more failed login in its auth log —
+ * `ensureMaster` has already spent one, and lockout tools count them. There,
+ * the answer comes later instead: a POSIX launch that lands on Windows is
+ * announced by the far side's own ConPTY (see `conptyAnnounced`).
+ */
+export async function probeRemoteOs(host: string): Promise<'windows' | 'posix' | undefined> {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+  const alive = await run('ssh', [...sshOptions(), '-O', 'check', host])
+    .then(() => true)
+    .catch(() => false);
+  if (!alive) return undefined;
+  return run(
+    'ssh',
+    [
+      ...sshOptions(),
+      '-o', 'BatchMode=yes',
+      '-o', 'ConnectTimeout=6',
+      '-o', 'RemoteCommand=none',
+      '-o', 'RequestTTY=no',
+      host,
+      OS_PROBE,
+    ],
+    { timeout: 10_000 },
+  )
+    .then(({ stdout }) => parseOsProbe(stdout))
+    .catch(() => undefined);
 }
 
 export async function ensureControlDir(): Promise<void> {
