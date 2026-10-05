@@ -713,6 +713,43 @@ if command -v ssh >/dev/null 2>&1; then
   rm -f "$TCFG" "$TSYS"
 fi
 
+# ---- a host block's RemoteCommand must not refuse the launch line ------------
+#
+# `RemoteCommand pwsh` is how a Windows box lands in PowerShell without touching
+# its registry, and any host block can set it. ssh then refuses a line that ALSO
+# carries a command — "Cannot execute command-line and remote command" — before
+# connecting, so every launch to that host died and the session never existed.
+# The generated config cannot override it: it includes the user's config first,
+# and ssh keeps the first value.
+#
+# Driven through ssh itself against a closed local port, so no host is needed:
+# reaching "connection refused" proves the refusal is gone. The same line minus
+# the override must still hit the fatal, or the check passes vacuously.
+RCMD="$(H="$(mktemp -d /tmp/athrc.XXXX)"; mkdir -p "$H/.ssh"
+printf 'Host rchost\n  HostName 127.0.0.1\n  Port 1\n  RemoteCommand pwsh\n' > "$H/.ssh/config"
+chmod 600 "$H/.ssh/config"
+HOME="$H" ATH_HOME="$H/a" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const {execSync}=require("child_process"), fs=require("fs"), path=require("path"), out=[];
+fs.mkdirSync(process.env.ATH_HOME,{recursive:true});
+const line=a.sshLaunchLine("rchost","true",path.join(process.env.ATH_HOME,"t.boot"));
+const attempt=(l)=>{ try { return execSync(l+" </dev/null 2>&1",{encoding:"utf8",timeout:15000}); }
+  catch(e){ return String(e.stdout||"")+String(e.stderr||""); } };
+const FATAL=/Cannot execute command-line and remote command/;
+const got=attempt(line);
+out.push(FATAL.test(got)?"STILLREFUSED":"notRefused");
+out.push(/Connection refused|connect to host/.test(got)?"reachedConnect":"NEVERCONNECTED");
+const bare=line.replace(" -o RemoteCommand=none","");
+out.push(bare!==line && FATAL.test(attempt(bare))?"controlFails":"VACUOUS");
+process.stdout.write(out.join(" "));
+' 2>/dev/null; rm -rf "$H")"
+chk "a host's RemoteCommand no longer refuses the launch" "yes" \
+    "$(printf '%s' "$RCMD" | grep -q notRefused     && echo yes || echo no)"
+chk "and ssh really got as far as connecting"             "yes" \
+    "$(printf '%s' "$RCMD" | grep -q reachedConnect && echo yes || echo no)"
+chk "without the override the same line is refused"       "yes" \
+    "$(printf '%s' "$RCMD" | grep -q controlFails   && echo yes || echo no)"
+
 # ---- no surface may promise a sudo timeout it cannot know --------------------
 #
 # Five places said the timestamp lasts "~15 min". `man sudoers` says the

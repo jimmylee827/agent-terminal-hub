@@ -122,7 +122,17 @@ export function sshLaunchLine(host: string, payload: string, bootFile: string): 
   // time it re-wrapped — so a human attaching saw the same connect command
   // three times before anything useful happened. Nothing about it was
   // informative; it is the same options on every connect, to every host.
-  return `ssh -F ${shellQuote(configFile())} -t ${host} "$(cat ${shellQuote(bootFile)})"`;
+  //
+  // `RemoteCommand=none` is the one option that cannot live there.
+  //
+  // A host whose own block sets `RemoteCommand` — `RemoteCommand pwsh` is how a
+  // Windows box lands in PowerShell without touching its registry — made ssh
+  // refuse this line outright: "Cannot execute command-line and remote
+  // command", before connecting, on every launch. The config file cannot fix
+  // it, because it includes the user's config FIRST and ssh keeps the first
+  // value it obtains; only the command line outranks a user's host block. The
+  // master and the `-O` control calls send no command, so they never trip it.
+  return `ssh -F ${shellQuote(configFile())} -o RemoteCommand=none -t ${host} "$(cat ${shellQuote(bootFile)})"`;
 }
 
 /**
