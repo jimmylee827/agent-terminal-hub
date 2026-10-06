@@ -273,6 +273,30 @@ export function psFrame(raw: string, nonce: string): PsFrame {
  * printed before the frame opens.
  */
 export function psClean(body: string, command?: string): string {
+  let lines = psLines(body);
+  const wanted = command?.trim();
+  if (wanted) {
+    for (let i = 0, joined = ''; i < Math.min(lines.length, 8); i++) {
+      joined += lines[i];
+      if (joined.endsWith(wanted)) {
+        lines = lines.slice(i + 1);
+        break;
+      }
+    }
+  }
+  while (lines.length && lines[0] === '') lines.shift();
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.join('\n');
+}
+
+/**
+ * The body as the screen ends up showing it, one entry per line: concealed
+ * text dropped, cursor-forward turned back into spaces, every other escape
+ * removed, then CRs resolved. Escapes never contain a newline, so line N here
+ * is line N of the raw bytes — which is what lets a caller map a line back to a
+ * byte offset.
+ */
+function psLines(body: string): string[] {
   let concealed = false;
   let text = '';
   const re =
@@ -291,7 +315,7 @@ export function psClean(body: string, command?: string): string {
       text += m[3];
     }
   }
-  let lines = text.split('\n').map((line) => {
+  return text.split('\n').map((line) => {
     const l = line.replace(/\r$/, '');
     if (!l.includes('\r')) return l.trimEnd();
     // A bare CR still left is a redraw of the same row: the last write is what
@@ -299,19 +323,30 @@ export function psClean(body: string, command?: string): string {
     const segments = l.split('\r').filter((s) => s.trim() !== '');
     return (segments[segments.length - 1] ?? '').trimEnd();
   });
-  const wanted = command?.trim();
-  if (wanted) {
-    for (let i = 0, joined = ''; i < Math.min(lines.length, 8); i++) {
-      joined += lines[i];
-      if (joined.endsWith(wanted)) {
-        lines = lines.slice(i + 1);
-        break;
-      }
-    }
+}
+
+/**
+ * How many lines after the start marker the typed echo occupies — once it is
+ * COMPLETE, i.e. a newline has closed the line that ends with the command.
+ * Undefined while it is still being drawn.
+ *
+ * PSReadLine draws the echo after the frame opens and re-renders it on Enter,
+ * so a poll that starts too early catches a partial echo and the NEXT poll
+ * catches the re-render, with nothing left in its slice to say it is echo. A
+ * caller that waits for this can start polling past the echo instead.
+ */
+export function psEchoLines(raw: string, nonce: string, command: string): number | undefined {
+  const marker = `<ATHS:${nonce}>`;
+  const s = firstConcealed(raw, marker);
+  if (s < 0) return undefined;
+  const lines = psLines(raw.slice(s + marker.length));
+  const wanted = command.trim();
+  // `lines.length - 1`: the last entry has no newline after it yet.
+  for (let i = 0, joined = ''; i < Math.min(lines.length - 1, 8); i++) {
+    joined += lines[i];
+    if (joined.endsWith(wanted)) return i + 1;
   }
-  while (lines.length && lines[0] === '') lines.shift();
-  while (lines.length && lines[lines.length - 1] === '') lines.pop();
-  return lines.join('\n');
+  return undefined;
 }
 
 /**
@@ -324,4 +359,35 @@ export function psPartial(raw: string, nonce: string): string {
   const marker = `<ATHS:${nonce}>`;
   const s = firstConcealed(raw, marker);
   return s < 0 ? '' : raw.slice(s + marker.length);
+}
+
+/** Where the command's concealed start marker is, or -1. */
+export function psStartAt(raw: string, nonce: string): number {
+  return firstConcealed(raw, `<ATHS:${nonce}>`);
+}
+
+/**
+ * The most recent AGENT frame opened in `raw`: 12 hex characters, concealed.
+ * Never a person's `h<n>` frame, one of which is open at every idle prompt.
+ */
+export function psLatestHandle(raw: string): string | undefined {
+  let found: string | undefined;
+  for (const m of raw.matchAll(/<ATHS:([0-9a-f]{12})>/g)) {
+    if (concealedAt(raw, m.index ?? 0)) found = m[1];
+  }
+  return found;
+}
+
+/**
+ * One command's part of a slice that may begin or end mid-command — what a
+ * poll sees. Cut at its concealed start when the slice holds it, and at its
+ * concealed end when that has arrived. `opened` says whether the start was in
+ * the slice, i.e. whether the typed echo can be in it too.
+ */
+export function psWindow(raw: string, nonce: string): { body: string; opened: boolean } {
+  const startMarker = `<ATHS:${nonce}>`;
+  const s = firstConcealed(raw, startMarker);
+  const from = s < 0 ? 0 : s + startMarker.length;
+  const e = firstConcealed(raw, `<ATHE:${nonce}:`, from);
+  return { body: raw.slice(from, e < 0 ? raw.length : e), opened: s >= 0 };
 }

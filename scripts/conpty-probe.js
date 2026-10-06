@@ -507,8 +507,24 @@ async function probeHub(hasPwsh) {
     await run('e2e-probe', 'Set-Location C:\\Windows');
     const cwd = await run('e2e-probe', '(Get-Location).Path');
     gate('hub: the working directory persists between commands', cwd.output === 'C:\\Windows', said(cwd));
-    const started = await a.start('e2e-probe', 'Get-Date').then(() => 'started', (e) => e.code);
-    gate('hub: start refuses until PowerShell jobs can be polled', started === 'windows_not_ready', started);
+    // A background job, followed the way an agent follows one.
+    const job = await a.start('e2e-probe', 'Start-Sleep -Seconds 2; Write-Output job-done; cmd /c exit 4').catch((e) => ({ error: e.code || String(e) }));
+    gate('hub: start launches a PowerShell job', !job.error && job.launched !== false && /^[0-9a-f]{12}$/.test(job.handle || ''), job.error || `launched=${job.launched}`);
+    if (!job.error) {
+      gate('hub: latestHandle finds that job', (await a.latestHandle('e2e-probe')) === job.handle);
+      let since = job.offset, last, printed = [];
+      for (let i = 0; i < 60; i++) {
+        last = await a.poll('e2e-probe', job.handle, since);
+        if (last.output) printed.push(last.output);
+        since = last.nextOffset;
+        if (last.done) break;
+        await sleep(500);
+      }
+      gate('hub: poll follows it to its real exit code', last && last.done && last.exitCode === 4, last ? `done=${last.done} exit=${last.exitCode}` : 'no poll');
+      gate('hub: and returns what it printed, without the typed echo', printed.join('\n') === 'job-done', JSON.stringify(printed.join('\n')).slice(0, 80));
+      const outcome = await a.commandOutcome('e2e-probe', job.handle);
+      gate('hub: wait reads the same outcome from the handle', outcome.finished && outcome.exitCode === 4, JSON.stringify(outcome));
+    }
     const histAfter = historyLines();
     gate("hub: nothing the hub typed reached the user's history file", histBefore >= 0 && histAfter === histBefore, `${histBefore} -> ${histAfter} lines`);
 

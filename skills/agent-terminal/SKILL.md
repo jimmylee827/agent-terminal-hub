@@ -512,7 +512,7 @@ Fields worth checking on the `--json` form:
 | `asked_for_you` | On `list`: this session has an open request waiting on a human — filed for you, usually by a command that parked. Go and relay it. |
 | `collect_with` | The exact call that retrieves a finished command's result, for a handle you were not holding. |
 | `current_command` | What the session is running right now, when it is busy. |
-| `remote_os` | `windows`: the shell is PowerShell — write PowerShell. `start` is refused there for now; use `run`. |
+| `remote_os` | `windows`: the shell is PowerShell — write PowerShell. |
 | `remote_footprint` | On `doctor`: what a REMOTE host is left with — no hub files of its own, but the login shell it opens writes your commands to that machine's shell history. |
 | `stale_build` | THIS process is running code older than the build on disk. A fix you expect may not be in effect here; restart the client that launched it. |
 
