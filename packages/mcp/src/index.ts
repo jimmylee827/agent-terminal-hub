@@ -325,6 +325,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           ...(askedFor.has(s.name) ? { asked_for_you: true } : {}),
           pinned: s.pinned,
           remote: s.remote,
+          ...(s.remoteOs ? { remote_os: s.remoteOs } : {}),
           // REMOVED from the listing, after four reviewers each tried to read it.
           //
           // It is tmux's client count, and it is wrong in both directions. It
@@ -479,6 +480,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         // session's shell sits in the remote home, so say that.
         cwd: session.remote ? (session.remoteCwd ?? '~') : effectiveCwd(session),
         ...(session.remote ? { remote: session.remote, local_cwd: session.cwd } : {}),
+        ...(session.remoteOs ? { remote_os: session.remoteOs } : {}),
         // Name the HOST each path belongs to, and say so loudly when the two
         // strings are identical.
         //
