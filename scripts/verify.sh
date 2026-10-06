@@ -825,6 +825,15 @@ const cleanWrong=frames.filter(f=>ps.psClean(f.body, f.command===null?undefined:
 say(frames.length>=10 && cleanWrong.length===0,"cleanerOnRealFrames","CLEANER:"+cleanWrong.join("|").replace(/\s/g,"_"));
 say(frames.filter(f=>/cursor-forward/.test(f.name)).every(f=>/ {10}/.test(ps.psClean(f.body))),"cursorForwardKeptAsSpaces","SPACESLOST");
 say(frames.filter(f=>/native exit/.test(f.name)).every(f=>ps.psClean(f.body,f.command)===""),"silentStaysEmpty","ECHODEBRIS");
+// Where a poll may start: past the typed echo, once a newline has closed it.
+// Agreed with the cleaner on every real typed frame, and "not yet" while the
+// echo is still being drawn \u2014 polling from a half-drawn echo is how the
+// re-render on Enter leaked into a later poll as output.
+const typed=frames.filter(f=>f.command!==null && !/forged/.test(f.name));
+const agrees=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const n=ps.psEchoLines(raw,N,f.command); if(n===undefined) return false; const rest=f.body.split("\n").slice(n).join("\n"); return ps.psClean(rest)===f.expect; });
+const cut=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const n=ps.psEchoLines(raw,N,f.command); const parts=raw.split("\n"); return ps.psEchoLines(parts.slice(0,n).join("\n"),N,f.command)===undefined; });
+say(typed.length>=6 && agrees,"echoBoundaryAgrees","ECHOBOUNDARY");
+say(cut,"halfDrawnEchoIsNotYet","EARLYECHOEND");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.code==="invalid_option","typoRefused","TYPOWRONGCODE"); }
 (async()=>{
@@ -832,24 +841,28 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   for(let i=0;i<12;i++){const s=await a.get("wg").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
   await a.setMeta("wg","ros","windows");
   say((await a.get("wg")).remoteOs==="windows","metaRoundTrips","METALOST");
-  // From a SETTLED log: zsh redraws its prompt after reporting idle, and
-  // counting that as typing would blame the guard for the shell.
-  const log=a.logPath("wg"); let before=-1;
-  for (let i=0;i<30;i++){ const s=fs.statSync(log).size; if(s===before) break; before=s; await new Promise(r=>setTimeout(r,1000)); }
-  for (const call of [()=>a.start("wg","echo SHOULD-NOT-RUN")]) {
-    try { await call(); out.push("RANONWINDOWS"); } catch(e){ out.push(e.code==="windows_not_ready"?"refused":"WRONGERROR:"+e.code); }
-  }
-  await new Promise(r=>setTimeout(r,1500));
-  // Judged by WHAT arrived, not how much: a prompt can redraw on its own, and
-  // counting bytes once blamed the guard for a shell repainting itself.
-  const added=fs.readFileSync(log).subarray(before).toString("utf8");
-  say(!added.includes("SHOULD-NOT-RUN") && !added.includes("AGENT INPUT ID"),"nothingTyped","TYPEDINTOIT");
+  const log=a.logPath("wg");
   // A Windows session whose pane is still the LOCAL shell (launch, reconnect) must
   // get the POSIX clear keys: the PowerShell chord, sent to zsh, arrived as ";;3~"
   // and turned the ssh launch line into "3~ssh".
   await a.sendLine("wg","echo clear-key-ok-$((40+2))");
   let ck=""; for(let i=0;i<20;i++){ ck=fs.readFileSync(log,"utf8"); if(ck.includes("clear-key-ok-42")) break; await new Promise(r=>setTimeout(r,250)); }
   say(ck.includes("clear-key-ok-42") && !ck.includes("3~echo"),"localPaneGetsPosixKeys","WINDOWSKEYSINLOCALSHELL");
+  // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
+  // them. The self-heal exists to type the POSIX helper into whatever shell it
+  // finds, so a Windows session whose hooks do not answer must refuse instead.
+  // Staged with a shell that has no hooks at all, recorded as the hooked one.
+  await a.sendLine("wg","exec env -i PATH=/usr/bin:/bin bash --norc --noprofile");
+  await new Promise(r=>setTimeout(r,2500));
+  await a.setMeta("wg","frame","bash");
+  const before=fs.statSync(log).size, codes=[];
+  for (const call of [()=>a.run("wg","echo one-line",{timeoutMs:15000}), ()=>a.start("wg","echo one-line"), ()=>a.run("wg","echo a\necho b",{timeoutMs:15000})]) {
+    try { await call(); codes.push("ran"); } catch(e){ codes.push(e.code); }
+  }
+  await new Promise(r=>setTimeout(r,1000));
+  const added=fs.readFileSync(log).subarray(before).toString("utf8");
+  say(codes.join()==="windows_hooks_missing,windows_hooks_missing,command_lost","refusesWithoutHooks","CODES:"+codes.join("|"));
+  say(!added.includes("__ath() {") && !added.includes("__ath_bpost") && !added.includes("add-zsh-hook"),"noPosixSelfHeal","POSIXHELPERTYPED");
   await a.setMeta("wg","ros","");
   say((await a.get("wg")).remoteOs===undefined,"blankMeansPosix","BLANKREADASWINDOWS");
   await a.kill("wg").catch(()=>{});
@@ -859,11 +872,10 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess \
-         cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty \
-         historyAndClearKey chainsByInvoke osOptionOk typoRefused metaRoundTrips nothingTyped localPaneGetsPosixKeys blankMeansPosix; do
+         cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
+         historyAndClearKey chainsByInvoke osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
-chk "windows: start refuses"             "1" "$(printf '%s' "$WINCHK" | grep -o '\brefused\b' | wc -l | tr -d ' ')"
 
 # ---- no surface may promise a sudo timeout it cannot know --------------------
 #

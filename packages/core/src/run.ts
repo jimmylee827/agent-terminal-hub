@@ -4,7 +4,17 @@ import * as os from 'node:os';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
 import { dialectFor, posixDialect } from './dialect';
-import { conptyAnnounced, psClean, psFindEnd, psFrame, psPartial } from './powershell';
+import {
+  conptyAnnounced,
+  psClean,
+  psEchoLines,
+  psFindEnd,
+  psFrame,
+  psLatestHandle,
+  psPartial,
+  psStartAt,
+  psWindow,
+} from './powershell';
 import { withSessionLock } from './lock';
 import {
   LOG_MAX_BYTES,
@@ -291,10 +301,6 @@ async function findCommandEnd(logFile: string, nonce: string): Promise<CommandEn
     }
   }
   return undefined;
-}
-
-async function findExitCode(logFile: string, nonce: string): Promise<number | undefined> {
-  return (await findCommandEnd(logFile, nonce))?.code;
 }
 
 /**
@@ -1557,12 +1563,7 @@ async function runLocked(
       // shell that does not answer the tag has neither — and there is nothing
       // to fall back to that is safe to type. The command itself was never
       // sent; only the tag line, which such a shell rejects without running.
-      throw new AthError(
-        'windows_hooks_missing',
-        `The PowerShell in "${clean}" did not answer the hub's tag line, so it is not the ` +
-          `shell the hub set up — most likely a nested shell, or one whose prompt was ` +
-          `replaced. Nothing was run. Type "exit" in it (ath attach ${clean}) to return.`,
-      );
+      throw windowsHooksMissing(clean);
     } else {
       await setMeta(clean, 'frame', '').catch(() => undefined);
       // The wrapper flag describes a SHELL, not a session, so it is stale the
@@ -2599,7 +2600,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // exactly what a cold agent hit: its `sudo -v` prompt was "dismissed before
     // you could type".
     await assertNotCredentialPrompt(clean);
-    refuseWindowsStart(clean, session);
+    const win = session.remoteOs === 'windows';
 
     const startTrim = await rotateIfNeeded(clean).catch(() => undefined);
     const startTrimmedBytes =
@@ -2631,7 +2632,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // only after the tag acknowledges, because an unhooked shell would run the
     // bare command with no markers and look lost. The wrapper remains the safe
     // fallback, unchanged.
-    const bare = commandLine(nonce, command);
+    const bare = win ? psBareLine(command) : commandLine(nonce, command);
     let framed = false;
     if (bare !== undefined && (await hooksActive(clean, session))) {
       await sendLine(clean, posixDialect.tagLine(nonce));
@@ -2639,8 +2640,12 @@ export async function start(name: string, command: string): Promise<StartResult>
       framed = await awaitTagAck(clean, nonce, session.remote ? 4000 : 1500);
       if (!framed) framed = await awaitTagAck(clean, nonce, 1500);
       if (framed) await sendLine(clean, bare);
+      // Same as `run`: PowerShell has nothing safe to fall back to.
+      else if (win) throw windowsHooksMissing(clean);
     }
-    if (!framed) {
+    if (!framed && win) {
+      await sendLine(clean, `. __ath ${nonce} ${await psDeliver(clean, command)}`);
+    } else if (!framed) {
       // Install the wrapper BEFORE using it, exactly as `run` already does.
       //
       // `run` checks `wrapperReady` and self-heals; `start` sent `__ath …`
@@ -2691,11 +2696,19 @@ export async function start(name: string, command: string): Promise<StartResult>
     // runs, so it appears in milliseconds when things are working, whatever
     // the command goes on to do.
     const launched = await awaitStartMarker(clean, nonce, START_CONFIRM_MS, offset);
+    // PowerShell draws the typed echo after the frame opens and re-renders it
+    // on Enter, so a poll from the dispatch offset can start inside it and hand
+    // the re-render back as output. Point the caller past the echo once it has
+    // fully arrived; if it has not within the window, the dispatch offset stands.
+    const pollFrom =
+      win && framed && launched
+        ? ((await psEchoEndOffset(clean, nonce, command, offset, 3000)) ?? offset)
+        : offset;
     return {
       session: clean,
       command,
       handle: nonce,
-      offset,
+      offset: pollFrom,
       // Reported, not thrown. The command may be sitting in the tty buffer
       // about to run — a session that merely LOOKS idle is exactly the case
       // `lastCommandEvidence` documents — and turning a delayed start into an
@@ -2775,7 +2788,7 @@ export async function reapResolvedRequests(name?: string): Promise<number> {
   for (const r of open) {
     if (r.resolvedAt !== undefined || !r.handle) continue;
     if (name !== undefined && r.session !== name) continue;
-    const code = await findExitCode(logPath(r.session), r.handle).catch(() => undefined);
+    const code = (await (await endReaderFor(r.session))(logPath(r.session), r.handle).catch(() => undefined))?.code;
     if (code !== undefined) {
       await clearRequest(r.id).catch(() => undefined);
       cleared += 1;
@@ -2818,6 +2831,7 @@ export async function latestHandle(name: string): Promise<string | undefined> {
   // there reporting "still waiting" at a prompt the human had already answered
   // — the precise failure this function was written to prevent, arriving
   // through the other door. A handle is 12 hex characters; require that.
+  if (await isWindowsSession(clean)) return psLatestHandle(tail);
   const re = new RegExp(`${SENTINEL}<ATHS:([0-9a-f]{12})>`, 'g');
   let found: string | undefined;
   for (let m = re.exec(tail); m !== null; m = re.exec(tail)) found = m[1];
@@ -2859,7 +2873,7 @@ export interface CommandOutcome {
  */
 export async function commandOutcome(name: string, handle: string): Promise<CommandOutcome> {
   const clean = validateName(name);
-  const end = await findCommandEnd(logPath(clean), handle).catch(() => undefined);
+  const end = await (await endReaderFor(clean))(logPath(clean), handle).catch(() => undefined);
   if (end === undefined) return { finished: false };
   return {
     finished: true,
@@ -2946,7 +2960,17 @@ export async function poll(
   const omitSeen = await caveatPeek(clean, 'omit').catch(() => 1);
   const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded, omitSeen > 0);
   if (slice.omitted !== undefined) await caveatCountFor(clean, 'omit').catch(() => undefined);
-  const output = trimToCommandWindow(slice.raw, handle);
+  // PowerShell: cut at the concealed markers and clean as ConPTY needs. The
+  // typed echo can only be in a slice that holds the start, and only the last
+  // dispatched command's text can match it.
+  const win = await isWindowsSession(clean);
+  let output: string;
+  if (win) {
+    const w = psWindow(slice.raw, handle);
+    output = psClean(w.body, w.opened ? (await get(clean).catch(() => undefined))?.lastCommand : undefined);
+  } else {
+    output = trimToCommandWindow(slice.raw, handle);
+  }
 
   let exitCode: number | null = null;
   let done = false;
@@ -2964,14 +2988,14 @@ export async function poll(
   // `box:~` for a shell sitting in /tmp/infra-survey-…, which is exactly the
   // place a caller looks to find out where a session is. Wrong quietly, which
   // is the worst way to be wrong.
-  const end = await findCommandEnd(log, handle);
+  const end = await (win ? psCommandEnd : findCommandEnd)(log, handle);
   const code = end?.code;
   if (code !== undefined) {
     exitCode = code;
     done = true;
     await setMeta(clean, 'last_rc', String(code)).catch(() => undefined);
     const sess = await get(clean).catch(() => undefined);
-    if (sess?.remote) await recordRemoteState(clean, end, undefined, sess).catch(() => undefined);
+    if (sess?.remote && !win) await recordRemoteState(clean, end, undefined, sess).catch(() => undefined);
   } else {
     const { dead, status } = await paneStatus(clean).catch(() => ({
       dead: false,
@@ -3258,6 +3282,9 @@ async function awaitStartMarker(
 ): Promise<boolean> {
   const file = logPath(name);
   const marker = `${SENTINEL}<ATHS:${nonce}>`;
+  // PowerShell's start marker is concealed text; ConPTY strips the sentinel.
+  const win = await isWindowsSession(name);
+  const started = (text: string): boolean => (win ? psStartAt(text, nonce) >= 0 : text.includes(marker));
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     let raw: string;
@@ -3273,11 +3300,11 @@ async function awaitStartMarker(
       // Belt and braces: if the window from `from` somehow missed it — a trim
       // that discarded the offset itself — fall back to the tail before
       // declaring a failure the caller will act on.
-      if (!raw.includes(marker) && (at?.lostBytes || Date.now() >= deadline)) {
+      if (!started(raw) && (at?.lostBytes || Date.now() >= deadline)) {
         raw += await readLogTailBytes(file, MARKER_SCAN_BYTES).catch(() => '');
       }
     }
-    if (raw.includes(marker)) return true;
+    if (started(raw)) return true;
     if (Date.now() >= deadline) return false;
     await sleep(60);
   }
@@ -3903,21 +3930,13 @@ async function raiseHumanWall(
  */
 const TTY_EATS_RE = /[\t\v\f\r\x00-\x08\x0e-\x1f]/;
 
-/**
- * Refuse `start` on a PowerShell session, for now.
- *
- * `run` speaks PowerShell; a background job does not yet — `poll` and `wait`
- * still read POSIX end markers, and would never see this one finish. So the
- * job is refused before a single character is typed, instead of handed back
- * as a handle that can never complete.
- */
-function refuseWindowsStart(name: string, session: Session): void {
-  if (session.remoteOs !== 'windows') return;
-  throw new AthError(
-    'windows_not_ready',
-    `Session "${name}" is on a Windows host ("${session.remote}"). ` +
-      `"run" works there; "start" does not yet, because nothing can poll a PowerShell job ` +
-      `to completion. Nothing was sent. Use run, with a longer timeout if it is slow.`,
+/** A PowerShell session whose hooks did not answer: there is no safe fallback to type. */
+function windowsHooksMissing(name: string): AthError {
+  return new AthError(
+    'windows_hooks_missing',
+    `The PowerShell in "${name}" did not answer the hub's tag line, so it is not the ` +
+      `shell the hub set up — most likely a nested shell, or one whose prompt was ` +
+      `replaced. Nothing was run. Type "exit" in it (ath attach ${name}) to return.`,
   );
 }
 
@@ -3988,6 +4007,48 @@ async function psDeliver(session: string, command: string): Promise<string> {
   await sendLine(session, `$__ath_b = '${chunks[0] ?? ''}'`);
   for (const chunk of chunks.slice(1)) await sendLine(session, `$__ath_b += '${chunk}'`);
   return '$__ath_b';
+}
+
+/** Whether a session speaks PowerShell. One tmux call; absent means POSIX. */
+async function isWindowsSession(name: string): Promise<boolean> {
+  return (await readMeta(name, 'ros').catch(() => '')) === 'windows';
+}
+
+/** The end-marker reader for a session's dialect. */
+async function endReaderFor(name: string): Promise<(logFile: string, nonce: string) => Promise<CommandEnd | undefined>> {
+  return (await isWindowsSession(name)) ? psCommandEnd : findCommandEnd;
+}
+
+/**
+ * The logical offset just past a typed command's echo, once it has arrived.
+ *
+ * `psEchoLines` answers in lines; this turns that into bytes by counting
+ * newline BYTES after the start marker, which is exact however many multi-byte
+ * characters the echo holds.
+ */
+async function psEchoEndOffset(
+  name: string,
+  nonce: string,
+  command: string,
+  fromLogical: number,
+  timeoutMs: number,
+): Promise<number | undefined> {
+  const log = logPath(name);
+  const deadline = Date.now() + timeoutMs;
+  const marker = Buffer.from(`<ATHS:${nonce}>`);
+  for (;;) {
+    const at = await resolveOffset(name, fromLogical).catch(() => undefined);
+    if (!at) return undefined;
+    const buf = await readLogRange(log, at.physical, MARKER_SCAN_BYTES * 2);
+    const lines = psEchoLines(buf.toString('utf8'), nonce, command);
+    if (lines !== undefined) {
+      let pos = buf.indexOf(marker);
+      for (let k = 0; k < lines && pos >= 0; k++) pos = buf.indexOf(0x0a, pos + 1);
+      return pos < 0 ? undefined : fromLogical + pos + 1;
+    }
+    if (Date.now() >= deadline) return undefined;
+    await sleep(60);
+  }
 }
 
 /** `findCommandEnd` for PowerShell: the concealed end marker in the log's tail. */
