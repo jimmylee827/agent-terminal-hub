@@ -424,6 +424,9 @@ async function probeInput(shell, utf8In) {
     [
       UTF8_OUT,
       utf8In ? '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false)' : '',
+      // This probe TYPES a line without the hooks, which would otherwise keep
+      // it out of the user's history file. Probing must leave no trace there.
+      "if (Get-Module PSReadLine) { Set-PSReadLineOption -HistorySaveStyle SaveNothing }",
       "Write-Host ('READY PSRL=' + [int][bool](Get-Module PSReadLine) + ' IN=' + [Console]::InputEncoding.WebName)",
     ].join('\n'),
     {
@@ -460,13 +463,20 @@ async function probeHub(hasPwsh) {
   const ssh = require(path.join(CORE, 'ssh.js'));
   const expectShell = hasPwsh ? 'pwsh' : 'powershell';
   const readyIn = (name) => (/<ATHR:[0-9a-z]+:(pwsh|powershell)>/.exec(fs.readFileSync(a.logPath(name), 'latin1')) || [])[1];
-  const attempt = async (name) => {
+  const run = async (name, command) => {
     try {
-      await a.run(name, 'echo hub-must-not-run-this', { timeoutMs: 60_000 });
-      return 'ran';
+      return await a.run(name, command, { timeoutMs: 60_000 });
     } catch (e) {
-      return e.code || String(e);
+      return { error: e.code || String(e) };
     }
+  };
+  const said = (r) => (r.error ? r.error : `exit ${r.exitCode}, ${JSON.stringify(r.output).slice(0, 80)}`);
+  // Lines in the user's PSReadLine history file, read without typing anything.
+  const historyLines = () => {
+    const script = '(Get-Content (Get-PSReadLineOption).HistorySavePath).Count';
+    const out = spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
+      `pwsh -NoLogo -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`], { encoding: 'utf8' });
+    return Number(((out.stdout || '').match(/^(\d+)\s*$/m) || [])[1] ?? -1);
   };
   try {
     // Key auth: the probe answers over the master, before anything is launched.
@@ -481,24 +491,40 @@ async function probeHub(hasPwsh) {
       const raw = fs.readFileSync(a.logPath('e2e-probe'), 'latin1');
       const ready = raw.search(/<ATHR:[0-9a-z]+:(pwsh|powershell)>/);
       const first = raw.indexOf('<ATHS:h1>', ready);
-      gate('hub: the hooks are live at the first prompt (concealed <ATHS:h1>)', ready >= 0 && first > ready && psm.concealedAt(raw, first), first > ready ? 'found, not concealed' : 'missing');
+      gate('hub: the hooks are live at the first prompt (concealed <ATHS:h1>)', ready >= 0 && first > ready && psm.concealedAt(raw, first), first < 0 ? 'missing' : psm.concealedAt(raw, first) ? '' : 'found, not concealed');
       gate("hub: and the user's own prompt still draws", /PS [A-Z]:\\[^\r\n]*>/.test(raw.slice(Math.max(first, 0))));
     }
-    gate('hub: run refuses instead of typing into it', (await attempt('e2e-probe')) === 'windows_not_ready');
+    // run, through every path a command can take.
+    const histBefore = historyLines();
+    const native = await run('e2e-probe', 'Write-Output hub-ok; cmd /c exit 3');
+    gate('hub: run returns a native exit code and exactly what was printed', native.exitCode === 3 && native.output === 'hub-ok' && !native.captureIncomplete, said(native));
+    const multi = await run('e2e-probe', 'Write-Output l1\nWrite-Output l2\ncmd /c exit 5');
+    gate('hub: a multi-line command goes through the wrapper', multi.exitCode === 5 && multi.output === 'l1\nl2', said(multi));
+    const long = await run('e2e-probe', `Write-Output '${'a'.repeat(700)}'`);
+    gate('hub: a long command arrives whole, typed in pieces', long.exitCode === 0 && long.output === 'a'.repeat(700), said(long));
+    const table = await run('e2e-probe', "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}");
+    gate('hub: aligned columns survive ConPTY', table.output === 'A   B\n-   -\nx   yy\nzzz w', said(table));
+    await run('e2e-probe', 'Set-Location C:\\Windows');
+    const cwd = await run('e2e-probe', '(Get-Location).Path');
+    gate('hub: the working directory persists between commands', cwd.output === 'C:\\Windows', said(cwd));
+    const started = await a.start('e2e-probe', 'Get-Date').then(() => 'started', (e) => e.code);
+    gate('hub: start refuses until PowerShell jobs can be polled', started === 'windows_not_ready', started);
+    const histAfter = historyLines();
+    gate("hub: nothing the hub typed reached the user's history file", histBefore >= 0 && histAfter === histBefore, `${histBefore} -> ${histAfter} lines`);
 
     // The password-host route, forced: launch as POSIX onto Windows. cmd.exe
     // rejects the payload and the link closes; the next command must read the
-    // ConPTY greeting, relaunch as PowerShell, and still refuse.
+    // ConPTY greeting, relaunch as PowerShell, and then run there.
     await a.create({ name: 'e2e-detect', remote: host, os: 'posix' });
     for (let i = 0; i < 40; i++) {
       if ((await a.get('e2e-detect')).currentCommand !== 'ssh') break;
       await sleep(500);
     }
-    const code = await attempt('e2e-detect');
+    const detectRun = await run('e2e-detect', 'Write-Output detect-ok');
     const detected = await a.get('e2e-detect');
     gate('hub: a POSIX launch that lands on Windows is recognised from ConPTY', detected.remoteOs === 'windows', `remoteOs=${detected.remoteOs}`);
     gate('hub: and relaunched as PowerShell', readyIn('e2e-detect') === expectShell, readyIn('e2e-detect') || 'no ready marker');
-    gate('hub: then refused, not typed into', code === 'windows_not_ready', code);
+    gate('hub: and the command then runs there', detectRun.exitCode === 0 && detectRun.output === 'detect-ok', said(detectRun));
   } finally {
     for (const n of ['e2e-probe', 'e2e-detect']) await a.kill(n).catch(() => undefined);
     await ssh.closeSharedConnection(host).catch(() => undefined);
@@ -582,6 +608,9 @@ async function probeMatrix(shell) {
           results[via].push({ name: 'table', want: 0, ...table });
           results[via].table = table;
         }
+        // The history handler, asked directly rather than by typing into the real
+        // file: a person's line goes where it always did, a hub line stays in memory.
+        results.history = await drive('wrapper', "$f=(Get-PSReadLineOption).AddToHistoryHandler; [string]$f.Invoke('Get-Date') + '|' + [string]$f.Invoke('. __ath x y')");
         // Only the wrapper can carry a command that spans lines.
         results.wrapper.push({ name: 'multi-line command', want: 3, ...(await drive('wrapper', '$a = 1\n$b = 2\ncmd /c exit ($a + $b)')) });
         ctx.keys('exit');
@@ -590,6 +619,9 @@ async function probeMatrix(shell) {
       },
     },
   );
+  const h = results.history;
+  const said = h && h.frame ? require(path.join(CORE, 'powershell.js')).psClean(h.frame.body) : (h && h.err) || '';
+  gate(`${tag}: the history handler keeps a person's line and drops a hub line`, /MemoryAndFile\|MemoryOnly/.test(said), said.slice(0, 80));
   for (const via of ['framed', 'wrapper']) {
     const rows = results[via];
     const wrong = rows.filter((r) => r.rc !== r.want).map((r) => `${r.name}: ${r.err ?? `got ${r.rc}`}, want ${r.want}`);

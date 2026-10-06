@@ -524,10 +524,10 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
     // way we type NOTHING; the first command self-heals into the wrapper.
     //
     // PowerShell gets longer: 5.1 starts, loads the profile, hands over to pwsh,
-    // which loads its own. And it records no hooks or wrapper, because it has
-    // neither yet.
+    // which loads its own. Its launch carries the hooks and wrapper too, so a
+    // ready marker means the same thing for both dialects.
     const readyMarker = await awaitMarker(name, ready, dialect.id === 'posix' ? 5000 : 20_000);
-    if (readyMarker !== undefined && dialect.id === 'posix') {
+    if (readyMarker !== undefined) {
       const shell = await get(name)
         .then((sess) => sess.currentCommand)
         .catch(() => '');
@@ -597,10 +597,22 @@ export async function sendLine(
   await exitCopyMode(target);
 
   if (options.clearLine !== false) {
-    // C-e first so C-u clears the whole line under bash's kill-to-start binding
-    // as well as zsh's kill-whole-line.
-    await tmux(['send-keys', '-t', target, 'C-e'], { allowFail: true });
-    await tmux(['send-keys', '-t', target, 'C-u'], { allowFail: true });
+    // Judged by what is in the pane NOW, not by what the far side will be: the
+    // launch and reconnect lines of a Windows session are typed into the LOCAL
+    // shell, where M-F12 arrived as `;;3~` and turned `ssh …` into `3~ssh`.
+    if (
+      (await readMeta(clean, 'ros')) === 'windows' &&
+      isNesting((await paneStatus(clean).catch(() => null))?.command ?? '')
+    ) {
+      // PSReadLine TYPES C-e/C-u as literal control characters in its default
+      // edit mode. Its hooks bind this chord to clearing the line instead.
+      await tmux(['send-keys', '-t', target, 'M-F12'], { allowFail: true });
+    } else {
+      // C-e first so C-u clears the whole line under bash's kill-to-start binding
+      // as well as zsh's kill-whole-line.
+      await tmux(['send-keys', '-t', target, 'C-e'], { allowFail: true });
+      await tmux(['send-keys', '-t', target, 'C-u'], { allowFail: true });
+    }
   }
 
   // Retry once through a mode cancel.

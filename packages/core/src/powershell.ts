@@ -11,6 +11,8 @@
  * of relaying it. scripts/conpty-probe.js measures what survives that; this
  * file only uses channels that probe gates on.
  */
+import { gzipSync } from 'node:zlib';
+
 import { launchFromBootFile } from './ssh';
 
 /**
@@ -51,7 +53,9 @@ export function psLaunchScript(token: string): string {
     '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
     '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)',
     '$OutputEncoding = [Console]::OutputEncoding',
-    psHooksScript(),
+    // Gzipped: the hooks are most of the payload, and cmd.exe's ceiling is hard.
+    // Uncompressed, hooks plus launch left ~400 of 8,191 characters.
+    `. ([scriptblock]::Create([IO.StreamReader]::new([IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('${gzipSync(Buffer.from(psHooksScript(), 'utf8')).toString('base64')}')), [IO.Compression.CompressionMode]::Decompress)).ReadToEnd()))`,
     `Write-Host -NoNewline ([char]27 + ']777;ath;<ATHR:${token}:' + (Get-Process -Id $PID).ProcessName + '>' + [char]7)`,
   ].join('\n');
 }
@@ -133,6 +137,24 @@ export function psHooksScript(): string {
     "function global:__ath_mark([string]$t) { Write-Host -NoNewline ([char]27 + '[8m' + $t + [char]27 + '[28m') }",
     "function global:__ath_osc([string]$t) { Write-Host -NoNewline ([char]27 + ']777;ath;' + $t + [char]7) }",
     'if (-not $global:__ath_prompt0) { $global:__ath_prompt0 = $function:prompt }',
+    // PSReadLine, when present. In its default Windows mode C-e/C-u are not
+    // editing keys — they are TYPED, as literal control characters, and turned
+    // the tag line into a command that did not exist. An otherwise-unused chord
+    // clears the line in every edit mode (Escape would enter Vi command mode).
+    // And the history FILE is the user's: lines the hub types — the tag, the
+    // wrapper, the agent's own command — stay out of it (in memory where
+    // PSReadLine supports that), so they are neither left on disk nor offered
+    // back to the person as predictions. A handler they had keeps running.
+    'if (Get-Module PSReadLine) {',
+    "  Set-PSReadLineKeyHandler -Chord 'Alt+F12' -Function RevertLine",
+    "  $global:__ath_skip = if ('Microsoft.PowerShell.AddToHistoryOption' -as [type]) { [Microsoft.PowerShell.AddToHistoryOption]::MemoryOnly } else { $false }",
+    '  if (-not $global:__ath_hist0) { $global:__ath_hist0 = (Get-PSReadLineOption).AddToHistoryHandler }',
+    '  Set-PSReadLineOption -AddToHistoryHandler { param([string]$line)',
+    "    if (($global:__ath_n -and $global:__ath_n -notlike 'h*') -or $line -match '^(\\u2193\\u2193\\u2193 AGENT INPUT ID: |\\. __ath |\\$__ath_b )') { return $global:__ath_skip }",
+    // A DELEGATE, not a scriptblock: `&` on it throws, on 5.1 and 7 alike, which
+    // hung 5.1 outright and would have broken every line a person types on 7.
+    '    if ($global:__ath_hist0) { return $global:__ath_hist0.Invoke($line) }; $true }',
+    '}',
     '$global:__ath_h = 0; $global:__ath_n = $null; $global:__ath_pending = $null; $global:__ath_lec = $global:LASTEXITCODE',
     // The tag line names the next command. It is a command itself, so it must
     // exist in this shell, and it acknowledges so the hub knows it does.
@@ -290,4 +312,16 @@ export function psClean(body: string, command?: string): string {
   while (lines.length && lines[0] === '') lines.shift();
   while (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines.join('\n');
+}
+
+/**
+ * A frame that has not closed: from the first concealed start marker to
+ * whatever has arrived. For results that end before the command does — a
+ * timeout, a prompt, a shell that exited — where demanding both markers would
+ * throw away output sitting in the log.
+ */
+export function psPartial(raw: string, nonce: string): string {
+  const marker = `<ATHS:${nonce}>`;
+  const s = firstConcealed(raw, marker);
+  return s < 0 ? '' : raw.slice(s + marker.length);
 }

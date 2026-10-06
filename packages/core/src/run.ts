@@ -4,7 +4,7 @@ import * as os from 'node:os';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
 import { dialectFor, posixDialect } from './dialect';
-import { conptyAnnounced } from './powershell';
+import { conptyAnnounced, psClean, psFindEnd, psFrame, psPartial } from './powershell';
 import { withSessionLock } from './lock';
 import {
   LOG_MAX_BYTES,
@@ -1191,6 +1191,9 @@ async function waitForCompletion(
   nonce: string,
   outerCommand: string,
   baselineShells = 0,
+  // How this shell's end marker is read. POSIX by default; a PowerShell session
+  // passes its own, whose sentinel is concealed text rather than \x1e.
+  findEnd: (logFile: string, nonce: string) => Promise<CommandEnd | undefined> = findCommandEnd,
 ): Promise<Completion> {
   const began = Date.now();
   const deadline = began + timeoutMs;
@@ -1203,7 +1206,7 @@ async function waitForCompletion(
   let lastChangeAt = began;
 
   for (;;) {
-    const end = await findCommandEnd(logFile, nonce);
+    const end = await findEnd(logFile, nonce);
     if (end !== undefined) return { kind: 'done', exitCode: end.code, end };
 
     if (Date.now() >= nextDeathCheck) {
@@ -1217,7 +1220,7 @@ async function waitForCompletion(
       const { dead, status } = snapshot;
       if (dead) {
         // The marker may have been emitted microseconds before the shell died.
-        const late = await findExitCode(logFile, nonce);
+        const late = (await findEnd(logFile, nonce))?.code;
         if (late !== undefined) return { kind: 'done', exitCode: late };
         return { kind: 'shell-exited', status };
       }
@@ -1425,6 +1428,9 @@ async function runLocked(
       if (dialect.id === 'powershell') {
         if ((await readLogTailBytes(logPath(clean), 8192)).includes(`<ATHR:${readyToken}:`)) {
           reconnected = true;
+          // The relaunch carried the hooks and the wrapper, as creation does.
+          await setMeta(clean, 'frame', session.currentCommand).catch(() => undefined);
+          await setMeta(clean, 'wrap', '1').catch(() => undefined);
           break;
         }
       } else if (isNesting(session.currentCommand) && session.state === 'idle') {
@@ -1467,10 +1473,10 @@ async function runLocked(
     }
   }
 
-  // A PowerShell session is connected and usable by a person, but nothing below
-  // speaks PowerShell yet: the self-heal would type POSIX shell into it. Refuse
-  // before a single character is sent.
-  refuseWindowsSession(clean, session);
+  // A PowerShell session speaks a different protocol from here on: its markers
+  // are concealed text, its wrapper takes base64, and nothing POSIX — above all
+  // the self-heal, which TYPES the POSIX helper — may reach it.
+  const win = session.remoteOs === 'windows';
 
   // Safe here and nowhere else: we hold the lock, so no offset is in flight.
   const trim = await rotateIfNeeded(clean).catch(() => undefined);
@@ -1502,7 +1508,7 @@ async function runLocked(
   // anyway, producing no markers — so `run` concludes it was lost and sends it
   // AGAIN. That is double execution with side effects. The wrapper form fails
   // safely instead: `__ath` being undefined means nothing runs at all.
-  const bare = commandLine(nonce, command);
+  const bare = win ? psBareLine(command) : commandLine(nonce, command);
   const framed = bare !== undefined && (await hooksActive(clean, session));
   let usedFraming = false;
   let enteredUnknownShell = false;
@@ -1546,6 +1552,17 @@ async function runLocked(
       // it again sends C-e/C-u to a shell that may still be starting, which
       // echoes them as a literal `^E^U` into the shared console.
       await sendLine(clean, bare as string, { clearLine: false });
+    } else if (win) {
+      // PowerShell's tag function and wrapper are installed together, so a
+      // shell that does not answer the tag has neither — and there is nothing
+      // to fall back to that is safe to type. The command itself was never
+      // sent; only the tag line, which such a shell rejects without running.
+      throw new AthError(
+        'windows_hooks_missing',
+        `The PowerShell in "${clean}" did not answer the hub's tag line, so it is not the ` +
+          `shell the hub set up — most likely a nested shell, or one whose prompt was ` +
+          `replaced. Nothing was run. Type "exit" in it (ath attach ${clean}) to return.`,
+      );
     } else {
       await setMeta(clean, 'frame', '').catch(() => undefined);
       // The wrapper flag describes a SHELL, not a session, so it is stale the
@@ -1556,7 +1573,12 @@ async function runLocked(
       enteredUnknownShell = true;
     }
   }
-  if (!usedFraming) {
+  if (!usedFraming && win) {
+    // Dot-sourced, so the command runs in the session's scope like a typed one.
+    // An absent wrapper fails safely here too: "__ath is not recognized", and
+    // nothing runs.
+    await sendLine(clean, `. __ath ${nonce} ${await psDeliver(clean, command)}`);
+  } else if (!usedFraming) {
     // Install the wrapper BEFORE the first command that needs it.
     //
     // Sending `__ath …` to a shell that has never seen it prints
@@ -1585,6 +1607,7 @@ async function runLocked(
   await recordLast(clean, command, null);
   let completion = await waitForCompletion(
     clean, timeoutMs, pollMs, log, offset, nonce, outerCommand, baselineShells,
+    win ? psCommandEnd : findCommandEnd,
   );
 
   // The helper is missing whenever the pane holds a shell we did not set up:
@@ -1592,7 +1615,9 @@ async function runLocked(
   // started sub-shell. Rather than fail, install it and try once more — which
   // is what makes driving a remote host work at all, without special-casing
   // ssh anywhere in the protocol.
-  if (completion.kind === 'lost') {
+  //
+  // Never on PowerShell: the install IS the POSIX helper, typed.
+  if (completion.kind === 'lost' && !win) {
     // Install the HOOKS into a shell we did not set up, not just the wrapper.
     //
     // This used to be wrapper-only, because bash's DEBUG trap fired inside
@@ -1661,14 +1686,20 @@ async function runLocked(
    * frame from a capture defined as incomplete was the error.
    */
   const partial = async (): Promise<string> =>
-    cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
+    win
+      ? psClean(psPartial(await readLogFrom(log, offset), nonce), usedFraming ? command : undefined)
+      : cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
 
   if (completion.kind === 'lost') {
     throw new AthError(
       'command_lost',
-      `The command never reached the shell in "${clean}", even after reinstalling the ` +
-        `helper. The pane may have text already typed on its command line, or be showing ` +
-        `something that is not a shell. Check it with "ath read ${clean}".`,
+      win
+        ? `The command never reached the PowerShell in "${clean}". The pane may have text ` +
+            `already typed on its command line, or be showing something that is not the ` +
+            `shell the hub set up. Nothing was retried. Check it with "ath read ${clean}".`
+        : `The command never reached the shell in "${clean}", even after reinstalling the ` +
+            `helper. The pane may have text already typed on its command line, or be showing ` +
+            `something that is not a shell. Check it with "ath read ${clean}".`,
     );
   }
 
@@ -1772,12 +1803,23 @@ async function runLocked(
   // Second occurrence of this failure, first one after it was supposedly fixed
   // — because the first fix added a second opinion instead of removing one.
   const flushDeadline = Date.now() + MARKER_FLUSH_MS;
+  // PowerShell frames come from a different reader: concealed markers, first
+  // start to first end, and a cleaner that knows ConPTY's habits. A repaint
+  // inside the frame means the body may hold replayed screen, so it is reported
+  // as incomplete rather than handed back as what the command printed.
+  let repainted = false;
+  const captureFrom = (text: string): FramedCapture => {
+    if (!win) return extractFramed(text, nonce, command);
+    const frame = psFrame(text, nonce);
+    repainted = frame.repainted;
+    return { framed: frame.framed, output: psClean(frame.body, usedFraming ? command : undefined) };
+  };
   let raw = await readLogFrom(log, offset);
-  let capture = extractFramed(raw, nonce, command);
+  let capture = captureFrom(raw);
   while (!capture.framed && Date.now() < flushDeadline) {
     await sleep(40);
     raw = await readLogFrom(log, offset);
-    capture = extractFramed(raw, nonce, command);
+    capture = captureFrom(raw);
   }
   // Still not framed after the wait: whatever we return is a guess, and an
   // empty guess is the dangerous one. SAY the capture is incomplete rather
@@ -1800,7 +1842,8 @@ async function runLocked(
   // Scoped to the empty case on purpose. A fallback that still captured output
   // is not in doubt, and flagging it would put a "re-read this" on results that
   // are fine — which is how a flag stops being read.
-  const captureIncomplete = !capture.framed || (enteredUnknownShell && capture.output === '');
+  const captureIncomplete =
+    !capture.framed || repainted || (enteredUnknownShell && capture.output === '');
 
   const exitCode = completion.exitCode;
   await recordLast(clean, command, exitCode);
@@ -1808,7 +1851,10 @@ async function runLocked(
   // on every command because once the link drops there is nothing left to ask,
   // and a reconnect that lands in the wrong directory runs the next command in
   // the wrong place while reporting success.
-  if (session.remote) await recordRemoteState(clean, completion.end, command, session);
+  //
+  // POSIX only for now: it parses POSIX assignments out of the command text,
+  // and a PowerShell reconnect has no restore to replay them into yet.
+  if (session.remote && !win) await recordRemoteState(clean, completion.end, command, session);
 
   // Framing recovers on its own.
   //
@@ -2553,7 +2599,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // exactly what a cold agent hit: its `sudo -v` prompt was "dismissed before
     // you could type".
     await assertNotCredentialPrompt(clean);
-    refuseWindowsSession(clean, session);
+    refuseWindowsStart(clean, session);
 
     const startTrim = await rotateIfNeeded(clean).catch(() => undefined);
     const startTrimmedBytes =
@@ -3858,20 +3904,20 @@ async function raiseHumanWall(
 const TTY_EATS_RE = /[\t\v\f\r\x00-\x08\x0e-\x1f]/;
 
 /**
- * Refuse to type into a PowerShell session until something here speaks it.
+ * Refuse `start` on a PowerShell session, for now.
  *
- * The session itself works — created, reconnected, usable by a person who
- * attaches. What does not exist yet is a command path: the markers, the
- * wrapper and the self-heal are POSIX, and the self-heal's whole job is to
- * type them into whatever shell it finds.
+ * `run` speaks PowerShell; a background job does not yet — `poll` and `wait`
+ * still read POSIX end markers, and would never see this one finish. So the
+ * job is refused before a single character is typed, instead of handed back
+ * as a handle that can never complete.
  */
-function refuseWindowsSession(name: string, session: Session): void {
+function refuseWindowsStart(name: string, session: Session): void {
   if (session.remoteOs !== 'windows') return;
   throw new AthError(
     'windows_not_ready',
-    `Session "${name}" is on a Windows host ("${session.remote}"), so its shell is PowerShell. ` +
-      `It is connected and a person can use it with "ath attach ${name}", but this build ` +
-      `cannot run commands in PowerShell yet. Nothing was sent.`,
+    `Session "${name}" is on a Windows host ("${session.remote}"). ` +
+      `"run" works there; "start" does not yet, because nothing can poll a PowerShell job ` +
+      `to completion. Nothing was sent. Use run, with a longer timeout if it is slow.`,
   );
 }
 
@@ -3913,6 +3959,41 @@ async function deliverCommand(session: string, command: string): Promise<string>
     await sendLine(session, `__ath_b="$__ath_b"${shellQuote(chunk)}`);
   }
   return '"$(printf %s "$__ath_b" | base64 -d)"';
+}
+
+/**
+ * A command to type bare into PowerShell, or undefined to send it wrapped.
+ *
+ * The POSIX rule plus a length limit, which POSIX typing does not apply but
+ * the reason behind MAX_TYPED_LINE does: a terminal's input buffer is finite,
+ * and truncation runs the truncated command.
+ */
+function psBareLine(command: string): string | undefined {
+  if (command.includes('\n') || TTY_EATS_RE.test(command) || command.length > MAX_TYPED_LINE) {
+    return undefined;
+  }
+  return command;
+}
+
+/**
+ * The wrapper's argument: the command as base64, typed in short pieces when it
+ * is long. Base64 needs no quoting in PowerShell, so the command arrives exact
+ * whatever it contains; the pieces accumulate in a variable, as the POSIX path
+ * does, so no line that reaches the terminal is long.
+ */
+async function psDeliver(session: string, command: string): Promise<string> {
+  const b64 = Buffer.from(command, 'utf8').toString('base64');
+  if (b64.length <= MAX_TYPED_LINE - 40) return b64;
+  const chunks = b64.match(/.{1,400}/g) ?? [];
+  await sendLine(session, `$__ath_b = '${chunks[0] ?? ''}'`);
+  for (const chunk of chunks.slice(1)) await sendLine(session, `$__ath_b += '${chunk}'`);
+  return '$__ath_b';
+}
+
+/** `findCommandEnd` for PowerShell: the concealed end marker in the log's tail. */
+async function psCommandEnd(logFile: string, nonce: string): Promise<CommandEnd | undefined> {
+  const code = psFindEnd(await readLogTailBytes(logFile, MARKER_SCAN_BYTES), nonce);
+  return code === undefined ? undefined : { code };
 }
 
 function encodeCommand(command: string): string {

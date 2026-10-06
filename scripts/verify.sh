@@ -793,8 +793,15 @@ say(script.includes("<ATHR:0123456789ab:") && /\]777;ath;/.test(script),"readyVi
 say(/& pwsh .*-EncodedCommand/.test(script),"upgradesToPwsh","NOUPGRADE");
 // The hooks ride the launch, between the upgrade and the ready marker: typed
 // afterwards they would echo into the pane and land in the PSReadLine history.
-const iUp=script.indexOf("& pwsh"), iHooks=script.indexOf("function global:prompt"), iReady=script.indexOf("<ATHR:");
-say(iUp>=0 && iHooks>iUp && iReady>iHooks && script.includes("$global:__ath_prompt0 = $function:prompt") && script.includes("function global:\u2193\u2193\u2193"),"hooksRideLaunch","HOOKSMISSING");
+const gz=/FromBase64String\(\x27([A-Za-z0-9+\/=]+)\x27\)/.exec(script);
+const hooks=gz ? require("zlib").gunzipSync(Buffer.from(gz[1],"base64")).toString("utf8") : "";
+const iUp=script.indexOf("& pwsh"), iHooks=gz ? gz.index : -1, iReady=script.indexOf("<ATHR:");
+say(iUp>=0 && iHooks>iUp && iReady>iHooks && hooks===ps.psHooksScript() && hooks.includes("$global:__ath_prompt0 = $function:prompt") && hooks.includes("function global:\u2193\u2193\u2193"),"hooksRideLaunch","HOOKSMISSING");
+// The history handler and the clear chord, both inside the hooks.
+say(/AddToHistoryHandler/.test(hooks) && /Alt\+F12.*RevertLine/.test(hooks),"historyAndClearKey","NOHISTORYGUARD");
+// The previous handler is a .NET delegate: invoked with `&` it throws, which hung
+// PowerShell 5.1 at its first prompt. Only .Invoke() calls it.
+say(hooks.includes("$global:__ath_hist0.Invoke($line)") && !/& \$global:__ath_hist0/.test(hooks),"chainsByInvoke","CHAINSWITHAMPERSAND");
 say(d.dialectFor(undefined).id==="posix" && d.dialectFor("windows").id==="powershell","dialectFor","DIALECTFOR");
 // The Windows reader. Concealed text (SGR 8) is its sentinel, so a command that
 // PRINTS a marker cannot end itself or forge its status; and the FIRST start
@@ -829,11 +836,20 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   // counting that as typing would blame the guard for the shell.
   const log=a.logPath("wg"); let before=-1;
   for (let i=0;i<30;i++){ const s=fs.statSync(log).size; if(s===before) break; before=s; await new Promise(r=>setTimeout(r,1000)); }
-  for (const call of [()=>a.run("wg","echo SHOULD-NOT-RUN",{timeoutMs:8000}), ()=>a.start("wg","echo SHOULD-NOT-RUN")]) {
+  for (const call of [()=>a.start("wg","echo SHOULD-NOT-RUN")]) {
     try { await call(); out.push("RANONWINDOWS"); } catch(e){ out.push(e.code==="windows_not_ready"?"refused":"WRONGERROR:"+e.code); }
   }
-  await new Promise(r=>setTimeout(r,800));
-  say(fs.statSync(log).size===before,"nothingTyped","TYPEDINTOIT");
+  await new Promise(r=>setTimeout(r,1500));
+  // Judged by WHAT arrived, not how much: a prompt can redraw on its own, and
+  // counting bytes once blamed the guard for a shell repainting itself.
+  const added=fs.readFileSync(log).subarray(before).toString("utf8");
+  say(!added.includes("SHOULD-NOT-RUN") && !added.includes("AGENT INPUT ID"),"nothingTyped","TYPEDINTOIT");
+  // A Windows session whose pane is still the LOCAL shell (launch, reconnect) must
+  // get the POSIX clear keys: the PowerShell chord, sent to zsh, arrived as ";;3~"
+  // and turned the ssh launch line into "3~ssh".
+  await a.sendLine("wg","echo clear-key-ok-$((40+2))");
+  let ck=""; for(let i=0;i<20;i++){ ck=fs.readFileSync(log,"utf8"); if(ck.includes("clear-key-ok-42")) break; await new Promise(r=>setTimeout(r,250)); }
+  say(ck.includes("clear-key-ok-42") && !ck.includes("3~echo"),"localPaneGetsPosixKeys","WINDOWSKEYSINLOCALSHELL");
   await a.setMeta("wg","ros","");
   say((await a.get("wg")).remoteOs===undefined,"blankMeansPosix","BLANKREADASWINDOWS");
   await a.kill("wg").catch(()=>{});
@@ -844,10 +860,10 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess \
          cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty \
-         osOptionOk typoRefused metaRoundTrips nothingTyped blankMeansPosix; do
+         historyAndClearKey chainsByInvoke osOptionOk typoRefused metaRoundTrips nothingTyped localPaneGetsPosixKeys blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
-chk "windows: run AND start both refuse"  "2" "$(printf '%s' "$WINCHK" | grep -o '\brefused\b' | wc -l | tr -d ' ')"
+chk "windows: start refuses"             "1" "$(printf '%s' "$WINCHK" | grep -o '\brefused\b' | wc -l | tr -d ' ')"
 
 # ---- no surface may promise a sudo timeout it cannot know --------------------
 #
@@ -2438,7 +2454,9 @@ chk "the doc names the timing exception"     "yes" \
 # reason. The rule was right; the list was one character short.
 chk "control characters force the encoded path" "yes" \
     "$(grep -q 'TTY_EATS_RE.test(command)' "$RP/packages/core/src/run.ts" && echo yes || echo no)"
-chk "and encodeCommand uses the same test"      "3" \
+# Four: the definition, and every place that decides how a command is typed —
+# the POSIX bare line, its encoder, and the PowerShell bare line.
+chk "and encodeCommand uses the same test"      "4" \
     "$(grep -c 'TTY_EATS_RE' "$RP/packages/core/src/run.ts" | tr -d ' ')"
 TABOK="$(node "$RP/scripts/tabcheck.js" 2>/dev/null)"
 chk "a tabbed pattern actually matches now" "yes" "$TABOK"
