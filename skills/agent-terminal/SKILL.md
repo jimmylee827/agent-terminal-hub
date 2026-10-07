@@ -499,7 +499,7 @@ Fields worth checking on the `--json` form:
 | `timed_out` | Still running. Output is partial; poll with `ath read`. |
 | `shell_exited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
 | `exit_code_covers` / `exit_code_caveat` | The code is only the last part of a compound line, the last stage of a pipeline, or, on PowerShell, what ran outside a `{ }` block. The caveat is the long form, shown once per session; `exit_code_note` is the one-line form that rides every affected command. Read the output, not the number. |
-| `capture_incomplete` | The output came back empty and that could NOT be confirmed as genuine. Re-read before concluding the command printed nothing. |
+| `capture_incomplete` | Output in doubt: empty and unconfirmed, or (PowerShell) a resize replayed the screen into it; lines may repeat. Follow `what_to_do`. |
 | `command_gone` | On `poll`: this handle began and then died, or never framed at all. `exit_code` is `null` because what it did is unknowable. Stop polling — `read` the session, then re-run if you still need it. |
 | `log_trimmed_bytes` | That many bytes were DISCARDED from this session's transcript when the command started. Gone, not paginated. |
 | `omitted_at_risk` / `omitted_resume_from` | Output was elided and the offset offered to recover it may expire in the next trim. Read it now, or redirect the job to a file. |

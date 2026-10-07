@@ -8,6 +8,8 @@ import {
   conptyAnnounced,
   psClean,
   psEchoEnd,
+  psRepainted,
+  psRepaintTouches,
   psLaunchCarries,
   psCwdRestoreScript,
   psEnvRestoreScript,
@@ -1699,10 +1701,17 @@ async function runLocked(
    * markers ARE present and tolerates the absent one. Demanding a complete
    * frame from a capture defined as incomplete was the error.
    */
-  const partial = async (): Promise<string> =>
-    win
-      ? psClean(psPartial(await readLogFrom(log, offset), nonce), usedFraming ? command : undefined, session.paneWidth)
-      : cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
+  let partialRepainted = false;
+  const partial = async (): Promise<string> => {
+    if (!win) return cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
+    const body = psPartial(await readLogFrom(log, offset), nonce);
+    partialRepainted = psRepainted(body);
+    return psClean(body, usedFraming ? command : undefined, session.paneWidth);
+  };
+  // A partial result is the one a person is most likely to have resized: it is
+  // what a command parked on a prompt returns, and they attach to answer it.
+  const partialDoubt = (): Partial<RunResult> =>
+    partialRepainted ? { captureIncomplete: true, captureRepainted: true } : {};
 
   if (completion.kind === 'lost') {
     throw new AthError(
@@ -1724,6 +1733,7 @@ async function runLocked(
       command,
       exitCode: completion.status,
       output: await partial(),
+      ...partialDoubt(),
       timedOut: false,
       needsInput: false,
       state: 'dead',
@@ -1777,6 +1787,7 @@ async function runLocked(
       command,
       exitCode: null,
       output: await partial(),
+      ...partialDoubt(),
       timedOut: completion.kind === 'timeout',
       needsInput: state === 'needs-input',
       state,
@@ -2183,9 +2194,11 @@ async function runLocked(
     // Nothing is gained by withholding it — the handle stays valid for
     // `commandOutcome` after the command is done.
     handle: nonce,
-    // Only on the completed path: the early returns never reached the flush
-    // loop, so they have nothing to be incomplete about.
+    // The flush-loop doubt exists only on the completed path: the early returns
+    // never reached the flush loop. A PowerShell repaint, which they can hold,
+    // is flagged on them separately (`partialDoubt`).
     ...(captureIncomplete ? { captureIncomplete: true } : {}),
+    ...(repainted ? { captureRepainted: true } : {}),
     ...(capped.omittedBytes !== undefined
       ? { omittedBytes: capped.omittedBytes, omittedResumeFrom: discarded + offset }
       : {}),
@@ -2980,10 +2993,18 @@ export async function poll(
   // dispatched command's text can match it.
   const win = await isWindowsSession(clean);
   let output: string;
+  // A resize mid-job replays the whole screen into the slice, which would
+  // otherwise read as new output: lines the caller already has, again.
+  let sliceRepainted = false;
   if (win) {
     const w = psWindow(slice.raw, handle);
     const now = await get(clean).catch(() => undefined);
     output = psClean(w.body, w.opened ? now?.lastCommand : undefined, now?.paneWidth);
+    // Looking back a screen's worth and more: a repaint begun in the last slice
+    // may still be drawing into this one.
+    const back = Math.min(at.physical, 65536);
+    const before = back > 0 ? (await readLogRange(log, at.physical - back, back)).toString('utf8') : '';
+    sliceRepainted = psRepaintTouches(before + slice.raw.slice(0, w.end), before.length + w.start);
   } else {
     output = trimToCommandWindow(slice.raw, handle);
   }
@@ -3177,6 +3198,7 @@ export async function poll(
         }
       : {}),
     ...(widthChange === undefined ? {} : { paneWidthChanged: widthChange }),
+    ...(sliceRepainted ? { captureIncomplete: true, captureRepainted: true } : {}),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
@@ -4385,6 +4407,13 @@ export function inheritedContextNote(
     (anyVars ? ' These are ALREADY SET in the shell you would be adopting.' : '')
   );
 }
+
+/** What a repainted capture means, and what to do about it. Shared wording. */
+export const REPAINT_ADVICE =
+  'The screen was resized while this ran — a person attaching, or a `width` call — and ' +
+  'PowerShell on Windows replays the whole screen into the transcript when that happens, ' +
+  'so this output may hold lines twice. The exit code is still exact. Re-reading returns ' +
+  'the same bytes; if you need an exact copy, run the command again, or have it write to a file.';
 
 /** What to do instead, when a tail came back as furniture. Shared wording. */
 export const EMPTY_TAIL_ADVICE =

@@ -253,6 +253,13 @@ export interface RunResult {
    */
   captureIncomplete?: boolean;
   /**
+   * Why the capture is in doubt, when it is a PowerShell REPAINT: a resize — a
+   * person attaching, or `width` — makes ConPTY redraw the whole screen into
+   * the transcript, so the output may hold lines twice. Re-reading returns the
+   * same bytes; only running it again gives a clean copy.
+   */
+  captureRepainted?: boolean;
+  /**
    * Bytes dropped from the MIDDLE of `output` because it exceeded the cap.
    *
    * Undeclared until now, while `run` set it through an object spread — so the
@@ -324,6 +331,9 @@ export interface PollResult {
   output: string;
   /** Pass as `since` on the next poll. */
   nextOffset: number;
+  /** As on `run`: a repaint landed in this slice, so lines may appear twice. */
+  captureIncomplete?: boolean;
+  captureRepainted?: boolean;
   /**
    * Bytes dropped from the MIDDLE of `output` because it exceeded the cap.
    *

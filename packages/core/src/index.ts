@@ -99,6 +99,7 @@ export {
   readTail,
   tailIsAllFurniture,
   EMPTY_TAIL_ADVICE,
+  REPAINT_ADVICE,
   inheritedContextNote,
   logNearTrimNote,
   trimProspect,
