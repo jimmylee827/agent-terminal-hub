@@ -901,7 +901,17 @@ say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undef
 // What a Windows host is left with, said as precisely as the POSIX case: the
 // hub keeps its own lines out of the history file, and a person\u2019s are saved.
 const fp=a.REMOTE_FOOTPRINT.join(" ");
-say(/WINDOWS host/.test(fp) && /kept out of PSReadLine/.test(fp) && /PERSON types in that session is saved/.test(fp) && /your shell writes its own/.test(fp),"footprintCoversWindows","FOOTPRINTPOSIXONLY");
+say(/WINDOWS host/.test(fp) && /kept out of PSReadLine/.test(fp) && /PERSON types in that session is saved/.test(fp) && /predictions are off/.test(fp) && /your shell writes its own/.test(fp),"footprintCoversWindows","FOOTPRINTPOSIXONLY");
+// Predictions draw saved history into what ConPTY sends; the hooks turn them
+// off, and only where this PSReadLine has them (5.1 does not).
+say(/Parameters\.ContainsKey\(.PredictionSource.\)\) \{ Set-PSReadLineOption -PredictionSource None \}/.test(ps.psHooksScript()),"predictionsOff","PREDICTIONSDRAWHISTORY");
+// A profile with Set-StrictMode makes reading a variable that does not exist
+// THROW. The hooks once did, at install and in every prompt, so commands never
+// reported an end. Existence is asked with Test-Path, every global is set at
+// install, and $LASTEXITCODE (absent until a native command runs) is read only
+// through Get-Variable. Live: the strict variants of the matrix.
+const hk=ps.psHooksScript();
+say(!/-not \$global:__ath_\w+\)/.test(hk) &&!/= \$global:LASTEXITCODE\b/.test(hk) && /Test-Path variable:global:__ath_env0/.test(hk) && /__ath_envj = \$null/.test(hk),"strictModeSafe","STRICTTRIPS");
 try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.code==="invalid_option","typoRefused","TYPOWRONGCODE"); }
 (async()=>{
   await a.create({name:"wg",cwd:"/tmp"});
@@ -967,7 +977,7 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth repaintExtent pollFlagsRepaint \
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth repaintExtent pollFlagsRepaint predictionsOff strictModeSafe \
          cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
          historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
@@ -5022,9 +5032,29 @@ console.log(must.every(t=>s.looksLikeCredentialPrompt(t))?"all":"gap");' 2>/dev/
 check "password, passphrase, API key, token and OTP all count as credentials" "all" "${cred:-x}"
 safe=$(node -e '
 const s=require("./packages/core/dist/state.js");
-const notPrompts=["Downloading: ","Reading package lists... ","total 48"];
+const notPrompts=["Downloading: ","Reading package lists... ","total 48",
+  "PS C:\\Users\\dev> ","PS C:\\> ","    Directory: C:\\Windows","Mode                 LastWriteTime         Length Name",
+  "Confirm","Are you sure you want to perform this action?","cmdlet New-Item at command pipeline position 1",
+  "Supply values for the following parameters:","Line |","Name: svc","Status:","Results:\nName:",
+  "Supply values for the following parameters:\nName: svc\nPS C:\\>","Enter your credentials.\nUser: bob\nPS C:\\>"];
 console.log(notPrompts.some(t=>s.looksLikePrompt(t)||s.looksLikeCredentialPrompt(t))?"false-positive":"clean");' 2>/dev/null)
 check "ordinary progress output is not mistaken for a prompt" "clean" "${safe:-x}"
+# PowerShell asks in shapes no POSIX prompt has, and each one sat silent until
+# the timeout on a real Windows host: a mandatory parameter left out (the
+# classic "my command hangs"), -Confirm and PromptForChoice, Get-Credential,
+# and choice.exe. The plain "Name:" forms count only under PowerShell's own
+# header, which is what keeps the list above clean.
+psp=$(node -e '
+const s=require("./packages/core/dist/state.js");
+const must=["cmdlet New-Item at command pipeline position 1\nSupply values for the following parameters:\nPath[0]: ",
+  "Supply values for the following parameters:\nPath[0]: C:\\x\nPath[1]: ",
+  "Supply values for the following parameters:\nInputObject: ","Supply values for the following parameters:\nName: svc\nValue: ",
+  "Confirm\nAre you sure you want to perform this action?\n[Y] Yes  [A] Yes to All  [N] No  [L] No to All  [S] Suspend  [?] Help (default is \"Y\"): ",
+  "Deploy\nProceed with the rollout?\n[Y] Yes  [N] No  [?] Help (default is \"N\"): ",
+  "PowerShell credential request\nEnter your credentials.\nUser: ","Continue [Y,N]?"];
+const missed=must.filter(t=>!s.looksLikePrompt(t,200));
+console.log(missed.length?"missed:"+missed.length:"all");' 2>/dev/null)
+check "PowerShell prompts park: a missing parameter, a confirmation, a choice, credentials" "all" "${psp:-x}"
 git=$(node -e '
 const s=require("./packages/core/dist/state.js");
 const t="Username for \x27https://github.com\x27: ";
