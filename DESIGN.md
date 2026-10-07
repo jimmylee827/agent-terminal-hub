@@ -104,6 +104,36 @@ running anything in a session with a remote host, the hub checks it is still
 inside the connection, reconnects if not, and refuses (`remote_disconnected`)
 rather than running locally.
 
+### Windows hosts get their own protocol
+
+Windows sshd runs the shell inside ConPTY, which does not pass bytes through:
+it renders a screen and sends its own VT. Every property the POSIX markers rely
+on is lost there — the `\x1e` sentinel is stripped, text written and then erased
+is never sent, a long marker is cut at the pane width, and escape sequences
+overtake the text written before them. So a PowerShell session uses the two
+channels that measurably survive: **concealed text** (`\e[8m…\e[28m`) for the
+start and end markers, ordered with the output because it is output, and
+**OSC 777** for keyed records whose order does not matter (tag acknowledgement,
+ready, working directory, environment). The POSIX path is untouched, pinned by
+byte-level golden fixtures.
+
+Reading follows from the same fact: ConPTY output is *rendered*, not stripped —
+cursor moves, erases, autowrap, double-width CJK, the padding cell a wide
+character leaves, and the way it redraws a wrapped row once the screen is full.
+A resize replays the whole screen into the log, so any result it touches is
+flagged `capture_incomplete` rather than returned with lines twice.
+
+What it costs the person in the session: one blank-looking line before each
+prompt (the markers sit there, concealed), and PSReadLine's inline predictions
+are off, because they draw saved history beside the cursor and ConPTY would
+send that into the transcript. Their prompt, profile and line editing stay.
+
+The OS is detected, not configured: probed over the shared connection when key
+auth allows, otherwise recognised from ConPTY's greeting after a POSIX launch
+lands there, and relaunched as PowerShell. Limits that are the platform's, not
+the hub's: a UAC prompt or anything else on the interactive desktop cannot be
+reached over ssh, and cmd is a command (`cmd /c "…"`), never the session shell.
+
 ### Knowing a command ended when the shell it ran in is gone
 
 Three different situations, none of which write an end marker:

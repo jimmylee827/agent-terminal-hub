@@ -148,7 +148,42 @@ const PROMPT_PATTERNS: RegExp[] = [
   /\b(?:api[- ]?key|access[- ]?token|auth[- ]?token|client[- ]?secret)[^\n]{0,40}:\s*$/i,
   /press (?:enter|return|any key)[^\n]{0,32}$/i,
   /\byes\/no(?:\/\[fingerprint\])?\)?\?\s*$/i,
+  // PowerShell's own prompts, each anchored on text only it prints, since this
+  // list runs for every session and no POSIX output may trip it. Measured on a
+  // Windows host, where each sat silent until the timeout:
+  //   a mandatory parameter left out — `Path[0]:` and then `Path[1]:` for the
+  //   next element (the plain `Name:` form needs the line above it: see
+  //   `psTwoLinePrompt`); -Confirm and PromptForChoice — a choice line ending
+  //   `[?] Help (default is "Y"):`; and choice.exe — `Continue [Y,N]?`.
+  /^[A-Za-z][\w-]{0,40}\[\d+\]:\s*$/,
+  /\[\?\] Help(?: \(default is "[^"\n]{0,24}"\))?:\s*$/,
+  /\[[A-Z0-9](?:,[A-Z0-9])+\]\?\s*$/,
 ];
+
+/**
+ * PowerShell prompts whose last line is too generic alone — `Name:`, `User:` —
+ * and whose meaning is in a fixed header above it.
+ *
+ * Not by joining lines: joining unconditionally made a finished command's
+ * question-shaped output plus the next shell prompt read as a prompt. Here the
+ * header must be PowerShell's exact text, and every line between it and the
+ * last must be a field already answered.
+ */
+function psTwoLinePrompt(paneTail: string): boolean {
+  const lines = paneTail
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  const last = lines.pop();
+  if (last === undefined || !/^[A-Za-z][\w-]{0,40}(?:\[\d+\])?:$/.test(last)) return false;
+  for (let i = lines.length - 1, seen = 0; i >= 0 && seen < 20; i--, seen++) {
+    const line = lines[i] ?? '';
+    if (/^supply values for the following parameters:$/i.test(line)) return true;
+    if (/^enter your credentials\.$/i.test(line)) return /^user:$/i.test(last) && i === lines.length - 1;
+    if (!/^[A-Za-z][\w-]{0,40}(?:\[\d+\])?: \S/.test(line)) return false;
+  }
+  return false;
+}
 
 /**
  * Extra commands the user knows to be interactive.
@@ -225,7 +260,7 @@ export function looksLikePrompt(paneTail: string, paneWidth = 0): boolean {
   const candidates = tailCandidates(paneTail, paneWidth);
   if (candidates.length === 0) return false;
   const patterns = [...PROMPT_PATTERNS, ...extraPatterns];
-  return candidates.some((text) => patterns.some((re) => re.test(text)));
+  return candidates.some((text) => patterns.some((re) => re.test(text))) || psTwoLinePrompt(paneTail);
 }
 
 export interface ClassifyInput {

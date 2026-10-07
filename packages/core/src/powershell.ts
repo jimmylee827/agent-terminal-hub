@@ -169,7 +169,11 @@ export function psHooksScript(): string {
   return [
     "function global:__ath_mark([string]$t) { Write-Host -NoNewline ([char]27 + '[8m' + $t + [char]27 + '[28m') }",
     "function global:__ath_osc([string]$t) { Write-Host -NoNewline ([char]27 + ']777;ath;' + $t + [char]7) }",
-    'if (-not $global:__ath_prompt0) { $global:__ath_prompt0 = $function:prompt }',
+    // No read of a variable that may not exist: a profile with `Set-StrictMode
+    // -Version Latest` makes that THROW, which left the hooks half-installed and
+    // every later prompt failing — commands then never reported an end. Its
+    // strict mode stays as it is; the hooks just never trip it.
+    'if (-not (Test-Path variable:global:__ath_prompt0)) { $global:__ath_prompt0 = $function:prompt }',
     // PSReadLine, when present. In its default Windows mode C-e/C-u are not
     // editing keys — they are TYPED, as literal control characters, and turned
     // the tag line into a command that did not exist. An otherwise-unused chord
@@ -180,20 +184,27 @@ export function psHooksScript(): string {
     // back to the person as predictions. A handler they had keeps running.
     'if (Get-Module PSReadLine) {',
     "  Set-PSReadLineKeyHandler -Chord 'Alt+F12' -Function RevertLine",
+    // Predictions draw the person's saved history beside the cursor whenever
+    // input arrives in pieces, and ConPTY sends what is drawn: one put a bearer
+    // token from that history into the transcript the agent reads. Off in this
+    // session only; 5.1's PSReadLine has none.
+    "  if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource')) { Set-PSReadLineOption -PredictionSource None }",
     "  $global:__ath_skip = if ('Microsoft.PowerShell.AddToHistoryOption' -as [type]) { [Microsoft.PowerShell.AddToHistoryOption]::MemoryOnly } else { $false }",
-    '  if (-not $global:__ath_hist0) { $global:__ath_hist0 = (Get-PSReadLineOption).AddToHistoryHandler }',
+    '  if (-not (Test-Path variable:global:__ath_hist0)) { $global:__ath_hist0 = (Get-PSReadLineOption).AddToHistoryHandler }',
     '  Set-PSReadLineOption -AddToHistoryHandler { param([string]$line)',
     "    if (($global:__ath_n -and $global:__ath_n -notlike 'h*') -or $line -match '^(\\u2193\\u2193\\u2193 AGENT INPUT ID: |\\. __ath |\\$__ath_b )') { return $global:__ath_skip }",
     // A DELEGATE, not a scriptblock: `&` on it throws, on 5.1 and 7 alike, which
     // hung 5.1 outright and would have broken every line a person types on 7.
     '    if ($global:__ath_hist0) { return $global:__ath_hist0.Invoke($line) }; $true }',
     '}',
-    '$global:__ath_h = 0; $global:__ath_n = $null; $global:__ath_pending = $null; $global:__ath_w = $false; $global:__ath_hid = $null; $global:__ath_lec = $global:LASTEXITCODE',
+    '$global:__ath_h = 0; $global:__ath_n = $null; $global:__ath_pending = $null; $global:__ath_w = $false; $global:__ath_hid = $null; $global:__ath_envj = $null',
+    // `$LASTEXITCODE` does not exist until a native command has run.
+    '$global:__ath_lec = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore',
     // The environment as this shell began (after the profile), so a reconnect can
     // replay exactly what changed since. Reported as a cumulative diff, and only
     // when it changes: the latest report is always the whole truth, and an
     // ordinary prompt sends nothing. Removed variables are reported as null.
-    'if (-not $global:__ath_env0) { $global:__ath_env0 = @{}; foreach ($e in (Get-ChildItem env:)) { $global:__ath_env0[$e.Name] = $e.Value } }',
+    'if (-not (Test-Path variable:global:__ath_env0)) { $global:__ath_env0 = @{}; foreach ($e in (Get-ChildItem env:)) { $global:__ath_env0[$e.Name] = $e.Value } }',
     'function global:__ath_envreport([string]$id) {',
     '  $d = [ordered]@{}; $now = @{}; foreach ($e in (Get-ChildItem env:)) { $now[$e.Name] = $e.Value }',
     '  foreach ($k in $now.Keys) { if (-not $global:__ath_env0.ContainsKey($k) -or $global:__ath_env0[$k] -cne $now[$k]) { $d[$k] = $now[$k] } }',
@@ -208,7 +219,7 @@ export function psHooksScript(): string {
     "  if ($n -match '^[0-9a-f]{12}$') { $global:__ath_pending = $n; $global:LASTEXITCODE = 0; __ath_osc ('<ATHT:' + $n + '>') }",
     '}',
     'function global:prompt {',
-    '  $ok = $?; $lec = $global:LASTEXITCODE',
+    '  $ok = $?; $lec = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore',
     // A line that failed to PARSE never ran, so `$?` is still the previous
     // line's, and the console does not put the error in `$Error` either. Its
     // history entry is new and says Failed; a re-parse tells it from a line

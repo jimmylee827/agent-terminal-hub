@@ -60,6 +60,7 @@ const CORE = path.join(__dirname, '..', 'packages', 'core', 'dist');
 const W = 200;
 const H = 50;
 const UTF8_HEX = 'e4b8ade69687e29c93'; // 中文✓
+const UTF8_TEXT = '中文✓ 😀 émoji 👍🏽';
 
 const tmux = (...args) => spawnSync('tmux', ['-u', '-L', SOCK, '-f', '/dev/null', ...args], { encoding: 'utf8' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -547,6 +548,21 @@ async function probeHub(hasPwsh) {
     const reread = await a.readSince('e2e-probe', table.logOffset);
     gate('hub: read --since shows the same columns, spacing intact', /^x   yy$/m.test(reread.output) && /^zzz w$/m.test(reread.output), JSON.stringify(reread.output).slice(0, 90));
     gate('hub: and no raw control character reaches the reader', !/[\x00-\x08\x0b-\x1f]/.test(reread.output), JSON.stringify((reread.output.match(/[\x00-\x08\x0b-\x1f]/g) || []).slice(0, 5)));
+    // PSReadLine's inline predictions draw saved history beside the cursor
+    // whenever input arrives in pieces, and ConPTY sends what is drawn: one put
+    // a bearer token from the user's history into the transcript. Typing only a
+    // prefix is the deterministic form; it must draw nothing but what was typed.
+    {
+      await run('e2e-probe', "$zq_pred = 'zq-predicted-7f3'");
+      const before = fs.statSync(a.logPath('e2e-probe')).size;
+      await a.sendKeys('e2e-probe', ['$', 'z', 'q']);
+      await sleep(1500);
+      const drawn = fs.readFileSync(a.logPath('e2e-probe')).subarray(before).toString('utf8');
+      await a.sendKeys('e2e-probe', ['M-F12']);
+      await sleep(500);
+      const src = await run('e2e-probe', '"$((Get-PSReadLineOption).PredictionSource)"');
+      gate('hub: typing draws no history: predictions are off in a hub session', src.output === 'None' && /\$zq/.test(drawn) && !/predicted-7f3/.test(drawn), `PredictionSource=${src.output} drew-history=${/predicted-7f3/.test(drawn)}`);
+    }
     await run('e2e-probe', 'Set-Location C:\\Windows');
     const cwd = await run('e2e-probe', '(Get-Location).Path');
     gate('hub: the working directory persists between commands', cwd.output === 'C:\\Windows', said(cwd));
@@ -631,6 +647,27 @@ async function probeHub(hasPwsh) {
       const chained = await run('e2e-probe', 'cmd /c exit 3 && Write-Output not-reached');
       gate('hub: && stops at the first failure and reports its code', chained.exitCode === 3 && chained.output === '', said(chained));
     }
+    // PowerShell's own prompts must park the command as needs_input, well
+    // before the timeout, rather than sit silent until it: each did. Every one
+    // is cancelled with Ctrl-C, so nothing is created and nothing is answered.
+    {
+      const parked = [];
+      for (const [label, cmd] of [
+        ['a mandatory parameter left out', 'New-Item -ItemType File'],
+        ['-Confirm', 'New-Item -ItemType Directory -Path $env:TEMP\\ath-probe-confirm -Confirm'],
+        ['PromptForChoice', "$Host.UI.PromptForChoice('Deploy', 'Proceed?', @('&Yes','&No'), 1)"],
+        ['Get-Credential', 'Get-Credential'],
+        ['choice.exe', 'choice /C YN /M "Continue"'],
+      ]) {
+        const t0 = Date.now();
+        const r = await a.run('e2e-probe', cmd, { timeoutMs: 20_000 }).catch((e) => ({ error: e.code || String(e) }));
+        if (!(r.needsInput === true && Date.now() - t0 < 15_000)) parked.push(`${label}: ${r.error || `state=${r.state}`}`);
+        await a.sendKeys('e2e-probe', ['C-c']);
+        for (let i = 0; i < 20 && (await a.get('e2e-probe')).state !== 'idle'; i++) await sleep(300);
+      }
+      const left = await run('e2e-probe', 'Test-Path $env:TEMP\\ath-probe-confirm');
+      gate('hub: PowerShell prompts park as needs_input (5 kinds), and Ctrl-C leaves nothing', parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
+    }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
     // with nothing typed to get there, and still report exact exit codes.
@@ -712,9 +749,13 @@ const MATRIX = [
   ['a syntax error', 'Write-Output )', 1],
 ];
 
-async function probeMatrix(shell) {
+// `strict`: the whole matrix again with `Set-StrictMode -Version Latest` in force
+// before the hooks install, as a profile would set it. Reading a variable that
+// does not exist then throws, and the hooks once did: half-installed, every
+// later prompt failing, commands never reporting an end.
+async function probeMatrix(shell, strict = false) {
   const ps = require(path.join(CORE, 'powershell.js'));
-  const tag = shell === 'pwsh' ? 'pwsh' : 'ps51';
+  const tag = (shell === 'pwsh' ? 'pwsh' : 'ps51') + (strict ? '-strict' : '');
   const nonce = () => [...Array(12)].map(() => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
   const results = { framed: [], wrapper: [] };
   await capture(
@@ -724,7 +765,7 @@ async function probeMatrix(shell) {
     // The user's prompt is swapped for one that prints `$?`, standing in for a
     // status-aware prompt (oh-my-posh, starship): after every case it must show
     // the status the hub reports, not the status of the hub's own prompt code.
-    [UTF8_OUT, ps.psHooksInstall(), "$global:__ath_prompt0 = { 'PSQ[' + $? + ']> ' }", "Write-Host 'ATHPROBE-READY'"].join('\n'),
+    [...(strict ? ['Set-StrictMode -Version Latest'] : []), UTF8_OUT, ps.psHooksInstall(), "$global:__ath_prompt0 = { 'PSQ[' + $? + ']> ' }", "Write-Host 'ATHPROBE-READY'"].join('\n'),
     {
       shell,
       interactive: true,
@@ -778,6 +819,9 @@ async function probeMatrix(shell) {
         }
         // A syntax error through the wrapper, which parses the whole command first.
         results.syntax = await drive('wrapper', "Write-Output ran-anyway\nif (");
+        // Text outside ASCII and outside the BMP, typed key by key and carried as
+        // base64: the console defaults to GB2312 here, which turns ✓ into `?`.
+        results.utf8 = [await drive('framed', `Write-Output '${UTF8_TEXT}'`), await drive('wrapper', `Write-Output '${UTF8_TEXT}'`)];
         // The history handler, asked directly rather than by typing into the real
         // file: a person's line goes where it always did, a hub line stays in memory.
         results.history = await drive('wrapper', "$f=(Get-PSReadLineOption).AddToHistoryHandler; [string]$f.Invoke('Get-Date') + '|' + [string]$f.Invoke('. __ath x y')");
@@ -785,9 +829,14 @@ async function probeMatrix(shell) {
         results.wrapper.push({ name: 'multi-line command', want: 3, ...(await drive('wrapper', '$a = 1\n$b = 2\ncmd /c exit ($a + $b)')) });
         // No `exit` typed: PSReadLine would save it to the user's history file.
         // capture() ends the session from outside instead.
+        results.raw = ctx.read();
       },
     },
   );
+  if (strict) {
+    const tripped = (results.raw || '').match(/has not been set|VariableIsUndefined|PropertyNotFoundStrict|outside the bounds of the array/);
+    gate(`${tag}: strict mode set first trips nothing in the hooks`, !!results.raw && results.raw.includes('<ATHS:') && !tripped, tripped ? tripped[0] : '');
+  }
   const h = results.history;
   const said = h && h.frame ? require(path.join(CORE, 'powershell.js')).psClean(h.frame.body) : (h && h.err) || '';
   gate(`${tag}: the history handler keeps a person's line and drops a hub line`, /MemoryAndFile\|MemoryOnly/.test(said), said.slice(0, 80));
@@ -800,6 +849,14 @@ async function probeMatrix(shell) {
     const blind = rows.filter((r) => !r.err && r.saw !== (r.rc === 0 ? 'True' : 'False')).map((r) => `${r.name}: exit ${r.rc}, prompt saw ${r.saw}`);
     gate(`${tag} ${via}: the user's prompt sees the status the hub reports`, rows.some((r) => r.saw) && blind.length === 0, blind.length ? blind.slice(0, 3).join('; ') : '');
   }
+  const [u8typed, u8wrapped] = results.utf8 || [];
+  // The capture is read one byte per character; this check needs the text.
+  const u8 = (r, cmd) =>
+    r && r.frame
+      ? require(path.join(CORE, 'powershell.js')).psClean(Buffer.from(r.frame.body, 'latin1').toString('utf8'), cmd)
+      : (r && r.err) || '';
+  const u8got = [u8(u8typed, `Write-Output '${UTF8_TEXT}'`), u8(u8wrapped)];
+  gate(`${tag}: 中文✓, emoji and accents arrive intact, typed and wrapped`, u8got.every((o) => o === UTF8_TEXT), JSON.stringify(u8got).slice(0, 100));
   const sx = results.syntax;
   const sxOut = sx && sx.frame ? require(path.join(CORE, 'powershell.js')).psClean(sx.frame.body) : (sx && sx.err) || '';
   gate(`${tag}: a wrapped syntax error names the agent's line, and nothing ran`, !!sx && sx.rc === 1 && /\bif \(/.test(sxOut) && /Missing/.test(sxOut) && !/__ath|Create|MethodInvocation|ran-anyway/.test(sxOut), JSON.stringify(sxOut).slice(0, 100));
@@ -849,7 +906,12 @@ function historyLines() {
       else info(`${r.tag}: typed 中文✓ arrives as`, r.got === UTF8_HEX ? `UTF-8 ${line}` : line);
     }
   }
-  if (want('matrix')) for (const shell of hasPwsh ? ['powershell', 'pwsh'] : ['powershell']) await probeMatrix(shell);
+  if (want('matrix')) {
+    for (const shell of hasPwsh ? ['powershell', 'pwsh'] : ['powershell']) {
+      await probeMatrix(shell);
+      await probeMatrix(shell, true);
+    }
+  }
   if (want('hub')) await probeHub(hasPwsh);
   if (want('stress')) await probeStress();
   const historyAtEnd = historyLines();

@@ -52,6 +52,10 @@ You typed one password. You never pasted a command or an output.
 Nothing needs installing on any remote server you connect to. That is a hard
 rule of the design — the hub leaves no trace on machines it drives.
 
+A remote host can also be **Windows**, through the OpenSSH Server that ships
+with Windows 10 and 11. The session there is PowerShell (7 if installed,
+otherwise 5.1), and the hub works that out for itself.
+
 ---
 
 ## Install
