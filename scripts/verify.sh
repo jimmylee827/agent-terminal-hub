@@ -806,6 +806,15 @@ say(hooks.includes("$global:__ath_hist0.Invoke($line)") && !/& \$global:__ath_hi
 // nonce, and carried into a relaunch so a reconnect comes back where it was \u2014
 // without typing anything into the pane or the history.
 say((hooks.match(/__ath_osc \(\x27cwd;\x27/g)||[]).length===2,"reportsCwd","NOCWDREPORT");
+// The environment: a baseline when the shell begins, a cumulative diff reported
+// by the prompt AND the wrapper, the LATEST report read back, and a restore that
+// PowerShell parses itself, so no value needs escaping on this side.
+say(/__ath_env0 = @\{\}/.test(hooks) && (hooks.match(/__ath_envreport \$/g)||[]).length===2,"reportsEnvDiff","NOENVREPORT");
+const env1=Buffer.from("{\"A\":\"1\"}").toString("base64"), env2=Buffer.from("{\"A\":\"2\",\"B\":null}").toString("base64");
+say(ps.psFindEnv("\x1b]777;ath;env;h1;"+env1+"\x07 \x1b]777;ath;env;0123456789ab;"+env2+"\x07")==="{\"A\":\"2\",\"B\":null}","latestEnvWins","ENVORDER");
+const tricky=JSON.stringify({Q:"v1 \"q\" \u4e2d\u6587; x",GONE:null});
+const rs=ps.psEnvRestoreScript(tricky), blob=/FromBase64String\(\x27([A-Za-z0-9+\/=]+)\x27\)/.exec(rs);
+say(!!blob && Buffer.from(blob[1],"base64").toString("utf8")===tricky && /Remove-Item -LiteralPath/.test(rs) && /Set-Item -LiteralPath/.test(rs),"envRestoreRoundTrips","ENVRESTORE");
 const CN="0123456789ab", cwdRec="\x1b]777;ath;cwd;"+CN+";"+Buffer.from("C:\\Users\\\u4e2d","utf8").toString("base64")+"\x07";
 say(ps.psFindCwd(cwdRec,CN)==="C:\\Users\\\u4e2d" && ps.psFindCwd(cwdRec,"ffffffffffff")===undefined,"readsCwdByNonce","CWDREAD");
 const withCwd=Buffer.from(ps.psRemoteCommand(ps.psLaunchScript(CN,{cwd:"C:\\Windows"})).split(" ").pop(),"base64").toString("utf16le");
@@ -828,6 +837,10 @@ say(ps.psFindEnd(hid("<ATHS:"+N+">")+"running",N)===undefined,"noEndNoGuess","GU
 // Backspaces resolve as a terminal shows them: PSReadLine redraws a character
 // over itself, and a counter can back over its digits.
 say(ps.psClean("PS C:\\> [\b[x]\r\nstep 1\b2\b3\r\n")==="PS C:\\> [x]\nstep 3","backspacesResolved","RAWBACKSPACE");
+// Each line is RENDERED: a PSReadLine redraw moves back and erases, and only
+// honouring both leaves what the screen shows. Ignoring erase left the tail of a
+// longer redraw glued to the echo, so the echo stopped being recognised.
+say(ps.psClean("PS C:\\> Get-Da\x1b[2;9HGet-Date | Out-Null\x1b[K\r\n")==="PS C:\\> Get-Date | Out-Null" && ps.psClean("long render text here\r\x1b[Kshort\r\n")==="short" && ps.psClean("abcdef\x1b[4D\x1b[2Xz\r\n")==="abz ef","linesAreRendered","NOTRENDERED");
 // The cleaner, against REAL ConPTY frames captured from both PowerShell versions
 // (scripts/fixtures/conpty-frames.json): predictions redrawn into the echo,
 // the error style of each version, a table, a forged marker printed as text, and
@@ -902,9 +915,9 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved \
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered \
          cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
-         historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
+         historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 

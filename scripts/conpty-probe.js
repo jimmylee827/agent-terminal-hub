@@ -524,11 +524,17 @@ async function probeHub(hasPwsh) {
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
     // with nothing typed to get there, and still report exact exit codes.
+    // And the environment: set one, REMOVE one that existed when the shell
+    // began, and append to PATH (a long value), all of which must come back.
+    const envSet = await run('e2e-probe', "$env:ATH_PROBE_X = 'v1 \"q\" 中文'; Remove-Item env:PROCESSOR_LEVEL; $env:Path += ';C:\\ath-probe-dir'");
+    gate('hub: environment changes are made', envSet.exitCode === 0, said(envSet));
     await ssh.closeSharedConnection(host);
     for (let i = 0; i < 20 && (await a.get('e2e-probe')).currentCommand === 'ssh'; i++) await sleep(500);
     const back = await run('e2e-probe', '(Get-Location).Path; cmd /c exit 6');
     gate('hub: after the link drops, run reconnects and says so', back.reconnecting === true, said(back));
     gate('hub: and comes back in the same directory, exit codes intact', back.output === 'C:\\Windows' && back.exitCode === 6, said(back));
+    const envBack = await run('e2e-probe', "[string]$env:ATH_PROBE_X + '|' + [string]$env:PROCESSOR_LEVEL + '|' + $env:Path.EndsWith(';C:\\ath-probe-dir')");
+    gate('hub: and with its environment: set, removed and PATH all restored', envBack.output === 'v1 "q" 中文||True', said(envBack));
     const histAfter = historyLines();
     gate("hub: nothing the hub typed reached the user's history file", histBefore >= 0 && histAfter === histBefore, `${histBefore} -> ${histAfter} lines`);
 
