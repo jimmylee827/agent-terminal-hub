@@ -59,7 +59,7 @@ export function psHooksInstall(): string {
 }
 
 export function psLaunchScript(token: string, state: { cwd?: string } = {}): string {
-  return [
+  const script = (cwd?: string): string => [
     "if ($PSVersionTable.PSVersion.Major -lt 7 -and (Get-Command pwsh -ErrorAction SilentlyContinue)) {",
     "  & pwsh -NoLogo -NoExit -EncodedCommand ([Environment]::CommandLine -split '\\s+')[-1]; exit }",
     '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
@@ -68,18 +68,35 @@ export function psLaunchScript(token: string, state: { cwd?: string } = {}): str
     psHooksInstall(),
     // A reconnect comes back where the dropped shell was. Carried here rather
     // than typed afterwards, as the POSIX restore does, so nothing reaches the
-    // pane or the history; base64, so no path needs quoting.
-    ...(state.cwd
-      ? [`try { Set-Location -LiteralPath ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(state.cwd, 'utf8').toString('base64')}'))) } catch {}`]
-      : []),
+    // pane or the history.
+    ...(cwd ? [psCwdRestoreScript(cwd)] : []),
     `Write-Host -NoNewline ([char]27 + ']777;ath;<ATHR:${token}:' + (Get-Process -Id $PID).ProcessName + '>' + [char]7)`,
   ].join('\n');
+  // Each character of a path costs about four on cmd.exe's line, more for one
+  // outside ASCII, so a deep path — or a short one in Chinese — would push the
+  // launch past the ceiling and the reconnect would fail outright. It is left
+  // out instead, and comes back through the wrapper (see `psLaunchCarries`).
+  const full = script(state.cwd);
+  return state.cwd && remoteFor(full).length > CMD_LINE_MAX ? script() : full;
+}
+
+/** Whether a launch with this token carries this cwd, or leaves it to the wrapper. */
+export function psLaunchCarries(token: string, cwd: string): boolean {
+  return psLaunchScript(token, { cwd }).includes(psCwdRestoreScript(cwd));
+}
+
+/** Go back to a working directory: base64, so no path needs quoting. */
+export function psCwdRestoreScript(cwd: string): string {
+  return `try { Set-Location -LiteralPath ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(cwd, 'utf8').toString('base64')}'))) } catch {}`;
+}
+
+function remoteFor(script: string): string {
+  return `powershell -NoLogo -NoExit -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
 /** The command cmd.exe receives. */
 export function psRemoteCommand(script: string): string {
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  const remote = `powershell -NoLogo -NoExit -EncodedCommand ${encoded}`;
+  const remote = remoteFor(script);
   if (remote.length > CMD_LINE_MAX) {
     throw new Error(`PowerShell launch is ${remote.length} characters, over cmd.exe's ${CMD_LINE_MAX}`);
   }
@@ -171,7 +188,7 @@ export function psHooksScript(): string {
     // hung 5.1 outright and would have broken every line a person types on 7.
     '    if ($global:__ath_hist0) { return $global:__ath_hist0.Invoke($line) }; $true }',
     '}',
-    '$global:__ath_h = 0; $global:__ath_n = $null; $global:__ath_pending = $null; $global:__ath_lec = $global:LASTEXITCODE',
+    '$global:__ath_h = 0; $global:__ath_n = $null; $global:__ath_pending = $null; $global:__ath_w = $false; $global:__ath_hid = $null; $global:__ath_lec = $global:LASTEXITCODE',
     // The environment as this shell began (after the profile), so a reconnect can
     // replay exactly what changed since. Reported as a cumulative diff, and only
     // when it changes: the latest report is always the whole truth, and an
@@ -192,6 +209,11 @@ export function psHooksScript(): string {
     '}',
     'function global:prompt {',
     '  $ok = $?; $lec = $global:LASTEXITCODE',
+    // A line that failed to PARSE never ran, so `$?` is still the previous
+    // line's, and the console does not put the error in `$Error` either. Its
+    // history entry is new and says Failed; a re-parse tells it from a line
+    // that ran and failed, whose status `$?` already has right.
+    "  $hl = Get-History -Count 1; if ($ok -and $hl -and $hl.Id -ne $global:__ath_hid -and \"$($hl.ExecutionStatus)\" -eq 'Failed') { $pe = $null; [void][Management.Automation.Language.Parser]::ParseInput($hl.CommandLine, [ref]$null, [ref]$pe); if ($pe) { $ok = $false } }; if ($hl) { $global:__ath_hid = $hl.Id }",
     "  $agent = $global:__ath_n -and $global:__ath_n -notlike 'h*'",
     '  $rc = if ($ok) { 0 } elseif ($lec -and ($agent -or $lec -ne $global:__ath_lec)) { $lec } else { 1 }',
     '  $global:__ath_lec = $lec',
@@ -202,6 +224,12 @@ export function psHooksScript(): string {
     '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
     "  __ath_mark ($m + '<ATHS:' + $global:__ath_n + '>'); Write-Host ''",
+    // The user's prompt sees the status of THEIR line, not of ours: `$?` cannot
+    // be assigned, but a failing statement sets it, and an ignored error is not
+    // added to `$Error`. After the wrapper, the line was `. __ath …`, which
+    // always succeeds, so its own result stands in for it.
+    '  if ($global:__ath_w) { $ok = $global:__ath_ok; $global:__ath_w = $false }',
+    "  if (-not $ok) { Write-Error '' -ErrorAction Ignore }",
     '  & $global:__ath_prompt0',
     '}',
     // Dot-sourced by the hub (`. __ath <nonce> <b64>`), so it runs in the
@@ -209,11 +237,16 @@ export function psHooksScript(): string {
     'function global:__ath([string]$__ath_id, [string]$__ath_b64) {',
     '  $global:LASTEXITCODE = 0; $global:__ath_ok = $true',
     "  __ath_mark ('<ATHS:' + $__ath_id + '>'); Write-Host ''",
-    '  try { . ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__ath_b64)) + [char]10 + \'$global:__ath_ok = $?\')) | Out-Default }',
-    '  catch { $global:__ath_ok = $false; $_ | Out-Default }',
+    // Parsed alone first, so a syntax error is shown against the agent's own
+    // lines, as a typed one would be. Left to `Create`, it surfaced as a failed
+    // call on THIS function's source line, pointing into the status line below.
+    '  $__ath_src = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__ath_b64)); $__ath_perr = $null',
+    '  [void][Management.Automation.Language.Parser]::ParseInput($__ath_src, [ref]$null, [ref]$__ath_perr)',
+    '  if ($__ath_perr) { $global:__ath_ok = $false; [Management.Automation.ParseException]::new($__ath_perr).ErrorRecord | Out-Default }',
+    "  else { try { . ([scriptblock]::Create($__ath_src + [char]10 + '$global:__ath_ok = $?')) | Out-Default } catch { $global:__ath_ok = $false; $_ | Out-Default } }",
     '  $__ath_rc = if ($global:__ath_ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }',
     "  __ath_osc ('cwd;' + $__ath_id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))); __ath_envreport $__ath_id",
-    "  __ath_mark ('<ATHE:' + $__ath_id + ':' + $__ath_rc + '>')",
+    "  __ath_mark ('<ATHE:' + $__ath_id + ':' + $__ath_rc + '>'); $global:__ath_w = $true",
     '}',
   ].join('\n');
 }
@@ -304,8 +337,8 @@ export function psFrame(raw: string, nonce: string): PsFrame {
  * and a long command may wrap. The wrapper path passes no command: its echo is
  * printed before the frame opens.
  */
-export function psClean(body: string, command?: string): string {
-  let lines = psLines(body);
+export function psClean(body: string, command?: string, width?: number): string {
+  let lines = psLines(body, width);
   const wanted = command?.trim();
   if (wanted) {
     for (let i = 0, joined = ''; i < Math.min(lines.length, 8); i++) {
@@ -322,7 +355,8 @@ export function psClean(body: string, command?: string): string {
 }
 
 /**
- * The body as the screen ends up showing it, one entry per line.
+ * The body as the screen ends up showing it, one entry per LOGICAL line — a
+ * line the terminal wrapped is one entry, as it was one line of output.
  *
  * Each line is RENDERED, not stripped: ConPTY re-emits what changed on screen
  * as cursor moves, overwrites and erases, so the text a person sees is the
@@ -331,22 +365,119 @@ export function psClean(body: string, command?: string): string {
  * deleted text ending `\r\e[m\n`, and honouring backspace while ignoring
  * erase-to-end left the tail of a longer PSReadLine redraw glued to the typed
  * echo, so the echo was no longer recognised. Handled: CR, BS, TAB, cursor
- * right/left (C/D), absolute column (G, and the column of H/f), erase in line
- * (K) and erase characters (X). Concealed text is dropped; it only ever sits on
- * a marker line of its own. Escapes never contain a newline, so line N here is
- * line N of the raw bytes, which is what lets a caller map a line to an offset.
+ * right/left (C/D), absolute column (G, H/f), erase in line (K) and erase
+ * characters (X). Concealed text is dropped; it only ever sits on a marker line
+ * of its own.
+ *
+ * Positions are COLUMNS: a CJK character takes two, so a move to column 12 of a
+ * prompt in a Chinese folder lands where ConPTY means it, not two characters on.
+ *
+ * ROWS matter too. ConPTY moves within a row with CR or cursor-forward, and to
+ * another row with CRLF or an absolute move — so `\e[35;1H` after the echo is a
+ * new line with no newline byte, and taking only its column wrote a table's
+ * header over the echo, which then went out with it. The row is tracked where
+ * it is known (from an absolute move, until a newline might have scrolled), and
+ * where it is not, a move to column 1 of a line with text on it is a new row.
+ * Rows a move skips over are blank lines.
+ *
+ * And WRAPPING. With the screen full, ConPTY writes a wrapped row, then CRLF,
+ * then moves back onto that row's last cell and writes it again, so the
+ * terminal's own wrap carries on from there: a newline that is not one. Read
+ * naively, a 164-character path came back as two lines, the second indented by
+ * 198 spaces. So a move onto the last cells of the row a newline just ended
+ * reopens that line — and says how wide the screen is. Given the width (the
+ * pane's, then any resize ConPTY announces), the terminal's wrap is followed
+ * too, and the cell a wide character could not fit into is the padding the
+ * terminal leaves blank, not a space in the output (ConPTY writes it as one).
+ *
+ * `ends` gives, for each line, the index in `body` where the next one begins,
+ * so a caller can map a line to an offset.
  */
-function psLines(body: string): string[] {
+function psLines(body: string, width?: number): string[] {
+  return psRender(body, width).lines;
+}
+
+/** Columns a character occupies, as ConPTY lays it out. */
+function cellWidth(ch: string): number {
+  const cp = ch.codePointAt(0) ?? 0;
+  if (/^[\p{Mn}\p{Me}\p{Cf}]$/u.test(ch) || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
+  return (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0x303e) ||
+    (cp >= 0x3041 && cp <= 0x33ff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xa000 && cp <= 0xa4cf) ||
+    (cp >= 0xa960 && cp <= 0xa97f) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe19) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1b000 && cp <= 0x1b2ff) ||
+    (cp >= 0x1f200 && cp <= 0x1f251) ||
+    (cp >= 0x20000 && cp <= 0x3fffd) ||
+    /^\p{Emoji_Presentation}$/u.test(ch)
+    ? 2
+    : 1;
+}
+
+function psRender(body: string, width?: number): { lines: string[]; ends: number[] } {
   const lines: string[] = [];
+  const ends: number[] = [];
+  // The logical line, one entry per COLUMN: the second column of a wide
+  // character, and a padding cell, hold ''. Wrapped rows follow each other.
   let cells: string[] = [];
-  let x = 0;
+  let base = 0; // column of `cells` where the cursor's physical row begins
+  let x = 0; // column within that row
+  let w = width && width > 0 ? width : undefined;
   let concealed = false;
-  const flush = (): void => {
+  let row: number | undefined; // the cursor's screen row, when known
+  let lineRow: number | undefined; // the screen row this line began on, when known
+  let deepest = 0;
+  // The line a newline just ended, kept whole in case ConPTY reopens it.
+  let last: { cells: string[]; base: number; lineRow: number | undefined } | undefined;
+  const rowsInLine = (): number => (w ? Math.max(1, Math.ceil(cells.length / w)) : 1);
+  const blank = (from: number, to: number): void => {
+    // A wide character cut in half by the erase goes entirely.
+    if (cells[from] === '' && from > 0 && cellWidth(cells[from - 1] ?? ' ') === 2) cells[from - 1] = ' ';
+    for (let i = from; i < to && i < cells.length; i++) cells[i] = ' ';
+  };
+  const flush = (end: number, byNewline: boolean): void => {
     let line = '';
     for (let i = 0; i < cells.length; i++) line += cells[i] ?? ' ';
     lines.push(line.trimEnd());
+    ends.push(end);
+    last = byNewline ? { cells, base, lineRow } : undefined;
     cells = [];
+    base = 0;
     x = 0;
+  };
+  const put = (ch: string): void => {
+    const cw = cellWidth(ch);
+    if (cw === 0) {
+      // Combining: it belongs to the character before it.
+      let i = base + x - 1;
+      while (i > 0 && cells[i] === '') i--;
+      if (i >= 0 && cells[i] !== undefined) cells[i] += ch;
+      return;
+    }
+    if (w !== undefined && x + cw > w) {
+      // The terminal wraps. A wide character that does not fit in the last
+      // column leaves that cell blank — ConPTY writes the blank as a space.
+      if (cw === 2 && x >= w - 1 && cells[base + w - 1] === ' ') cells[base + w - 1] = '';
+      base += w;
+      x = 0;
+      if (row !== undefined) row = row < deepest ? row + 1 : undefined;
+    }
+    const at = base + x;
+    while (cells.length < at) cells.push(' ');
+    if (cells[at] === '' && at > 0 && cellWidth(cells[at - 1] ?? ' ') === 2) cells[at - 1] = ' ';
+    if (cw === 1 && cellWidth(cells[at] ?? ' ') === 2 && cells[at + 1] === '') cells[at + 1] = ' ';
+    cells[at] = ch;
+    if (cw === 2) cells[at + 1] = '';
+    x += cw;
+    last = undefined;
   };
   const re =
     /\u001b\[([0-9;?]*)[ -/]*([@-~])|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]|([^\u001b]+)/g;
@@ -370,33 +501,72 @@ function psLines(body: string): string[] {
       } else if (final === 'C') x += Math.max(1, num(0, 1));
       else if (final === 'D') x = Math.max(0, x - Math.max(1, num(0, 1)));
       else if (final === 'G') x = Math.max(0, num(0, 1) - 1);
-      else if (final === 'H' || final === 'f') x = Math.max(0, num(1, 1) - 1);
-      else if (final === 'K') {
+      else if (final === 'H' || final === 'f') {
+        const r = num(0, 1);
+        const c = Math.max(0, num(1, 1) - 1);
+        const at = m.index ?? 0;
+        const prev = last;
+        const prevRow = prev ? prev.cells.length - prev.base : 0;
+        if (prev && cells.length === 0 && (row === undefined || r === row - 1) &&
+            c < prevRow && c >= prevRow - 2 && (w === undefined || prevRow === w)) {
+          // ConPTY's wrap: back onto the end of the row just left. That row was
+          // full, which is how wide the screen is.
+          lines.pop();
+          ends.pop();
+          ({ cells, base, lineRow } = prev);
+          w ??= prevRow;
+          last = undefined;
+        } else if (row !== undefined && lineRow !== undefined && w !== undefined &&
+            r >= lineRow && r < lineRow + rowsInLine()) {
+          base = (r - lineRow) * w;
+        } else if (row !== undefined ? r !== row : c === 0 && cells.length > 0) {
+          const lastRow = row !== undefined && lineRow !== undefined ? Math.max(row, lineRow + rowsInLine() - 1) : row;
+          flush(at, false);
+          if (lastRow !== undefined) for (let k = lastRow + 1; k < r; k++) flush(at, false);
+          lineRow = r;
+        } else if (lineRow === undefined) lineRow = r - (w !== undefined ? Math.floor(base / w) : 0);
+        row = r;
+        deepest = Math.max(deepest, r);
+        x = c;
+      } else if (final === 'K') {
         const mode = num(0, 0);
-        if (mode === 0) cells.length = Math.min(cells.length, x);
-        else if (mode === 1) for (let i = 0; i <= x && i < cells.length; i++) cells[i] = ' ';
-        else cells = [];
+        const rowEnd = w !== undefined && cells.length > base + w ? base + w : cells.length;
+        if (mode === 0) {
+          if (rowEnd === cells.length) {
+            blank(base + x, base + x);
+            cells.length = Math.min(cells.length, base + x);
+          } else blank(base + x, rowEnd);
+        } else if (mode === 1) blank(base, base + x + 1);
+        else if (rowEnd === cells.length) cells.length = Math.min(cells.length, base);
+        else blank(base, rowEnd);
       } else if (final === 'X') {
-        for (let i = x; i < x + Math.max(1, num(0, 1)) && i < cells.length; i++) cells[i] = ' ';
+        blank(base + x, base + x + Math.max(1, num(0, 1)));
+      } else if (final === 't' && num(0, 0) === 8 && num(2, 0) > 0) {
+        // A resize, announced in-band: the width from here on.
+        w = num(2, 0);
       }
       continue;
     }
     const text = m[3];
     if (text === undefined) continue;
+    let at = m.index ?? 0;
     for (const ch of text) {
-      if (ch === '\n') flush();
-      else if (ch === '\r') x = 0;
+      at += ch.length;
+      if (ch === '\n') {
+        flush(at, true);
+        // Below the deepest row seen, the next row is known; at it, this
+        // newline may have scrolled the screen instead.
+        row = row !== undefined && row < deepest ? row + 1 : undefined;
+        lineRow = row;
+      } else if (ch === '\r') x = 0;
       else if (ch === '\b') x = Math.max(0, x - 1);
       else if (ch === '\t') x = (Math.floor(x / 8) + 1) * 8;
       else if (ch < ' ' || concealed) continue;
-      else {
-        while (cells.length < x) cells.push(' ');
-        cells[x++] = ch;
-      }
+      else put(ch);
     }
   }
-  flush();
-  return lines;
+  flush(body.length, false);
+  return { lines, ends };
 }
 
 /**
@@ -409,16 +579,31 @@ function psLines(body: string): string[] {
  * catches the re-render, with nothing left in its slice to say it is echo. A
  * caller that waits for this can start polling past the echo instead.
  */
-export function psEchoLines(raw: string, nonce: string, command: string): number | undefined {
+export function psEchoLines(raw: string, nonce: string, command: string, width?: number): number | undefined {
+  return echoClose(raw, nonce, command, width)?.lines;
+}
+
+/** Where the closed echo ends in `raw`: the index the output begins at. */
+export function psEchoEnd(raw: string, nonce: string, command: string, width?: number): number | undefined {
+  return echoClose(raw, nonce, command, width)?.end;
+}
+
+function echoClose(
+  raw: string,
+  nonce: string,
+  command: string,
+  width?: number,
+): { lines: number; end: number } | undefined {
   const marker = `<ATHS:${nonce}>`;
   const s = firstConcealed(raw, marker);
   if (s < 0) return undefined;
-  const lines = psLines(raw.slice(s + marker.length));
+  const from = s + marker.length;
+  const { lines, ends } = psRender(raw.slice(from), width);
   const wanted = command.trim();
-  // `lines.length - 1`: the last entry has no newline after it yet.
+  // `lines.length - 1`: the last entry has nothing after it to close it yet.
   for (let i = 0, joined = ''; i < Math.min(lines.length - 1, 8); i++) {
     joined += lines[i];
-    if (joined.endsWith(wanted)) return i + 1;
+    if (joined.endsWith(wanted)) return { lines: i + 1, end: from + (ends[i] ?? 0) };
   }
   return undefined;
 }

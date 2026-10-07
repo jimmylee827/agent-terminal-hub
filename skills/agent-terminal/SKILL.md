@@ -498,7 +498,7 @@ Fields worth checking on the `--json` form:
 | `needs_input` | Waiting on a human. Hand off; do not retry. |
 | `timed_out` | Still running. Output is partial; poll with `ath read`. |
 | `shell_exited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
-| `exit_code_covers` / `exit_code_caveat` | The code is only the last part of a compound line or the last stage of a pipeline. The caveat is the long form, shown once per session; `exit_code_note` is the one-line form that rides every affected command. Read the output, not the number. |
+| `exit_code_covers` / `exit_code_caveat` | The code is only the last part of a compound line, the last stage of a pipeline, or, on PowerShell, what ran outside a `{ }` block. The caveat is the long form, shown once per session; `exit_code_note` is the one-line form that rides every affected command. Read the output, not the number. |
 | `capture_incomplete` | The output came back empty and that could NOT be confirmed as genuine. Re-read before concluding the command printed nothing. |
 | `command_gone` | On `poll`: this handle began and then died, or never framed at all. `exit_code` is `null` because what it did is unknowable. Stop polling — `read` the session, then re-run if you still need it. |
 | `log_trimmed_bytes` | That many bytes were DISCARDED from this session's transcript when the command started. Gone, not paginated. |
@@ -508,7 +508,7 @@ Fields worth checking on the `--json` form:
 | `this_server` | Which build is answering: `pid`, `started_utc` (when the PROCESS started), `loaded_build_utc` (the build it loaded), `build_utc` (the build on disk now), and `current`. A stale process has `loaded_build_utc` older than `build_utc`. |
 | `stale_servers` | Other MCP servers running older code, with how far behind and what has landed since. Said once per server process; `doctor` repeats it on demand. |
 | `already_open` / `reason_added` | On `request_human`: a request for this command was already filed, so nothing new was raised and the human was not pinged twice. `reason_added` means your wording was merged into the existing request. |
-| `last_exit_code_covers` | On `list` and `wait`: the same warning `exit_code_covers` gives, for the session's LAST recorded code. A bare `last_exit_code: 0` from a pipeline says only that its final stage succeeded. |
+| `last_exit_code_covers` | On `list` and `wait`: the same warning `exit_code_covers` gives, for the session's LAST recorded code. |
 | `asked_for_you` | On `list`: this session has an open request waiting on a human — filed for you, usually by a command that parked. Go and relay it. |
 | `collect_with` | The exact call that retrieves a finished command's result, for a handle you were not holding. |
 | `current_command` | What the session is running right now, when it is busy. |

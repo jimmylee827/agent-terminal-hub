@@ -7,7 +7,9 @@ import { dialectFor, posixDialect } from './dialect';
 import {
   conptyAnnounced,
   psClean,
-  psEchoLines,
+  psEchoEnd,
+  psLaunchCarries,
+  psCwdRestoreScript,
   psEnvRestoreScript,
   psFindEnv,
   psFindCwd,
@@ -1426,9 +1428,10 @@ async function runLocked(
       session = { ...session, remoteOs: 'windows' };
     }
     const dialect = dialectFor(session.remoteOs);
+    const lastCwd = session.remoteCwd;
     await sendLine(
       clean,
-      dialect.launchLine(host, dialect.launchPayload(readyToken, { cwd: session.remoteCwd }), bootFile),
+      dialect.launchLine(host, dialect.launchPayload(readyToken, { cwd: lastCwd }), bootFile),
     );
     const reconnectDeadline = Date.now() + 20_000;
     for (;;) {
@@ -1443,7 +1446,10 @@ async function runLocked(
           // The relaunch carried the hooks and the wrapper, as creation does.
           await setMeta(clean, 'frame', session.currentCommand).catch(() => undefined);
           await setMeta(clean, 'wrap', '1').catch(() => undefined);
-          await restoreWindowsEnv(clean);
+          await restoreWindowsState(
+            clean,
+            lastCwd && !psLaunchCarries(readyToken, lastCwd) ? lastCwd : undefined,
+          );
           break;
         }
       } else if (isNesting(session.currentCommand) && session.state === 'idle') {
@@ -1695,7 +1701,7 @@ async function runLocked(
    */
   const partial = async (): Promise<string> =>
     win
-      ? psClean(psPartial(await readLogFrom(log, offset), nonce), usedFraming ? command : undefined)
+      ? psClean(psPartial(await readLogFrom(log, offset), nonce), usedFraming ? command : undefined, session.paneWidth)
       : cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
 
   if (completion.kind === 'lost') {
@@ -1820,7 +1826,7 @@ async function runLocked(
     if (!win) return extractFramed(text, nonce, command);
     const frame = psFrame(text, nonce);
     repainted = frame.repainted;
-    return { framed: frame.framed, output: psClean(frame.body, usedFraming ? command : undefined) };
+    return { framed: frame.framed, output: psClean(frame.body, usedFraming ? command : undefined, session.paneWidth) };
   };
   let raw = await readLogFrom(log, offset);
   let capture = captureFrom(raw);
@@ -2031,7 +2037,7 @@ async function runLocked(
   // would increment on every evaluation and decay the prose in the wrong place.
   // Only counted for commands the caveat actually applies to, so a session full
   // of simple commands does not burn through the budget before it ever sees one.
-  const caveatSeen = compoundExitCaveat(command) ? await caveatCountFor(clean) : 0;
+  const caveatSeen = compoundExitCaveat(command, session.remoteOs) ? await caveatCountFor(clean) : 0;
 
   return {
     session: clean,
@@ -2061,7 +2067,7 @@ async function runLocked(
     // It only misleads on exit 0: that is the case where an earlier failure is
     // hidden behind a later success. A NON-ZERO code has already told the
     // reader to go look, so the marker adds nothing there.
-    ...(compoundExitCaveat(command) &&
+    ...(compoundExitCaveat(command, session.remoteOs) &&
     // `;`-joined: only exit 0 can mislead — a non-zero code already sends the
     // reader to the output. A PIPELINE is different and stays marked either
     // way: its code is the last stage's, so a non-zero tells you that stage
@@ -2100,12 +2106,14 @@ async function runLocked(
     // This removes a special case rather than adding one. The extra volume is
     // already handled: the prose decays to a three-word token after the third
     // occurrence.
-    compoundExitCaveat(command) !== undefined
+    compoundExitCaveat(command, session.remoteOs) !== undefined
       ? {
-          exitCodeCovers: compoundExitCaveat(command),
+          exitCodeCovers: compoundExitCaveat(command, session.remoteOs),
           ...(caveatSeen === 1
             ? {
                 exitCodeCaveat:
+                  // PowerShell's pipelines and `&&` differ: see `psExitCaveat`.
+                  win ? psExitCaveat(compoundExitCaveat(command, session.remoteOs)) :
                   'The exit code above is the status of only the last part of this line — an ' +
                   'earlier failure can be hidden by a later success, and a pipeline reports its ' +
                   'last stage. Read the output rather than trusting the number. ' +
@@ -2120,7 +2128,7 @@ async function runLocked(
                   // `;` is the RIGHT choice there, and a meaningless exit code
                   // is a trade the caller accepted, not a mistake to correct.
                   // So both options are stated as options.
-                  (compoundExitCaveat(command) === 'last-command-only'
+                  (compoundExitCaveat(command, session.remoteOs) === 'last-command-only'
                     ? 'If you need the code to mean something, join with `&&` — the line then ' +
                       'stops at the first failure and reports it. If you are exploring and want ' +
                       'every part to run regardless, `;` is right and reading the output is the ' +
@@ -2146,10 +2154,7 @@ async function runLocked(
                 // One clause, ~70 characters against the paragraph's ~600, so
                 // the budget argument survives and the warning still says what
                 // to do at the point it applies.
-                exitCodeShortNote:
-                  compoundExitCaveat(command) === 'last-pipeline-stage-only'
-                    ? 'Exit code is the LAST PIPELINE STAGE only — read the output, not the number.'
-                    : 'Exit code is the LAST PART of this line only — read the output, not the number.',
+                exitCodeShortNote: caveatShortNote(compoundExitCaveat(command, session.remoteOs)),
               }
             // Past the limit: the token alone. A third reviewer read the line
             // on every command and said "by the eighth repetition I was
@@ -2977,7 +2982,8 @@ export async function poll(
   let output: string;
   if (win) {
     const w = psWindow(slice.raw, handle);
-    output = psClean(w.body, w.opened ? (await get(clean).catch(() => undefined))?.lastCommand : undefined);
+    const now = await get(clean).catch(() => undefined);
+    output = psClean(w.body, w.opened ? now?.lastCommand : undefined, now?.paneWidth);
   } else {
     output = trimToCommandWindow(slice.raw, handle);
   }
@@ -3180,15 +3186,12 @@ export async function poll(
     ...(timing === undefined ? {} : { elapsedObserved: timing.observed }),
     // Only once the code EXISTS: a caveat about an exit code nobody has yet is
     // noise, and `done: false` results carry no code to qualify.
-    ...(done && session.lastCommand && compoundExitCaveat(session.lastCommand)
+    ...(done && session.lastCommand && compoundExitCaveat(session.lastCommand, session.remoteOs)
       ? {
-          exitCodeCovers: compoundExitCaveat(session.lastCommand),
+          exitCodeCovers: compoundExitCaveat(session.lastCommand, session.remoteOs),
           // Same one clause `run` carries. A compound line driven by start/poll
           // hides an earlier failure exactly as well as one driven by `run`.
-          exitCodeShortNote:
-            compoundExitCaveat(session.lastCommand) === 'last-pipeline-stage-only'
-              ? 'Exit code is the LAST PIPELINE STAGE only — read the output, not the number.'
-              : 'Exit code is the LAST PART of this line only — read the output, not the number.',
+          exitCodeShortNote: caveatShortNote(compoundExitCaveat(session.lastCommand, session.remoteOs)),
         }
       : {}),
     // How far in, computed once here rather than left to the caller to derive
@@ -3374,19 +3377,79 @@ const HUMAN_WALL_RE =
  * `&&` and `||` are excluded on purpose — there the propagated status is
  * usually the answer you wanted. It is `;` and `|` that hide it.
  */
+/**
+ * A script block handed to a command — `ForEach-Object { }`, `& { }` and kin.
+ *
+ * PowerShell answers the question above differently, identically on 5.1 and 7.
+ * A pipeline fails when ANY stage fails (`cmd /c exit 3 | Out-Null` reports 3,
+ * `Get-Item nope | Out-Null` reports 1), so `|` hides nothing there, and "last
+ * stage only" with its `pipefail` advice would be wrong twice over. What it does
+ * hide is a failure INSIDE a block run as a command: `1 | ForEach-Object { cmd
+ * /c exit 4 }` reports success. The bodies of `if` and `foreach` statements pass
+ * failures out normally, hence the `(` exclusion after `foreach`. A function's
+ * body hides them too, and cannot be seen from the line at all.
+ */
+const PS_BLOCK_RUN_RE =
+  /(?:^|[|;&(])\s*(?:ForEach-Object|Where-Object|Invoke-Command|foreach|where|icm|%|\?)(?=[\s{])(?!\s*\()[^|;{]*\{|(?:^|[|;(])\s*[&.]\s*\{/im;
+
 /** Whether the line contains a real pipeline, ignoring quoted text and `||`. */
 function hasPipeline(command: string): boolean {
   const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
   return /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
 }
 
-export function compoundExitCaveat(command: string): string | undefined {
+export function compoundExitCaveat(command: string, remoteOs?: 'windows'): string | undefined {
   // Ignore separators inside quotes: `echo "a;b"` is not a compound command.
   const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
   const hasSemicolon = /;/.test(bare);
+  if (remoteOs === 'windows') {
+    if (PS_BLOCK_RUN_RE.test(bare)) return 'outside-script-blocks-only';
+    // `;` also separates a hashtable's entries — `[pscustomobject]@{A=1;B=2}`,
+    // splatting — which is no compound line. Innermost first, for nesting.
+    let flat = bare;
+    for (let prev = ''; prev !== flat; ) {
+      prev = flat;
+      flat = flat.replace(/@\{[^{}]*\}/g, '@H');
+    }
+    return /;/.test(flat) ? 'last-command-only' : undefined;
+  }
   const hasPipe = /\|(?!\|)/.test(bare.replace(/\|\|/g, '&&'));
   if (!hasSemicolon && !hasPipe) return undefined;
   return hasPipe && !hasSemicolon ? 'last-pipeline-stage-only' : 'last-command-only';
+}
+
+/** The one-clause form of the caveat, shared by `run` and `poll`. */
+function caveatShortNote(covers: string | undefined): string {
+  return covers === 'last-pipeline-stage-only'
+    ? 'Exit code is the LAST PIPELINE STAGE only — read the output, not the number.'
+    : covers === 'outside-script-blocks-only'
+    ? 'Exit code does not cover failures inside { } blocks — read the output, not the number.'
+    : 'Exit code is the LAST PART of this line only — read the output, not the number.';
+}
+
+/**
+ * The long form for a PowerShell session.
+ *
+ * The POSIX paragraph is wrong there: a pipeline does not report only its last
+ * stage, `set -o pipefail` does not exist, and Windows PowerShell 5.1 has no
+ * `&&` to join with.
+ */
+function psExitCaveat(covers: string | undefined): string {
+  return (
+    (covers === 'outside-script-blocks-only'
+      ? 'The exit code above does not cover what ran inside a `{ }` block on this line: ' +
+        'PowerShell does not pass a failure inside `ForEach-Object { }`, `Where-Object { }` ' +
+        'or `& { }` out to the line, so it can report 0 after one. Read the output rather ' +
+        'than trusting the number. '
+      : 'The exit code above is the status of only the last part of this line — an ' +
+        'earlier failure can be hidden by a later success. Read the output rather than ' +
+        'trusting the number. If you need the code to mean something, join with `&&` on ' +
+        'PowerShell 7 — the line then stops at the first failure and reports it; Windows ' +
+        'PowerShell 5.1 has no `&&`, so send the parts as separate commands. If you are ' +
+        'exploring and want every part to run regardless, `;` is right and reading the ' +
+        'output is the correct way to check it. ') +
+    '(Shown once per session; the short marker stays on every affected command.)'
+  );
 }
 
 /**
@@ -4033,9 +4096,10 @@ async function endReaderFor(name: string): Promise<(logFile: string, nonce: stri
 /**
  * The logical offset just past a typed command's echo, once it has arrived.
  *
- * `psEchoLines` answers in lines; this turns that into bytes by counting
- * newline BYTES after the start marker, which is exact however many multi-byte
- * characters the echo holds.
+ * `psEchoEnd` answers with a position in the decoded text, because a line can
+ * end without a newline byte (ConPTY moves to the next row instead). The log is
+ * UTF-8, so the text before that position encodes back to exactly the bytes it
+ * came from — checked rather than assumed, since a guess here lands mid-output.
  */
 async function psEchoEndOffset(
   name: string,
@@ -4046,16 +4110,16 @@ async function psEchoEndOffset(
 ): Promise<number | undefined> {
   const log = logPath(name);
   const deadline = Date.now() + timeoutMs;
-  const marker = Buffer.from(`<ATHS:${nonce}>`);
+  const width = (await get(name).catch(() => undefined))?.paneWidth;
   for (;;) {
     const at = await resolveOffset(name, fromLogical).catch(() => undefined);
     if (!at) return undefined;
     const buf = await readLogRange(log, at.physical, MARKER_SCAN_BYTES * 2);
-    const lines = psEchoLines(buf.toString('utf8'), nonce, command);
-    if (lines !== undefined) {
-      let pos = buf.indexOf(marker);
-      for (let k = 0; k < lines && pos >= 0; k++) pos = buf.indexOf(0x0a, pos + 1);
-      return pos < 0 ? undefined : fromLogical + pos + 1;
+    const text = buf.toString('utf8');
+    const end = psEchoEnd(text, nonce, command, width);
+    if (end !== undefined) {
+      const prefix = Buffer.from(text.slice(0, end), 'utf8');
+      return buf.subarray(0, prefix.length).equals(prefix) ? fromLogical + prefix.length : undefined;
     }
     if (Date.now() >= deadline) return undefined;
     await sleep(60);
@@ -4090,19 +4154,24 @@ async function recordWindowsState(name: string, end: CommandEnd | undefined): Pr
 }
 
 /**
- * Put a reconnected PowerShell session's environment back.
+ * Put a reconnected PowerShell session's environment back — and its directory,
+ * when that was too long to ride the relaunch.
  *
- * Through the wrapper, after the relaunch is ready: the directory rides the
- * relaunch itself, but an environment diff can be as large as a whole PATH, and
- * the relaunch has a hard ceiling. Best effort, like the POSIX restore: failing
- * to restore must never block the command that triggered the reconnect.
+ * Through the wrapper, after the relaunch is ready: an environment diff can be
+ * as large as a whole PATH, and the relaunch has a hard ceiling. Best effort,
+ * like the POSIX restore: failing to restore must never block the command that
+ * triggered the reconnect.
  */
-async function restoreWindowsEnv(name: string): Promise<void> {
+async function restoreWindowsState(name: string, cwd?: string): Promise<void> {
   const stored = await readMeta(name, 'wenv').catch(() => '');
   const json = stored ? Buffer.from(stored, 'base64').toString('utf8') : '';
-  if (!json || json === '{}') return;
+  const script = [
+    ...(cwd ? [psCwdRestoreScript(cwd)] : []),
+    ...(json && json !== '{}' ? [psEnvRestoreScript(json)] : []),
+  ].join('\n');
+  if (!script) return;
   const nonce = randomNonce();
-  await sendLine(name, `. __ath ${nonce} ${await psDeliver(name, psEnvRestoreScript(json))}`).catch(() => undefined);
+  await sendLine(name, `. __ath ${nonce} ${await psDeliver(name, script)}`).catch(() => undefined);
   for (const deadline = Date.now() + 15_000; Date.now() < deadline; await sleep(150)) {
     if ((await psCommandEnd(logPath(name), nonce).catch(() => undefined)) !== undefined) return;
   }
@@ -4361,7 +4430,7 @@ export async function readTail(
     return { output: pane, nextOffset, ...(tailIsAllFurniture(pane) ? { emptyTail: true } : {}) };
   }
   const all = (await isWindowsSession(clean))
-    ? psClean(raw).split('\n')
+    ? psClean(raw, undefined, (await get(clean).catch(() => undefined))?.paneWidth).split('\n')
     : trimBlankEdges(
         toLines(raw).filter((line) => !MARKER_LINE_RE.test(line) && !ZSH_EOL_MARK_RE.test(line)),
       );
@@ -4408,7 +4477,9 @@ export async function readSince(
     // ConPTY output corrupts under the POSIX cleaner: runs of spaces arrive as
     // cursor-forward and vanish when stripped, and `\r\e[m\n` line ends trip
     // the CR-as-overwrite rule. Measured on real frames: 6 of 10 came out wrong.
-    output: (await isWindowsSession(clean)) ? psClean(slice.raw) : cleanSlice(slice.raw),
+    output: (await isWindowsSession(clean))
+      ? psClean(slice.raw, undefined, (await get(clean).catch(() => undefined))?.paneWidth)
+      : cleanSlice(slice.raw),
     nextOffset: at.logicalEnd,
     ...(slice.omitted === undefined
       ? {}

@@ -1,5 +1,5 @@
 {
-  "note": "Real ConPTY frames captured from jpc-win (PowerShell 5.1.26100 and 7.6.6) by scripts/conpty-probe.js --only matrix. Extracted programmatically, never hand-edited. expect is psClean(body, command) as reviewed against what each PowerShell prints.",
+  "note": "Real ConPTY frames captured from jpc-win (PowerShell 5.1.26100 and 7.6.6): the first ten by scripts/conpty-probe.js --only matrix, the rest through the hub (ath run): row-jump tables, and lines wrapped past the width (width: the pane width the hub passes; absent: none given). Extracted programmatically, never hand-edited. expect is psClean(body, command) as reviewed against what each PowerShell prints.",
   "frames": [
     {
       "name": "pwsh: native exit, no output",
@@ -70,6 +70,51 @@
       "command": null,
       "body": "\u001b[28m\r\n\u001b[38;5;9mGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b[m\r\n\u001b[38;5;9mAt line:1 char:1\u001b[m\r\n\u001b[38;5;9m+ Get-Item C:\\no\\such\\ath-path\u001b[m\r\n\u001b[38;5;9m+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\r\n\u001b[38;5;9m    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\u001b[m\r\n\u001b[38;5;9m    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\r\n\u001b[38;5;9m\u001b[1C\u001b[m\r\n\u001b[8m",
       "expect": "Get-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\nAt line:1 char:1\n+ Get-Item C:\\no\\such\\ath-path\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand"
+    },
+    {
+      "name": "pwsh: table after a row jump",
+      "why": "the echo line ends with an absolute move to the next row (\\e[35;1H), no newline: taken as a column only, the header was drawn over the echo and dropped with it",
+      "command": "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}",
+      "body": "\u001b[28m\r\nPS C:\\Users\\jimmy> \u001b[?25h\u001b[?25l\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'x'\u001b[37m;B\u001b[90m=\u001b[36m'yy'\u001b[37m}\u001b[90m,\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'zzz'\u001b[37m;B\u001b[90m=\u001b[36m'w'\u001b[37m}\u001b[?25h\u001b]777;ath;cwd;06e682dd6739;QzpcVXNlcnNcamltbXk=\u0007\u001b[?25l\u001b[m\u001b[32m\u001b[1m\u001b[35;1HA   B\r\n-  \u001b[m \u001b[32m\u001b[1m-\u001b[m\r\nx   yy\r\nzzz w\u001b[40;1H\u001b[?25h\u001b[8m",
+      "expect": "A   B\n-   -\nx   yy\nzzz w"
+    },
+    {
+      "name": "pwsh: table after a row jump (2)",
+      "why": "the same row jump (\\e[45;1H), with the cwd report between the echo and the output",
+      "command": "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}",
+      "body": "\u001b[28m\r\nPS C:\\Users\\jimmy> \u001b[?25l\u001b]777;ath;cwd;e18306112cd5;QzpcVXNlcnNcamltbXk=\u0007\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'x'\u001b[37m;B\u001b[90m=\u001b[36m'yy'\u001b[37m}\u001b[90m,\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'zzz'\u001b[37m;B\u001b[90m=\u001b[36m'w'\u001b[37m}\u001b[32m\u001b[1m\u001b[45;1HA   B\r\n-  \u001b[m \u001b[32m\u001b[1m-\u001b[m\r\nx   yy\r\nzzz w\u001b[8m\u001b[50;1H",
+      "expect": "A   B\n-   -\nx   yy\nzzz w"
+    },
+    {
+      "name": "pwsh: CJK line wrapped past the width, padding cell (streamed)",
+      "why": "a wide character that does not fit the last column leaves it blank; ConPTY writes the blank as a SPACE, which is padding, not output",
+      "command": "'C:\\x\\' + ('深层目录' * 30)",
+      "body": "\u001b[28m\r\nPS C:\\Users\\jimmy> \u001b[36m'C:\\x\\' \u001b[90m+ \u001b[37m(\u001b[36m'深层目\u001b[?25l\u001b[m\u001b[36m\u001b[4;20H'C:\\x\\' \u001b[90m+ \u001b[37m(\u001b[36m'深层目录' \u001b[90m* \u001b[97m30\u001b[37m)\r\n\u001b[?25h\u001b]777;ath;cwd;78e8742de239;QzpcVXNlcnNcamltbXk=\u0007\u001b[mC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 层目录深层目录深层目录深层目录深层目录深层目录\u001b[8m\r\n",
+      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录",
+      "width": 200
+    },
+    {
+      "name": "pwsh: CJK after ASCII wrapped past the width (streamed)",
+      "why": "the same padding, with a real space at the start that must be kept",
+      "command": "'ab ' + ('中文' * 120)",
+      "body": "\u001b[28m\r\nPS C:\\Users\\jimmy> \u001b[?25l\u001b[36m'ab ' \u001b[90m+ \u001b[37m(\u001b[36m'中文' \u001b[90m* \u001b[97m120\u001b[37m)\r\n\u001b[?25h\u001b]777;ath;cwd;e623fb86e4ee;QzpcVXNlcnNcamltbXk=\u0007\u001b[mab 中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文 中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文\u001b[8m\r\n",
+      "expect": "ab 中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文",
+      "width": 200
+    },
+    {
+      "name": "pwsh: CJK line wrapped with the screen full (re-emit)",
+      "why": "CRLF, then a move back onto the last cell of the row just left: one line, not two",
+      "command": "'C:\\x\\' + ('深层目录' * 30)",
+      "body": "\r\u001b[28m\nPS C:\\Users\\jimmy>\u001b[1C\u001b[?25l\u001b[36m'C:\\x\\' \u001b[90m+ \u001b[37m(\u001b[36m'深层目录' \u001b[90m* \u001b[97m30\u001b[37m)\u001b[?25h\u001b[m\r\nC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 \r\n\u001b[49;200H 层目录深层目录深层目录深层目录深层目录深层目录\r\u001b]777;ath;cwd;637ee4473b97;QzpcVXNlcnNcamltbXk=\u0007\n\u001b[8m",
+      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录",
+      "width": 200
+    },
+    {
+      "name": "pwsh: ASCII line wrapped with the screen full, width unknown",
+      "why": "the same re-emit with no width given: the width is learned from the full row",
+      "command": "'a' * 450",
+      "body": "\r\u001b[28m\nPS C:\\Users\\jimmy>\u001b[1C\u001b[?25l\u001b[36m'a' \u001b[90m* \u001b[97m450\u001b[18X\u001b[?25h\u001b[m\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\u001b[49;200Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\u001b[49;200Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\u001b]777;ath;cwd;eba5b1e6b7d6;QzpcVXNlcnNcamltbXk=\u0007\n\u001b[8m",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   ]
 }

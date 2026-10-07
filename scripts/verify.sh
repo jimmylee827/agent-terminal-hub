@@ -841,22 +841,56 @@ say(ps.psClean("PS C:\\> [\b[x]\r\nstep 1\b2\b3\r\n")==="PS C:\\> [x]\nstep 3","
 // honouring both leaves what the screen shows. Ignoring erase left the tail of a
 // longer redraw glued to the echo, so the echo stopped being recognised.
 say(ps.psClean("PS C:\\> Get-Da\x1b[2;9HGet-Date | Out-Null\x1b[K\r\n")==="PS C:\\> Get-Date | Out-Null" && ps.psClean("long render text here\r\x1b[Kshort\r\n")==="short" && ps.psClean("abcdef\x1b[4D\x1b[2Xz\r\n")==="abz ef","linesAreRendered","NOTRENDERED");
+// What an exit code covers depends on the shell. PowerShell fails a pipeline
+// when ANY stage fails, so there only a block run as a command hides a failure;
+// and the POSIX answers must not move.
+const cv=a.compoundExitCaveat;
+say(cv("a | b")==="last-pipeline-stage-only" && cv("a; b")==="last-command-only" && cv("a | b; c")==="last-command-only" && cv("a && b")===undefined && cv("echo \"a;b\"")===undefined,"posixCaveatUnchanged","POSIXCAVEAT");
+say(cv("cmd /c exit 3 | Out-Null","windows")===undefined && cv("a; b","windows")==="last-command-only" && cv("1 | ForEach-Object { x }","windows")==="outside-script-blocks-only" && cv("ls | %{ x }","windows")==="outside-script-blocks-only" && cv("& { x }","windows")==="outside-script-blocks-only" && cv("foreach ($i in 1) { x }","windows")===undefined && cv("if ($t) { x }","windows")===undefined && cv("where git","windows")===undefined && cv("[pscustomobject]@{A=1;B=2}","windows")===undefined && cv("@{a=@{b=1;c=2};d=3}","windows")===undefined && cv("$h=@{a=1}; b","windows")==="last-command-only","caveatIsPowerShells","PSCAVEAT");
+// ConPTY moves to another row with an absolute move and no newline; that is a
+// new line. A move within a known row is not, and rows it skips are blank.
+say(ps.psClean("one\x1b[7;1Htwo\r\n")==="one\ntwo" && ps.psClean("\x1b[7;1Hone\x1b[7;1Htwo\r\n")==="two" && ps.psClean("\x1b[3;1Ha\x1b[4;1Hb\x1b[7;1Hc\r\n")==="a\nb\n\n\nc" && ps.psClean("PS C:\\> Get-Da\x1b[2;9HGet-Date\r\n")==="PS C:\\> Get-Date","rowJumpIsANewLine","ROWJUMPOVERWRITES");
+// Positions are columns: a CJK character is two, so a redraw at column 13 of a
+// prompt in a Chinese folder lands on the a, not two characters further on.
+// And a resize ConPTY announces in-band sets the width wrapping follows.
+say(ps.psClean("PS C:\\\u7528\u6237> abc\x1b[1;13Hx\r\n")==="PS C:\\\u7528\u6237> xbc" && ps.psClean("ab\u4e2dcd\x1b[4D\x1b[Kz\r\n")==="abz" && ps.psClean("ab\u4e2dcd\x1b[3D\x1b[Kz\r\n")==="ab z","columnsNotCharacters","CHARINDEXED");
+say(ps.psClean("\x1b[8;24;6tabcde \u4e2d\r\n",undefined,80)==="abcde\u4e2d" && ps.psClean("abcde \u4e2d\r\n",undefined,80)==="abcde \u4e2d","resizeSetsWidth","RESIZEIGNORED");
+// The user prompt is called with the status of the line that ran: the statement
+// that sets it must come right before the call, and the wrapper must leave its
+// result for it. The wrapper parses the command alone before running it.
+const hs=ps.psHooksScript();
+say(/if \(-not \$ok\) \{ Write-Error .. -ErrorAction Ignore \}\n  & \$global:__ath_prompt0/.test(hs) && /__ath_w = \$true/.test(hs),"promptSeesStatus","PROMPTBLIND");
+say(hs.indexOf("ParseInput(")>0 && hs.indexOf("ParseInput(")<hs.indexOf("[scriptblock]::Create("),"wrapperParsesFirst","CREATEPARSES");
+// A typed line that fails to PARSE never runs, so the prompt finds it in history.
+say(/Get-History -Count 1; if \(\$ok -and .*Failed.*ParseInput\(\$hl\.CommandLine/.test(hs),"typedSyntaxErrorFails","SYNTAXREADSTALE");
+// A directory too long for the relaunch is left out of it rather than pushing
+// it past the ceiling (which threw, failing the reconnect), and the restore
+// script carries it instead.
+const deep="C:\\\u7528\u6237\\"+"\u6587\u6863\\".repeat(60), T12="0123456789ab";
+let deepOk=false; try { deepOk=ps.psRemoteCommand(ps.psLaunchScript(T12,{cwd:deep})).length<=ps.CMD_LINE_MAX && !ps.psLaunchCarries(T12,deep) && ps.psLaunchCarries(T12,"C:\\Windows"); } catch {}
+const cwdB64=(/FromBase64String\(.([A-Za-z0-9+\/=]+).\)/.exec(ps.psCwdRestoreScript(deep))||[])[1];
+say(deepOk && !!cwdB64 && Buffer.from(cwdB64,"base64").toString("utf8")===deep,"longCwdLeftToWrapper","LONGCWDTHROWS");
 // The cleaner, against REAL ConPTY frames captured from both PowerShell versions
 // (scripts/fixtures/conpty-frames.json): predictions redrawn into the echo,
 // the error style of each version, a table, a forged marker printed as text, and
 // runs of spaces that ConPTY wrote as cursor-forward.
 const frames=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-frames.json","utf8")).frames;
-const cleanWrong=frames.filter(f=>ps.psClean(f.body, f.command===null?undefined:f.command)!==f.expect).map(f=>f.name);
-say(frames.length>=10 && cleanWrong.length===0,"cleanerOnRealFrames","CLEANER:"+cleanWrong.join("|").replace(/\s/g,"_"));
+const cleanWrong=frames.filter(f=>ps.psClean(f.body, f.command===null?undefined:f.command, f.width)!==f.expect).map(f=>f.name);
+say(frames.length>=16 && cleanWrong.length===0,"cleanerOnRealFrames","CLEANER:"+cleanWrong.join("|").replace(/\s/g,"_"));
+// The streamed wraps hold a padding space only the WIDTH can tell from output:
+// without it they must come out wrong, or they prove nothing.
+const padded=frames.filter(f=>/padding|after ASCII wrapped/.test(f.name));
+say(padded.length===2 && padded.every(f=>ps.psClean(f.body,f.command,f.width)===f.expect && ps.psClean(f.body,f.command)!==f.expect),"widthDropsPadding","PADDINGKEPT");
 say(frames.filter(f=>/cursor-forward/.test(f.name)).every(f=>/ {10}/.test(ps.psClean(f.body))),"cursorForwardKeptAsSpaces","SPACESLOST");
 say(frames.filter(f=>/native exit/.test(f.name)).every(f=>ps.psClean(f.body,f.command)===""),"silentStaysEmpty","ECHODEBRIS");
-// Where a poll may start: past the typed echo, once a newline has closed it.
+// Where a poll may start: past the typed echo, once its line is closed (by a
+// newline, or by a move to the next row with none: two of the real frames).
 // Agreed with the cleaner on every real typed frame, and "not yet" while the
 // echo is still being drawn \u2014 polling from a half-drawn echo is how the
 // re-render on Enter leaked into a later poll as output.
 const typed=frames.filter(f=>f.command!==null && !/forged/.test(f.name));
-const agrees=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const n=ps.psEchoLines(raw,N,f.command); if(n===undefined) return false; const rest=f.body.split("\n").slice(n).join("\n"); return ps.psClean(rest)===f.expect; });
-const cut=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const n=ps.psEchoLines(raw,N,f.command); const parts=raw.split("\n"); return ps.psEchoLines(parts.slice(0,n).join("\n"),N,f.command)===undefined; });
+const agrees=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const end=ps.psEchoEnd(raw,N,f.command,f.width); return end!==undefined && ps.psClean(raw.slice(end),undefined,f.width)===f.expect; });
+const cut=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const end=ps.psEchoEnd(raw,N,f.command,f.width); return end!==undefined && ps.psEchoEnd(raw.slice(0,end-1),N,f.command,f.width)===undefined; });
 say(typed.length>=6 && agrees,"echoBoundaryAgrees","ECHOBOUNDARY");
 say(cut,"halfDrawnEchoIsNotYet","EARLYECHOEND");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
@@ -915,7 +949,7 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered \
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth \
          cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
          historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
