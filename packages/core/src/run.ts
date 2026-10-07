@@ -8,6 +8,7 @@ import {
   conptyAnnounced,
   psClean,
   psEchoLines,
+  psFindCwd,
   psFindEnd,
   psFrame,
   psLatestHandle,
@@ -1423,7 +1424,10 @@ async function runLocked(
       session = { ...session, remoteOs: 'windows' };
     }
     const dialect = dialectFor(session.remoteOs);
-    await sendLine(clean, dialect.launchLine(host, dialect.launchPayload(readyToken), bootFile));
+    await sendLine(
+      clean,
+      dialect.launchLine(host, dialect.launchPayload(readyToken, { cwd: session.remoteCwd }), bootFile),
+    );
     const reconnectDeadline = Date.now() + 20_000;
     for (;;) {
       await sleep(300);
@@ -1855,7 +1859,10 @@ async function runLocked(
   //
   // POSIX only for now: it parses POSIX assignments out of the command text,
   // and a PowerShell reconnect has no restore to replay them into yet.
-  if (session.remote && !win) await recordRemoteState(clean, completion.end, command, session);
+  if (session.remote) {
+    if (win) await recordWindowsState(clean, completion.end);
+    else await recordRemoteState(clean, completion.end, command, session);
+  }
 
   // Framing recovers on its own.
   //
@@ -2995,7 +3002,8 @@ export async function poll(
     done = true;
     await setMeta(clean, 'last_rc', String(code)).catch(() => undefined);
     const sess = await get(clean).catch(() => undefined);
-    if (sess?.remote && !win) await recordRemoteState(clean, end, undefined, sess).catch(() => undefined);
+    if (sess?.remote && win) await recordWindowsState(clean, end);
+    else if (sess?.remote) await recordRemoteState(clean, end, undefined, sess).catch(() => undefined);
   } else {
     const { dead, status } = await paneStatus(clean).catch(() => ({
       dead: false,
@@ -4053,8 +4061,22 @@ async function psEchoEndOffset(
 
 /** `findCommandEnd` for PowerShell: the concealed end marker in the log's tail. */
 async function psCommandEnd(logFile: string, nonce: string): Promise<CommandEnd | undefined> {
-  const code = psFindEnd(await readLogTailBytes(logFile, MARKER_SCAN_BYTES), nonce);
-  return code === undefined ? undefined : { code };
+  const tail = await readLogTailBytes(logFile, MARKER_SCAN_BYTES);
+  const code = psFindEnd(tail, nonce);
+  if (code === undefined) return undefined;
+  const cwd = psFindCwd(tail, nonce);
+  return { code, ...(cwd ? { cwd } : {}) };
+}
+
+/**
+ * What a PowerShell command leaves behind for a reconnect: its directory. The
+ * POSIX recorder also harvests POSIX assignments from the command text, which
+ * would misread PowerShell.
+ */
+async function recordWindowsState(name: string, end: CommandEnd | undefined): Promise<void> {
+  if (end?.cwd) {
+    await setMeta(name, 'rcwd', Buffer.from(end.cwd, 'utf8').toString('base64')).catch(() => undefined);
+  }
 }
 
 function encodeCommand(command: string): string {
@@ -4309,9 +4331,11 @@ export async function readTail(
     const pane = await capturePane(clean, lines);
     return { output: pane, nextOffset, ...(tailIsAllFurniture(pane) ? { emptyTail: true } : {}) };
   }
-  const all = trimBlankEdges(
-    toLines(raw).filter((line) => !MARKER_LINE_RE.test(line) && !ZSH_EOL_MARK_RE.test(line)),
-  );
+  const all = (await isWindowsSession(clean))
+    ? psClean(raw).split('\n')
+    : trimBlankEdges(
+        toLines(raw).filter((line) => !MARKER_LINE_RE.test(line) && !ZSH_EOL_MARK_RE.test(line)),
+      );
   const output = all.slice(Math.max(0, all.length - lines)).join('\n');
   return { output, nextOffset, ...(tailIsAllFurniture(output) ? { emptyTail: true } : {}) };
 }
@@ -4352,7 +4376,10 @@ export async function readSince(
   const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded, readOmitSeen > 0);
   if (slice.omitted !== undefined) await caveatCountFor(clean, 'omit').catch(() => undefined);
   return {
-    output: cleanSlice(slice.raw),
+    // ConPTY output corrupts under the POSIX cleaner: runs of spaces arrive as
+    // cursor-forward and vanish when stripped, and `\r\e[m\n` line ends trip
+    // the CR-as-overwrite rule. Measured on real frames: 6 of 10 came out wrong.
+    output: (await isWindowsSession(clean)) ? psClean(slice.raw) : cleanSlice(slice.raw),
     nextOffset: at.logicalEnd,
     ...(slice.omitted === undefined
       ? {}

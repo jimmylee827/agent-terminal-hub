@@ -27,8 +27,12 @@ import { sshLaunchLine } from './ssh';
  */
 export interface ShellDialect {
   readonly id: 'posix' | 'powershell';
-  /** What rides the ssh line so the remote shell comes up already integrated. */
-  launchPayload(token: string): string;
+  /**
+   * What rides the ssh line so the remote shell comes up already integrated.
+   * `state` is where a dropped shell was, for a dialect that restores it at
+   * launch; POSIX ignores it and restores by typing, after connecting.
+   */
+  launchPayload(token: string, state?: { cwd?: string }): string;
   /** The line typed to start that remote shell. Writes `bootFile`. */
   launchLine(host: string, payload: string, bootFile: string): string;
 }
