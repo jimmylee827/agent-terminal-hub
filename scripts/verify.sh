@@ -5036,7 +5036,8 @@ const notPrompts=["Downloading: ","Reading package lists... ","total 48",
   "PS C:\\Users\\dev> ","PS C:\\> ","    Directory: C:\\Windows","Mode                 LastWriteTime         Length Name",
   "Confirm","Are you sure you want to perform this action?","cmdlet New-Item at command pipeline position 1",
   "Supply values for the following parameters:","Line |","Name: svc","Status:","Results:\nName:",
-  "Supply values for the following parameters:\nName: svc\nPS C:\\>","Enter your credentials.\nUser: bob\nPS C:\\>"];
+  "Supply values for the following parameters:\nName: svc\nPS C:\\>","Enter your credentials.\nUser: bob\nPS C:\\>",
+  "(Type !? for Help.)\nTarget:","Supply values for the following parameters:\n(Type !? for Help.)\nTarget: prod\nPS C:\\>"];
 console.log(notPrompts.some(t=>s.looksLikePrompt(t)||s.looksLikeCredentialPrompt(t))?"false-positive":"clean");' 2>/dev/null)
 check "ordinary progress output is not mistaken for a prompt" "clean" "${safe:-x}"
 # PowerShell asks in shapes no POSIX prompt has, and each one sat silent until
@@ -5049,6 +5050,7 @@ const s=require("./packages/core/dist/state.js");
 const must=["cmdlet New-Item at command pipeline position 1\nSupply values for the following parameters:\nPath[0]: ",
   "Supply values for the following parameters:\nPath[0]: C:\\x\nPath[1]: ",
   "Supply values for the following parameters:\nInputObject: ","Supply values for the following parameters:\nName: svc\nValue: ",
+  "Supply values for the following parameters:\n(Type !? for Help.)\nTarget: ","Supply values for the following parameters:\n(Type !? for Help.)\nTarget: prod\nVersion: ",
   "Confirm\nAre you sure you want to perform this action?\n[Y] Yes  [A] Yes to All  [N] No  [L] No to All  [S] Suspend  [?] Help (default is \"Y\"): ",
   "Deploy\nProceed with the rollout?\n[Y] Yes  [N] No  [?] Help (default is \"N\"): ",
   "PowerShell credential request\nEnter your credentials.\nUser: ","Continue [Y,N]?"];

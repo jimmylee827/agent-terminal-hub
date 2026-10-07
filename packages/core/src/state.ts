@@ -167,7 +167,8 @@ const PROMPT_PATTERNS: RegExp[] = [
  * Not by joining lines: joining unconditionally made a finished command's
  * question-shaped output plus the next shell prompt read as a prompt. Here the
  * header must be PowerShell's exact text, and every line between it and the
- * last must be a field already answered.
+ * last must be a field already answered — or the one hint PowerShell prints
+ * under the header when a parameter carries a help message.
  */
 function psTwoLinePrompt(paneTail: string): boolean {
   const lines = paneTail
@@ -180,6 +181,7 @@ function psTwoLinePrompt(paneTail: string): boolean {
     const line = lines[i] ?? '';
     if (/^supply values for the following parameters:$/i.test(line)) return true;
     if (/^enter your credentials\.$/i.test(line)) return /^user:$/i.test(last) && i === lines.length - 1;
+    if (line === '(Type !? for Help.)') continue;
     if (!/^[A-Za-z][\w-]{0,40}(?:\[\d+\])?: \S/.test(line)) return false;
   }
   return false;

@@ -652,8 +652,11 @@ async function probeHub(hasPwsh) {
     // is cancelled with Ctrl-C, so nothing is created and nothing is answered.
     {
       const parked = [];
+      await run('e2e-probe', "function global:Deploy-AthProbe { param([Parameter(Mandatory, HelpMessage='Which environment')][string]$Target) $Target }");
       for (const [label, cmd] of [
         ['a mandatory parameter left out', 'New-Item -ItemType File'],
+        // A help message adds "(Type !? for Help.)" under the header.
+        ['one with a help message', 'Deploy-AthProbe'],
         ['-Confirm', 'New-Item -ItemType Directory -Path $env:TEMP\\ath-probe-confirm -Confirm'],
         ['PromptForChoice', "$Host.UI.PromptForChoice('Deploy', 'Proceed?', @('&Yes','&No'), 1)"],
         ['Get-Credential', 'Get-Credential'],
@@ -666,7 +669,7 @@ async function probeHub(hasPwsh) {
         for (let i = 0; i < 20 && (await a.get('e2e-probe')).state !== 'idle'; i++) await sleep(300);
       }
       const left = await run('e2e-probe', 'Test-Path $env:TEMP\\ath-probe-confirm');
-      gate('hub: PowerShell prompts park as needs_input (5 kinds), and Ctrl-C leaves nothing', parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
+      gate('hub: PowerShell prompts park as needs_input (6 kinds), and Ctrl-C leaves nothing', parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
     }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
