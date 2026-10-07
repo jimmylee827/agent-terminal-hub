@@ -41,6 +41,7 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  REPAINT_ADVICE,
   logDirBytes,
   buildStaleness,
   staleBuildNote,
@@ -318,10 +319,12 @@ async function main(): Promise<number> {
       if (result.captureIncomplete) {
         console.error(
           c.red(
-            `[ath] CAPTURE INCOMPLETE — the output above could not be framed and may be empty ` +
-              `or partial. The exit code is still exact; the output is not. Re-read with ` +
-              `"ath read ${name} --since ${result.logOffset}" before concluding anything, ` +
-              `especially that the command found nothing.`,
+            result.captureRepainted
+              ? `[ath] CAPTURE INCOMPLETE — ${REPAINT_ADVICE}`
+              : `[ath] CAPTURE INCOMPLETE — the output above could not be framed and may be empty ` +
+                `or partial. The exit code is still exact; the output is not. Re-read with ` +
+                `"ath read ${name} --since ${result.logOffset}" before concluding anything, ` +
+                `especially that the command found nothing.`,
           ),
         );
       }
@@ -462,6 +465,7 @@ async function main(): Promise<number> {
         return 0;
       }
       if (result.output) console.log(result.output);
+      if (result.captureRepainted) console.error(c.red(`[ath] CAPTURE INCOMPLETE — ${REPAINT_ADVICE}`));
       // The doc says "a resize is reported to poll too, not just run", and a
       // reviewer quoted that line back while showing four commands that said
       // nothing. It was true of `--json`, which carries the whole result, and

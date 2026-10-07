@@ -569,6 +569,56 @@ async function probeHub(hasPwsh) {
       const outcome = await a.commandOutcome('e2e-probe', job.handle);
       gate('hub: wait reads the same outcome from the handle', outcome.finished && outcome.exitCode === 4, JSON.stringify(outcome));
     }
+    // A resize mid-command — a person attaching, or `width` — makes ConPTY
+    // replay the whole screen into the log. Every path that returns output must
+    // then give exactly what an undisturbed run gives, or say it cannot
+    // (capture_incomplete, with the reason): never a silently different copy.
+    // poll used to hand the replay back as new output, lines repeated, beside
+    // nothing but a width note. Each resize must really have repainted.
+    {
+      const psm = require(path.join(CORE, 'powershell.js'));
+      const log = () => fs.readFileSync(a.logPath('e2e-probe'));
+      const repaintedSince = (at) => psm.psRepainted(log().subarray(at).toString('utf8'));
+      const jiggle = async (after) => {
+        await sleep(after);
+        await a.setWidth('e2e-probe', 150);
+        await sleep(700);
+        await a.setWidth('e2e-probe', 200);
+      };
+      const job = '1..10 | ForEach-Object { "row $_"; Start-Sleep -Milliseconds 300 }';
+      const base = await run('e2e-probe', job);
+      let at = log().length;
+      const [resized] = await Promise.all([run('e2e-probe', job), jiggle(1200)]);
+      const runHit = repaintedSince(at);
+      gate('hub: a resize mid-run: the same output, or capture_incomplete (repainted)', runHit && (resized.output === base.output || (resized.captureIncomplete && resized.captureRepainted)), `repainted=${runHit} same=${resized.output === base.output} flagged=${!!resized.captureRepainted}`);
+      at = log().length;
+      const bg = await a.start('e2e-probe', job).catch((e) => ({ error: e.code || String(e) }));
+      const slices = [];
+      let flagged = 0, since = bg.offset, last;
+      for (let i = 0; !bg.error && i < 80; i++) {
+        if (i === 4) await a.setWidth('e2e-probe', 150);
+        if (i === 7) await a.setWidth('e2e-probe', 200);
+        last = await a.poll('e2e-probe', bg.handle, since);
+        if (last.output) slices.push(last.output);
+        if (last.captureRepainted && last.captureIncomplete) flagged++;
+        since = last.nextOffset;
+        if (last.done) break;
+        await sleep(250);
+      }
+      const pollHit = repaintedSince(at);
+      const joined = slices.join('\n');
+      gate('hub: and a resize mid-job: poll gives the same output, or flags the slice', !bg.error && pollHit && last && last.done && (joined === base.output || flagged > 0), bg.error || `repainted=${pollHit} same=${joined === base.output} flagged=${flagged}`);
+      // The partial path: what a command parked on a prompt returns, and the
+      // moment a person is most likely to attach.
+      at = log().length;
+      const [cut] = await Promise.all([
+        a.run('e2e-probe', job, { timeoutMs: 2500 }).catch((e) => ({ error: e.code || String(e) })),
+        jiggle(800),
+      ]);
+      const cutHit = repaintedSince(at);
+      gate('hub: and a run that times out after one says so too', cutHit && cut.timedOut === true && cut.captureIncomplete === true && cut.captureRepainted === true, cut.error || `repainted=${cutHit} timedOut=${cut.timedOut} flagged=${!!cut.captureRepainted}`);
+      for (let i = 0; i < 40 && cut.handle && !(await a.commandOutcome('e2e-probe', cut.handle)).finished; i++) await sleep(250);
+    }
     // What the exit code covers here, as the caveat now says it. A pipeline
     // reports an earlier stage's failure (so it is NOT marked), a failure inside
     // a block run as a command is lost (so it IS), and `&&` — offered on

@@ -855,6 +855,10 @@ say(ps.psClean("one\x1b[7;1Htwo\r\n")==="one\ntwo" && ps.psClean("\x1b[7;1Hone\x
 // And a resize ConPTY announces in-band sets the width wrapping follows.
 say(ps.psClean("PS C:\\\u7528\u6237> abc\x1b[1;13Hx\r\n")==="PS C:\\\u7528\u6237> xbc" && ps.psClean("ab\u4e2dcd\x1b[4D\x1b[Kz\r\n")==="abz" && ps.psClean("ab\u4e2dcd\x1b[3D\x1b[Kz\r\n")==="ab z","columnsNotCharacters","CHARINDEXED");
 say(ps.psClean("\x1b[8;24;6tabcde \u4e2d\r\n",undefined,80)==="abcde\u4e2d" && ps.psClean("abcde \u4e2d\r\n",undefined,80)==="abcde \u4e2d","resizeSetsWidth","RESIZEIGNORED");
+// A repaint reaches from its signature to the cursor being shown again: a slice
+// that starts inside it is touched by it, one that starts after it is not.
+const RPT=E+"[?25l"+E+"[H", rpRaw="a\r\n"+RPT+"screen 1\r\nscreen 2\r\n"+E+"[5;1H"+E+"[?25hnew\r\n";
+say(ps.psRepaintTouches(rpRaw,0) && ps.psRepaintTouches(rpRaw,rpRaw.indexOf("screen 2")) && !ps.psRepaintTouches(rpRaw,rpRaw.indexOf("new")) && ps.psRepainted(rpRaw) && !ps.psRepainted("a\r\nb\r\n"),"repaintExtent","REPAINTEXTENT");
 // The user prompt is called with the status of the line that ran: the statement
 // that sets it must come right before the call, and the wrapper must leave its
 // result for it. The wrapper parses the command alone before running it.
@@ -926,6 +930,20 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   say(rd.output===ps.psClean(fr.body) && / {10}~/.test(rd.output),"readCleansLikePowerShell","READCORRUPTS");
   const tl=await a.readTail("wg",4);
   say(/ {10}~/.test(tl.output),"tailKeepsSpaces","TAILCORRUPTS");
+  // A resize mid-job replays the whole screen into the log. poll must say so,
+  // with the reason, rather than hand the replay back as new output: on the
+  // slice that holds it, and on one that starts while it is still being drawn.
+  const C8=E+"[8m", C28=E+"[28m", RP=E+"[?25l"+E+"[8;50;150t"+E+"[H";
+  const pn1="aaaabbbb0001", pn2="aaaabbbb0002";
+  const p0=(await a.readSince("wg",0)).nextOffset;
+  const ch1=C8+"<ATHS:"+pn1+">"+C28+"\r\nrow 1\r\n"+RP+"row 1\r\nrow 2\r\n"+E+"[3;1H"+E+"[?25hrow 3\r\n"+C8+"<ATHE:"+pn1+":0>"+C28+"\r\n";
+  fs.appendFileSync(log, ch1);
+  const pr1=await a.poll("wg",pn1,p0);
+  const pr3=await a.poll("wg",pn1,p0+Buffer.byteLength(ch1.slice(0, ch1.indexOf("row 2"))));
+  const p1=(await a.readSince("wg",0)).nextOffset;
+  fs.appendFileSync(log, C8+"<ATHS:"+pn2+">"+C28+"\r\nrow 1\r\nrow 2\r\n"+C8+"<ATHE:"+pn2+":0>"+C28+"\r\n");
+  const pr2=await a.poll("wg",pn2,p1);
+  say(pr1.captureIncomplete===true && pr1.captureRepainted===true && pr3.captureRepainted===true && !pr2.captureIncomplete && !pr2.captureRepainted,"pollFlagsRepaint","POLLREPLAYSILENT:"+[pr1.captureRepainted,pr3.captureRepainted,pr2.captureRepainted].join("|"));
   // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
   // them. The self-heal exists to type the POSIX helper into whatever shell it
   // finds, so a Windows session whose hooks do not answer must refuse instead.
@@ -949,7 +967,7 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth \
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth repaintExtent pollFlagsRepaint \
          cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
          historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"

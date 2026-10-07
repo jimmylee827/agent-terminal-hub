@@ -306,6 +306,27 @@ export interface PsFrame {
 }
 
 /** The command's frame: from the first concealed start to the first end after it. */
+/** Whether a resize repainted the screen into this stretch of the log. */
+export function psRepainted(body: string): boolean {
+  return REPAINT_RE.test(body);
+}
+
+/**
+ * Whether a repaint touches `raw` from `from` on: begins there, or began before
+ * it and was still being drawn. A poll can land mid-burst, and the rest of the
+ * replayed screen then arrives with no signature of its own. ConPTY ends every
+ * repaint by showing the cursor again (`\e[?25h`), on all six captured.
+ */
+export function psRepaintTouches(raw: string, from: number): boolean {
+  for (const m of raw.matchAll(new RegExp(REPAINT_RE.source, 'g'))) {
+    const at = m.index ?? 0;
+    if (at >= from) return true;
+    const end = raw.indexOf('\u001b[?25h', at + m[0].length);
+    if (end < 0 || end >= from) return true;
+  }
+  return false;
+}
+
 export function psFrame(raw: string, nonce: string): PsFrame {
   const startMarker = `<ATHS:${nonce}>`;
   const s = firstConcealed(raw, startMarker);
@@ -643,12 +664,16 @@ export function psLatestHandle(raw: string): string | undefined {
  * concealed end when that has arrived. `opened` says whether the start was in
  * the slice, i.e. whether the typed echo can be in it too.
  */
-export function psWindow(raw: string, nonce: string): { body: string; opened: boolean } {
+export function psWindow(
+  raw: string,
+  nonce: string,
+): { body: string; opened: boolean; start: number; end: number } {
   const startMarker = `<ATHS:${nonce}>`;
   const s = firstConcealed(raw, startMarker);
   const from = s < 0 ? 0 : s + startMarker.length;
   const e = firstConcealed(raw, `<ATHE:${nonce}:`, from);
-  return { body: raw.slice(from, e < 0 ? raw.length : e), opened: s >= 0 };
+  const to = e < 0 ? raw.length : e;
+  return { body: raw.slice(from, to), opened: s >= 0, start: from, end: to };
 }
 
 /** The directory a command left the shell in, from its keyed OSC record. */

@@ -31,6 +31,7 @@ import {
   readSince,
   readTail,
   EMPTY_TAIL_ADVICE,
+  REPAINT_ADVICE,
   inheritedContextNote,
   buildStaleness,
   staleBuildNote,
@@ -565,12 +566,15 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // An unreliable capture outranks everything else this result can say.
       if (result.captureIncomplete) {
         payload.capture_incomplete = true;
-        payload.what_to_do =
-          'The output below could NOT be framed and may be empty or partial — do not treat it ' +
-          'as what the command printed. The exit code is still exact; only the capture is in ' +
-          `doubt. Re-read with the \`read\` tool and since=${result.logOffset} before drawing ` +
-          'any conclusion, especially a negative one: "no results" from this call is not ' +
-          'evidence there were none.';
+        // A repaint is framed and NOT empty, and re-reading returns the same
+        // bytes, so the advice below would be wrong for it.
+        payload.what_to_do = result.captureRepainted
+          ? REPAINT_ADVICE
+          : 'The output below could NOT be framed and may be empty or partial — do not treat it ' +
+            'as what the command printed. The exit code is still exact; only the capture is in ' +
+            `doubt. Re-read with the \`read\` tool and since=${result.logOffset} before drawing ` +
+            'any conclusion, especially a negative one: "no results" from this call is not ' +
+            'evidence there were none.';
       }
       // Promised by this tool's own schema, and not emitted until now — the
       // same gap the comment above `log_offset` describes, one field over and
@@ -926,6 +930,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       }
       if (result.exitCodeCovers) payload.exit_code_covers = result.exitCodeCovers;
       if (result.exitCodeShortNote) payload.exit_code_note = result.exitCodeShortNote;
+      // A resize replayed the screen into this slice; first, so a gone command
+      // or a dropped link below still says what matters more. The advice goes by
+      // the REASON, so a later cause of doubt cannot inherit the wrong one.
+      if (result.captureIncomplete) {
+        payload.capture_incomplete = true;
+        if (result.captureRepainted) payload.what_to_do = REPAINT_ADVICE;
+      }
       if (result.commandGone) {
         payload.command_gone = true;
         payload.what_to_do = result.commandGoneNote;
