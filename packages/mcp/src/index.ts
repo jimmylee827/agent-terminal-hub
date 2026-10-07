@@ -369,8 +369,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           //
           // The TOKEN only, never the prose: a listing is scanned, and three
           // words per row is the whole budget.
-          ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
-            ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand) }
+          ...(s.lastCommand && compoundExitCaveat(s.lastCommand, s.remoteOs)
+            ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand, s.remoteOs) }
             : {}),
           summary: summarize(s),
         })),
@@ -1496,8 +1496,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             verified: true,
             last_command: s.lastCommand,
             last_exit_code: s.lastExitCode,
-            ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
-              ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand) }
+            ...(s.lastCommand && compoundExitCaveat(s.lastCommand, s.remoteOs)
+              ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand, s.remoteOs) }
               : {}),
           });
         }
@@ -1525,8 +1525,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               // coverage list, which is exactly how a shape-1 defect gets
               // through after the checker exists. `wait` and `read` are in it
               // now.
-              ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
-                ? { exit_code_covers: compoundExitCaveat(s.lastCommand) }
+              ...(s.lastCommand && compoundExitCaveat(s.lastCommand, s.remoteOs)
+                ? { exit_code_covers: compoundExitCaveat(s.lastCommand, s.remoteOs) }
                 : {}),
               ...(outcome?.seconds === undefined ? {} : { took_seconds: outcome.seconds }),
               // Say WHICH of the two idles this is. `false` means the pane
@@ -1537,8 +1537,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               // The SESSION's last recorded code — not necessarily the command
               // you waited on. `exit_code` above, when present, is that one.
               last_exit_code: s.lastExitCode,
-              ...(s.lastCommand && compoundExitCaveat(s.lastCommand)
-                ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand) }
+              ...(s.lastCommand && compoundExitCaveat(s.lastCommand, s.remoteOs)
+                ? { last_exit_code_covers: compoundExitCaveat(s.lastCommand, s.remoteOs) }
                 : {}),
               ...(seen === 'unknown'
                 ? {

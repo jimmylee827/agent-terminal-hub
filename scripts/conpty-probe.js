@@ -25,8 +25,9 @@
 //   node scripts/conpty-probe.js HOST [--keep] [--only baseline,order,burst,repaint,input,matrix,hub,stress]
 //
 // Needs key auth (BatchMode — it must never sit at a password prompt). Writes
-// nothing on the host; the probe scripts travel as -EncodedCommand and are
-// never typed, so they do not reach the shell's history either. The stress
+// nothing on the host but one directory under %TEMP%, removed again; the probe
+// scripts travel as -EncodedCommand and are never typed, so they do not reach
+// the shell's history either. The stress
 // probe keeps the host's CPU busy for up to two minutes.
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -488,14 +489,61 @@ async function probeHub(hasPwsh) {
     }
     // run, through every path a command can take.
     const histBefore = historyLines();
+    // Lines wider than the pane. ConPTY wraps them two ways: streamed, while the
+    // screen has room (a wide character that misses the last column leaves a
+    // padding cell, written as a space), and with the screen FULL by CRLF and
+    // a move back onto the row's last cell. The second turned a 164-character
+    // path into two lines, one indented by 198 spaces; every long line late in
+    // a session went that way. Each pattern must really occur, or its pass
+    // proves nothing.
+    {
+      const wide = [
+        ["'C:\\x\\' + ('深层目录' * 30)", 'C:\\x\\' + '深层目录'.repeat(30)],
+        ["'a' * 450", 'a'.repeat(450)],
+        ["('中' * 120) + 'END'", '中'.repeat(120) + 'END'],
+        ["'ab ' + ('中文' * 120)", 'ab ' + '中文'.repeat(120)],
+      ];
+      const broken = [];
+      const startAt = fs.statSync(a.logPath('e2e-probe')).size;
+      let fillerAt = 0;
+      for (const phase of ['room on screen', 'screen full']) {
+        if (phase === 'screen full') {
+          fillerAt = fs.statSync(a.logPath('e2e-probe')).size;
+          await run('e2e-probe', '1..80 | ForEach-Object { "filler $_" }');
+        }
+        for (const [cmd, want] of wide) {
+          const r = await run('e2e-probe', cmd);
+          const back = await a.readSince('e2e-probe', r.logOffset);
+          if (r.output !== want) broken.push(`${phase}: ${cmd} -> ${(r.output || r.error || '').length} chars`);
+          else if (!back.output.split('\n').includes(want)) broken.push(`${phase}: ${cmd} via read`);
+        }
+      }
+      gate('hub: lines wider than the pane come back whole, from run and read (8 cases)', broken.length === 0, broken.slice(0, 2).join('; '));
+      // Byte offsets, so the log is cut as bytes and decoded after.
+      const buf = fs.readFileSync(a.logPath('e2e-probe'));
+      const roomy = buf.subarray(startAt, fillerAt).toString('utf8');
+      const full = buf.subarray(fillerAt).toString('utf8');
+      const width = (await a.get('e2e-probe')).paneWidth;
+      const reemit = new RegExp(`\\r\\n(?:\\x1b\\[[0-9;?]*[a-zA-Z])*\\x1b\\[\\d+;(?:${width - 1}|${width})H`);
+      gate("hub: and both of ConPTY's wraps really occurred (padding, re-emit)", /[\u4e00-\u9fff] [\u4e00-\u9fff]/.test(roomy) && reemit.test(full), `width ${width}`);
+    }
     const native = await run('e2e-probe', 'Write-Output hub-ok; cmd /c exit 3');
     gate('hub: run returns a native exit code and exactly what was printed', native.exitCode === 3 && native.output === 'hub-ok' && !native.captureIncomplete, said(native));
     const multi = await run('e2e-probe', 'Write-Output l1\nWrite-Output l2\ncmd /c exit 5');
     gate('hub: a multi-line command goes through the wrapper', multi.exitCode === 5 && multi.output === 'l1\nl2', said(multi));
     const long = await run('e2e-probe', `Write-Output '${'a'.repeat(700)}'`);
     gate('hub: a long command arrives whole, typed in pieces', long.exitCode === 0 && long.output === 'a'.repeat(700), said(long));
-    const table = await run('e2e-probe', "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}");
-    gate('hub: aligned columns survive ConPTY', table.output === 'A   B\n-   -\nx   yy\nzzz w', said(table));
+    // Three times: whether ConPTY ends the echo line with a newline or with an
+    // absolute move to the next row depends on frame timing, and the second
+    // once drew the header over the echo (2 runs in 3 on one evening).
+    let table;
+    const tables = [];
+    for (let i = 0; i < 3; i++) {
+      table = await run('e2e-probe', "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}");
+      tables.push(table);
+    }
+    const badTable = tables.find((t) => t.output !== 'A   B\n-   -\nx   yy\nzzz w');
+    gate('hub: aligned columns survive ConPTY (3 runs)', !badTable, badTable ? said(badTable) : '');
     const reread = await a.readSince('e2e-probe', table.logOffset);
     gate('hub: read --since shows the same columns, spacing intact', /^x   yy$/m.test(reread.output) && /^zzz w$/m.test(reread.output), JSON.stringify(reread.output).slice(0, 90));
     gate('hub: and no raw control character reaches the reader', !/[\x00-\x08\x0b-\x1f]/.test(reread.output), JSON.stringify((reread.output.match(/[\x00-\x08\x0b-\x1f]/g) || []).slice(0, 5)));
@@ -521,6 +569,18 @@ async function probeHub(hasPwsh) {
       const outcome = await a.commandOutcome('e2e-probe', job.handle);
       gate('hub: wait reads the same outcome from the handle', outcome.finished && outcome.exitCode === 4, JSON.stringify(outcome));
     }
+    // What the exit code covers here, as the caveat now says it. A pipeline
+    // reports an earlier stage's failure (so it is NOT marked), a failure inside
+    // a block run as a command is lost (so it IS), and `&&` — offered on
+    // PowerShell 7 — stops at the first failure and reports its code.
+    const piped = await run('e2e-probe', 'cmd /c exit 3 | Out-Null');
+    gate("hub: a pipeline reports an earlier stage's failure, and is not marked", piped.exitCode === 3 && !piped.exitCodeCovers, `exit ${piped.exitCode}, covers=${piped.exitCodeCovers}`);
+    const blocked = await run('e2e-probe', '1 | ForEach-Object { cmd /c exit 4 }');
+    gate('hub: a failure inside a { } block is not in the code, and is marked so', blocked.exitCode === 0 && blocked.exitCodeCovers === 'outside-script-blocks-only', `exit ${blocked.exitCode}, covers=${blocked.exitCodeCovers}`);
+    if (hasPwsh) {
+      const chained = await run('e2e-probe', 'cmd /c exit 3 && Write-Output not-reached');
+      gate('hub: && stops at the first failure and reports its code', chained.exitCode === 3 && chained.output === '', said(chained));
+    }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
     // with nothing typed to get there, and still report exact exit codes.
@@ -535,6 +595,20 @@ async function probeHub(hasPwsh) {
     gate('hub: and comes back in the same directory, exit codes intact', back.output === 'C:\\Windows' && back.exitCode === 6, said(back));
     const envBack = await run('e2e-probe', "[string]$env:ATH_PROBE_X + '|' + [string]$env:PROCESSOR_LEVEL + '|' + $env:Path.EndsWith(';C:\\ath-probe-dir')");
     gate('hub: and with its environment: set, removed and PATH all restored', envBack.output === 'v1 "q" 中文||True', said(envBack));
+    // A directory too long to ride the relaunch — a path costs about four
+    // characters per character on cmd.exe's line, far more outside ASCII — must
+    // come back through the wrapper instead. Only meaningful if it really was
+    // too long, so that is checked first.
+    const deepDir = await run('e2e-probe', "$d = Join-Path $env:TEMP ('ath-probe-' + ('深层目录' * 30)); New-Item -ItemType Directory -Force -Path $d | Out-Null; Set-Location -LiteralPath $d; (Get-Location).Path");
+    const deepPath = deepDir.output;
+    const carried = require(path.join(CORE, 'powershell.js')).psLaunchCarries('0123456789ab', deepPath || '');
+    gate('hub: a deep, non-ASCII directory is too long to ride the relaunch', deepDir.exitCode === 0 && /深层目录/.test(deepPath) && !carried, `${(deepPath || '').length} chars, carried=${carried}`);
+    await ssh.closeSharedConnection(host);
+    for (let i = 0; i < 20 && (await a.get('e2e-probe')).currentCommand === 'ssh'; i++) await sleep(500);
+    const deepBack = await run('e2e-probe', '(Get-Location).Path');
+    gate('hub: and still comes back after a reconnect, through the wrapper', deepBack.reconnecting === true && deepBack.output === deepPath, said(deepBack));
+    // The reconnect started a new shell, so `$d` is gone: name the path.
+    if (/^[^']+$/.test(deepPath || '')) await run('e2e-probe', `Set-Location C:\\Windows; Remove-Item -LiteralPath '${deepPath}' -Force`);
     const histAfter = historyLines();
     gate("hub: nothing the hub typed reached the user's history file", histBefore >= 0 && histAfter === histBefore, `${histBefore} -> ${histAfter} lines`);
 
@@ -552,6 +626,9 @@ async function probeHub(hasPwsh) {
     gate('hub: and relaunched as PowerShell', readyIn('e2e-detect') === expectShell, readyIn('e2e-detect') || 'no ready marker');
     gate('hub: and the command then runs there', detectRun.exitCode === 0 && detectRun.output === 'detect-ok', said(detectRun));
   } finally {
+    // The deep directory, if a failure left it behind.
+    spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
+      `pwsh -NoLogo -NonInteractive -EncodedCommand ${Buffer.from("Get-ChildItem -LiteralPath $env:TEMP -Filter 'ath-probe-*' -Directory | Remove-Item -Recurse -Force", 'utf16le').toString('base64')}`]);
     for (const n of ['e2e-probe', 'e2e-detect']) await a.kill(n).catch(() => undefined);
     await ssh.closeSharedConnection(host).catch(() => undefined);
   }
@@ -582,6 +659,7 @@ const MATRIX = [
   ['an assignment', '$athv = 42', 0],
   ['and it persists into the next command', "if ($athv -ne 42) { throw 'lost' }", 0],
   ['a pipeline that yields nothing', "'a','b' | Where-Object { $_ -eq 'c' }", 0],
+  ['a syntax error', 'Write-Output )', 1],
 ];
 
 async function probeMatrix(shell) {
@@ -593,7 +671,10 @@ async function probeMatrix(shell) {
     `matrix-${tag}`,
     // The product's own install line (gzipped), not the raw hooks: the probe tests
     // what ships, and the raw form no longer fits cmd.exe's ceiling.
-    [UTF8_OUT, ps.psHooksInstall(), "Write-Host 'ATHPROBE-READY'"].join('\n'),
+    // The user's prompt is swapped for one that prints `$?`, standing in for a
+    // status-aware prompt (oh-my-posh, starship): after every case it must show
+    // the status the hub reports, not the status of the hub's own prompt code.
+    [UTF8_OUT, ps.psHooksInstall(), "$global:__ath_prompt0 = { 'PSQ[' + $? + ']> ' }", "Write-Host 'ATHPROBE-READY'"].join('\n'),
     {
       shell,
       interactive: true,
@@ -618,7 +699,16 @@ async function probeMatrix(shell) {
             const rc = ps.psFindEnd(ctx.read(), n);
             if (rc !== undefined) {
               await sleep(300);
-              return { rc, frame: ps.psFrame(ctx.read(), n) };
+              // The first prompt drawn after this command's REAL end marker (the
+              // forged case prints a plain-text one before it).
+              let saw;
+              for (const until = Date.now() + 3000; !saw && Date.now() < until; await sleep(150)) {
+                const raw = ctx.read();
+                let at = raw.indexOf(`<ATHE:${n}:`);
+                while (at >= 0 && !ps.concealedAt(raw, at)) at = raw.indexOf(`<ATHE:${n}:`, at + 1);
+                saw = at < 0 ? undefined : (/PSQ\[(True|False)\]>/.exec(raw.slice(at)) || [])[1];
+              }
+              return { rc, saw, frame: ps.psFrame(ctx.read(), n) };
             }
           }
           return { err: 'no end marker' };
@@ -636,6 +726,8 @@ async function probeMatrix(shell) {
           results[via].push({ name: 'table', want: 0, ...table });
           results[via].table = table;
         }
+        // A syntax error through the wrapper, which parses the whole command first.
+        results.syntax = await drive('wrapper', "Write-Output ran-anyway\nif (");
         // The history handler, asked directly rather than by typing into the real
         // file: a person's line goes where it always did, a hub line stays in memory.
         results.history = await drive('wrapper', "$f=(Get-PSReadLineOption).AddToHistoryHandler; [string]$f.Invoke('Get-Date') + '|' + [string]$f.Invoke('. __ath x y')");
@@ -655,7 +747,12 @@ async function probeMatrix(shell) {
     gate(`${tag} ${via}: every exit code exact (${rows.length} cases)`, rows.length > 0 && wrong.length === 0, wrong.length ? wrong.slice(0, 3).join('; ') : `${rows.length}/${rows.length}`);
     const t = results[via].table;
     gate(`${tag} ${via}: a table is fully rendered before the end marker`, !!t && !!t.frame && t.frame.body.includes('tbl-y'), t && t.err ? t.err : '');
+    const blind = rows.filter((r) => !r.err && r.saw !== (r.rc === 0 ? 'True' : 'False')).map((r) => `${r.name}: exit ${r.rc}, prompt saw ${r.saw}`);
+    gate(`${tag} ${via}: the user's prompt sees the status the hub reports`, rows.some((r) => r.saw) && blind.length === 0, blind.length ? blind.slice(0, 3).join('; ') : '');
   }
+  const sx = results.syntax;
+  const sxOut = sx && sx.frame ? require(path.join(CORE, 'powershell.js')).psClean(sx.frame.body) : (sx && sx.err) || '';
+  gate(`${tag}: a wrapped syntax error names the agent's line, and nothing ran`, !!sx && sx.rc === 1 && /\bif \(/.test(sxOut) && /Missing/.test(sxOut) && !/__ath|Create|MethodInvocation|ran-anyway/.test(sxOut), JSON.stringify(sxOut).slice(0, 100));
 }
 
 /** Lines in the user's PSReadLine history file, read without typing anything. */
