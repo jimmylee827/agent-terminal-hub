@@ -172,6 +172,18 @@ export function psHooksScript(): string {
     '    if ($global:__ath_hist0) { return $global:__ath_hist0.Invoke($line) }; $true }',
     '}',
     '$global:__ath_h = 0; $global:__ath_n = $null; $global:__ath_pending = $null; $global:__ath_lec = $global:LASTEXITCODE',
+    // The environment as this shell began (after the profile), so a reconnect can
+    // replay exactly what changed since. Reported as a cumulative diff, and only
+    // when it changes: the latest report is always the whole truth, and an
+    // ordinary prompt sends nothing. Removed variables are reported as null.
+    'if (-not $global:__ath_env0) { $global:__ath_env0 = @{}; foreach ($e in (Get-ChildItem env:)) { $global:__ath_env0[$e.Name] = $e.Value } }',
+    'function global:__ath_envreport([string]$id) {',
+    '  $d = [ordered]@{}; $now = @{}; foreach ($e in (Get-ChildItem env:)) { $now[$e.Name] = $e.Value }',
+    '  foreach ($k in $now.Keys) { if (-not $global:__ath_env0.ContainsKey($k) -or $global:__ath_env0[$k] -cne $now[$k]) { $d[$k] = $now[$k] } }',
+    '  foreach ($k in $global:__ath_env0.Keys) { if (-not $now.ContainsKey($k)) { $d[$k] = $null } }',
+    '  $j = ConvertTo-Json -Compress -InputObject $d',
+    "  if ($j -cne $global:__ath_envj) { $global:__ath_envj = $j; __ath_osc ('env;' + $id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))) }",
+    '}',
     // The tag line names the next command. It is a command itself, so it must
     // exist in this shell, and it acknowledges so the hub knows it does.
     'function global:↓↓↓ {',
@@ -185,7 +197,7 @@ export function psHooksScript(): string {
     '  $global:__ath_lec = $lec',
     // Where the command left the shell, keyed by its frame: OSC order does not
     // matter, and the hub needs it to answer `ath ls` and to reconnect in place.
-    "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))) }",
+    "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))); __ath_envreport $global:__ath_n }",
     "  $m = if ($global:__ath_n) { '<ATHE:' + $global:__ath_n + ':' + $rc + '>' } else { '' }",
     '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
@@ -200,7 +212,7 @@ export function psHooksScript(): string {
     '  try { . ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__ath_b64)) + [char]10 + \'$global:__ath_ok = $?\')) | Out-Default }',
     '  catch { $global:__ath_ok = $false; $_ | Out-Default }',
     '  $__ath_rc = if ($global:__ath_ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }',
-    "  __ath_osc ('cwd;' + $__ath_id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)))",
+    "  __ath_osc ('cwd;' + $__ath_id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))); __ath_envreport $__ath_id",
     "  __ath_mark ('<ATHE:' + $__ath_id + ':' + $__ath_rc + '>')",
     '}',
   ].join('\n');
@@ -310,56 +322,81 @@ export function psClean(body: string, command?: string): string {
 }
 
 /**
- * The body as the screen ends up showing it, one entry per line: concealed
- * text dropped, cursor-forward turned back into spaces, every other escape
- * removed, then CRs resolved. Escapes never contain a newline, so line N here
- * is line N of the raw bytes — which is what lets a caller map a line back to a
- * byte offset.
+ * The body as the screen ends up showing it, one entry per line.
+ *
+ * Each line is RENDERED, not stripped: ConPTY re-emits what changed on screen
+ * as cursor moves, overwrites and erases, so the text a person sees is the
+ * result of applying them. Half-measures failed in turn — stripping cursor-
+ * forward deleted runs of spaces, treating a CR as "keep the last segment"
+ * deleted text ending `\r\e[m\n`, and honouring backspace while ignoring
+ * erase-to-end left the tail of a longer PSReadLine redraw glued to the typed
+ * echo, so the echo was no longer recognised. Handled: CR, BS, TAB, cursor
+ * right/left (C/D), absolute column (G, and the column of H/f), erase in line
+ * (K) and erase characters (X). Concealed text is dropped; it only ever sits on
+ * a marker line of its own. Escapes never contain a newline, so line N here is
+ * line N of the raw bytes, which is what lets a caller map a line to an offset.
  */
 function psLines(body: string): string[] {
+  const lines: string[] = [];
+  let cells: string[] = [];
+  let x = 0;
   let concealed = false;
-  let text = '';
+  const flush = (): void => {
+    let line = '';
+    for (let i = 0; i < cells.length; i++) line += cells[i] ?? ' ';
+    lines.push(line.trimEnd());
+    cells = [];
+    x = 0;
+  };
   const re =
-    /\u001b\[([0-9;]*)m|\u001b\[(\d*)C|\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]|([^\u001b]+)/g;
+    /\u001b\[([0-9;?]*)[ -/]*([@-~])|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]|([^\u001b]+)/g;
   for (const m of body.matchAll(re)) {
-    if (m[1] !== undefined) {
-      const p = m[1] === '' ? ['0'] : m[1].split(';');
-      for (let i = 0; i < p.length; i++) {
-        if (p[i] === '38' || p[i] === '48') i += p[i + 1] === '5' ? 2 : p[i + 1] === '2' ? 4 : 0;
-        else if (p[i] === '8') concealed = true;
-        else if (p[i] === '28' || p[i] === '0') concealed = false;
+    const final = m[2];
+    if (final !== undefined) {
+      const raw = m[1] ?? '';
+      const p = raw.replace(/^\?/, '').split(';');
+      const num = (i: number, fallback: number): number => {
+        const v = Number(p[i]);
+        return p[i] !== undefined && p[i] !== '' && Number.isFinite(v) ? v : fallback;
+      };
+      if (final === 'm' && !raw.startsWith('?')) {
+        const sgr = raw === '' ? ['0'] : raw.split(';');
+        for (let i = 0; i < sgr.length; i++) {
+          // 38/48 carry sub-parameters: a colour index of 8 is not conceal.
+          if (sgr[i] === '38' || sgr[i] === '48') i += sgr[i + 1] === '5' ? 2 : sgr[i + 1] === '2' ? 4 : 0;
+          else if (sgr[i] === '8') concealed = true;
+          else if (sgr[i] === '28' || sgr[i] === '0') concealed = false;
+        }
+      } else if (final === 'C') x += Math.max(1, num(0, 1));
+      else if (final === 'D') x = Math.max(0, x - Math.max(1, num(0, 1)));
+      else if (final === 'G') x = Math.max(0, num(0, 1) - 1);
+      else if (final === 'H' || final === 'f') x = Math.max(0, num(1, 1) - 1);
+      else if (final === 'K') {
+        const mode = num(0, 0);
+        if (mode === 0) cells.length = Math.min(cells.length, x);
+        else if (mode === 1) for (let i = 0; i <= x && i < cells.length; i++) cells[i] = ' ';
+        else cells = [];
+      } else if (final === 'X') {
+        for (let i = x; i < x + Math.max(1, num(0, 1)) && i < cells.length; i++) cells[i] = ' ';
       }
-    } else if (m[2] !== undefined) {
-      if (!concealed) text += ' '.repeat(Number(m[2] || '1'));
-    } else if (m[3] !== undefined && !concealed) {
-      text += m[3];
+      continue;
+    }
+    const text = m[3];
+    if (text === undefined) continue;
+    for (const ch of text) {
+      if (ch === '\n') flush();
+      else if (ch === '\r') x = 0;
+      else if (ch === '\b') x = Math.max(0, x - 1);
+      else if (ch === '\t') x = (Math.floor(x / 8) + 1) * 8;
+      else if (ch < ' ' || concealed) continue;
+      else {
+        while (cells.length < x) cells.push(' ');
+        cells[x++] = ch;
+      }
     }
   }
-  return text.split('\n').map((line) => {
-    const l = line.replace(/\r$/, '');
-    if (!l.includes('\r')) return resolveBackspaces(l).trimEnd();
-    // A bare CR still left is a redraw of the same row: the last write is what
-    // the screen ended up showing.
-    const segments = l.split('\r').filter((s) => s.trim() !== '');
-    return resolveBackspaces(segments[segments.length - 1] ?? '').trimEnd();
-  });
-}
-
-/**
- * A backspace moves the cursor left and the next character overwrites: what a
- * terminal shows. PSReadLine draws a character, backs over it and draws it
- * again (`[\b[`), and a progress counter may do the same with digits; left
- * raw, the control character reaches the caller's output.
- */
-function resolveBackspaces(line: string): string {
-  if (!line.includes('\b')) return line;
-  const cells: string[] = [];
-  let x = 0;
-  for (const ch of line) {
-    if (ch === '\b') x = Math.max(0, x - 1);
-    else cells[x++] = ch;
-  }
-  return cells.join('');
+  flush();
+  return lines;
 }
 
 /**
@@ -435,4 +472,30 @@ export function psFindCwd(raw: string, nonce: string): string | undefined {
   if (!m || !m[1]) return undefined;
   const text = Buffer.from(m[1], 'base64').toString('utf8');
   return text || undefined;
+}
+
+/** The latest environment report in `raw`: the cumulative diff, as JSON. */
+export function psFindEnv(raw: string): string | undefined {
+  let last: string | undefined;
+  for (const m of raw.matchAll(/\u001b\]777;ath;env;[^;\u0007]+;([A-Za-z0-9+/=]*)\u0007/g)) last = m[1];
+  if (last === undefined) return undefined;
+  return Buffer.from(last, 'base64').toString('utf8') || undefined;
+}
+
+/**
+ * The script that puts a remembered environment diff back after a reconnect.
+ *
+ * The diff travels as base64 JSON and is parsed by PowerShell itself, so no
+ * value — quotes, newlines, a semicolon in PATH, non-ASCII — needs escaping
+ * here. A null means the variable was removed, and is removed again. Run
+ * through the wrapper rather than carried in the relaunch: a changed PATH alone
+ * would carry its whole value, and the relaunch has a hard ceiling.
+ */
+export function psEnvRestoreScript(json: string): string {
+  const b64 = Buffer.from(json, 'utf8').toString('base64');
+  return [
+    `$__ath_d = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')))`,
+    "foreach ($__ath_p in $__ath_d.PSObject.Properties) { if ($null -eq $__ath_p.Value) { Remove-Item -LiteralPath ('env:' + $__ath_p.Name) -ErrorAction SilentlyContinue } else { Set-Item -LiteralPath ('env:' + $__ath_p.Name) -Value ([string]$__ath_p.Value) } }",
+    'Remove-Variable __ath_d, __ath_p -ErrorAction SilentlyContinue',
+  ].join('\n');
 }

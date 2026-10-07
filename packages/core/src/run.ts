@@ -8,6 +8,8 @@ import {
   conptyAnnounced,
   psClean,
   psEchoLines,
+  psEnvRestoreScript,
+  psFindEnv,
   psFindCwd,
   psFindEnd,
   psFrame,
@@ -1441,6 +1443,7 @@ async function runLocked(
           // The relaunch carried the hooks and the wrapper, as creation does.
           await setMeta(clean, 'frame', session.currentCommand).catch(() => undefined);
           await setMeta(clean, 'wrap', '1').catch(() => undefined);
+          await restoreWindowsEnv(clean);
           break;
         }
       } else if (isNesting(session.currentCommand) && session.state === 'idle') {
@@ -4076,6 +4079,32 @@ async function psCommandEnd(logFile: string, nonce: string): Promise<CommandEnd 
 async function recordWindowsState(name: string, end: CommandEnd | undefined): Promise<void> {
   if (end?.cwd) {
     await setMeta(name, 'rcwd', Buffer.from(end.cwd, 'utf8').toString('base64')).catch(() => undefined);
+  }
+  // The environment, as the latest cumulative diff the hooks reported. Not
+  // keyed to this command: a change a person made in their own frame counts
+  // too, and the latest report already includes every earlier one.
+  const env = psFindEnv(await readLogTailBytes(logPath(name), MARKER_SCAN_BYTES).catch(() => ''));
+  if (env !== undefined) {
+    await setMeta(name, 'wenv', Buffer.from(env, 'utf8').toString('base64')).catch(() => undefined);
+  }
+}
+
+/**
+ * Put a reconnected PowerShell session's environment back.
+ *
+ * Through the wrapper, after the relaunch is ready: the directory rides the
+ * relaunch itself, but an environment diff can be as large as a whole PATH, and
+ * the relaunch has a hard ceiling. Best effort, like the POSIX restore: failing
+ * to restore must never block the command that triggered the reconnect.
+ */
+async function restoreWindowsEnv(name: string): Promise<void> {
+  const stored = await readMeta(name, 'wenv').catch(() => '');
+  const json = stored ? Buffer.from(stored, 'base64').toString('utf8') : '';
+  if (!json || json === '{}') return;
+  const nonce = randomNonce();
+  await sendLine(name, `. __ath ${nonce} ${await psDeliver(name, psEnvRestoreScript(json))}`).catch(() => undefined);
+  for (const deadline = Date.now() + 15_000; Date.now() < deadline; await sleep(150)) {
+    if ((await psCommandEnd(logPath(name), nonce).catch(() => undefined)) !== undefined) return;
   }
 }
 
