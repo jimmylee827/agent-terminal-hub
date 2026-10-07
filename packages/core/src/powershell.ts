@@ -46,16 +46,32 @@ export const CMD_LINE_MAX = 8191;
  * and their aliases, prompt and modules are theirs to keep. It loads BEFORE
  * this script, which is what lets the hooks chain the prompt it defined.
  */
-export function psLaunchScript(token: string): string {
+/**
+ * The one line that installs the hooks, gzipped.
+ *
+ * The hooks are most of the payload and cmd.exe's ceiling is hard: uncompressed,
+ * hooks plus launch left ~400 of 8,191 characters. Shared with the harness, so
+ * what it tests is the install the product performs, not a look-alike.
+ */
+export function psHooksInstall(): string {
+  const packed = gzipSync(Buffer.from(psHooksScript(), 'utf8')).toString('base64');
+  return `. ([scriptblock]::Create([IO.StreamReader]::new([IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('${packed}')), [IO.Compression.CompressionMode]::Decompress)).ReadToEnd()))`;
+}
+
+export function psLaunchScript(token: string, state: { cwd?: string } = {}): string {
   return [
     "if ($PSVersionTable.PSVersion.Major -lt 7 -and (Get-Command pwsh -ErrorAction SilentlyContinue)) {",
     "  & pwsh -NoLogo -NoExit -EncodedCommand ([Environment]::CommandLine -split '\\s+')[-1]; exit }",
     '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
     '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)',
     '$OutputEncoding = [Console]::OutputEncoding',
-    // Gzipped: the hooks are most of the payload, and cmd.exe's ceiling is hard.
-    // Uncompressed, hooks plus launch left ~400 of 8,191 characters.
-    `. ([scriptblock]::Create([IO.StreamReader]::new([IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('${gzipSync(Buffer.from(psHooksScript(), 'utf8')).toString('base64')}')), [IO.Compression.CompressionMode]::Decompress)).ReadToEnd()))`,
+    psHooksInstall(),
+    // A reconnect comes back where the dropped shell was. Carried here rather
+    // than typed afterwards, as the POSIX restore does, so nothing reaches the
+    // pane or the history; base64, so no path needs quoting.
+    ...(state.cwd
+      ? [`try { Set-Location -LiteralPath ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(state.cwd, 'utf8').toString('base64')}'))) } catch {}`]
+      : []),
     `Write-Host -NoNewline ([char]27 + ']777;ath;<ATHR:${token}:' + (Get-Process -Id $PID).ProcessName + '>' + [char]7)`,
   ].join('\n');
 }
@@ -167,6 +183,9 @@ export function psHooksScript(): string {
     "  $agent = $global:__ath_n -and $global:__ath_n -notlike 'h*'",
     '  $rc = if ($ok) { 0 } elseif ($lec -and ($agent -or $lec -ne $global:__ath_lec)) { $lec } else { 1 }',
     '  $global:__ath_lec = $lec',
+    // Where the command left the shell, keyed by its frame: OSC order does not
+    // matter, and the hub needs it to answer `ath ls` and to reconnect in place.
+    "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))) }",
     "  $m = if ($global:__ath_n) { '<ATHE:' + $global:__ath_n + ':' + $rc + '>' } else { '' }",
     '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
@@ -181,6 +200,7 @@ export function psHooksScript(): string {
     '  try { . ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__ath_b64)) + [char]10 + \'$global:__ath_ok = $?\')) | Out-Default }',
     '  catch { $global:__ath_ok = $false; $_ | Out-Default }',
     '  $__ath_rc = if ($global:__ath_ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }',
+    "  __ath_osc ('cwd;' + $__ath_id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)))",
     "  __ath_mark ('<ATHE:' + $__ath_id + ':' + $__ath_rc + '>')",
     '}',
   ].join('\n');
@@ -317,12 +337,29 @@ function psLines(body: string): string[] {
   }
   return text.split('\n').map((line) => {
     const l = line.replace(/\r$/, '');
-    if (!l.includes('\r')) return l.trimEnd();
+    if (!l.includes('\r')) return resolveBackspaces(l).trimEnd();
     // A bare CR still left is a redraw of the same row: the last write is what
     // the screen ended up showing.
     const segments = l.split('\r').filter((s) => s.trim() !== '');
-    return (segments[segments.length - 1] ?? '').trimEnd();
+    return resolveBackspaces(segments[segments.length - 1] ?? '').trimEnd();
   });
+}
+
+/**
+ * A backspace moves the cursor left and the next character overwrites: what a
+ * terminal shows. PSReadLine draws a character, backs over it and draws it
+ * again (`[\b[`), and a progress counter may do the same with digits; left
+ * raw, the control character reaches the caller's output.
+ */
+function resolveBackspaces(line: string): string {
+  if (!line.includes('\b')) return line;
+  const cells: string[] = [];
+  let x = 0;
+  for (const ch of line) {
+    if (ch === '\b') x = Math.max(0, x - 1);
+    else cells[x++] = ch;
+  }
+  return cells.join('');
 }
 
 /**
@@ -390,4 +427,12 @@ export function psWindow(raw: string, nonce: string): { body: string; opened: bo
   const from = s < 0 ? 0 : s + startMarker.length;
   const e = firstConcealed(raw, `<ATHE:${nonce}:`, from);
   return { body: raw.slice(from, e < 0 ? raw.length : e), opened: s >= 0 };
+}
+
+/** The directory a command left the shell in, from its keyed OSC record. */
+export function psFindCwd(raw: string, nonce: string): string | undefined {
+  const m = new RegExp(`\\u001b\\]777;ath;cwd;${nonce};([A-Za-z0-9+/=]*)\\u0007`).exec(raw);
+  if (!m || !m[1]) return undefined;
+  const text = Buffer.from(m[1], 'base64').toString('utf8');
+  return text || undefined;
 }

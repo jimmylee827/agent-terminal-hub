@@ -197,7 +197,11 @@ export async function capturePane(name: string, lines = 60): Promise<string> {
     '-S',
     `-${Math.max(0, lines)}`,
   ]);
-  return stripAnsi(stdout);
+  // PowerShell's markers are concealed TEXT: invisible on screen, but present
+  // in a capture. Left in, a marker line ending in `>` reads as a shell prompt
+  // before the real one has drawn, and an excerpt hands it to an agent. POSIX
+  // markers are erased, so they never appear here and nothing else changes.
+  return stripAnsi(stdout).replace(/<ATH[SETRD]:[0-9A-Za-z]+(?::-?\d+)?>/g, '');
 }
 
 /**

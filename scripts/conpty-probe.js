@@ -443,9 +443,8 @@ async function probeInput(shell, utf8In) {
         const t = ctx.read();
         got = (/HEX=([0-9a-f]+)/.exec(t) || [])[1] || '';
         psrl = (/READY PSRL=(\d)/.exec(t) || [])[1] || '?';
-        ctx.keys('exit');
-        ctx.enter();
-        await sleep(1500);
+        // No `exit` typed: PSReadLine would save it to the user's history file.
+        // capture() ends the session from outside instead.
       },
     },
   );
@@ -471,13 +470,6 @@ async function probeHub(hasPwsh) {
     }
   };
   const said = (r) => (r.error ? r.error : `exit ${r.exitCode}, ${JSON.stringify(r.output).slice(0, 80)}`);
-  // Lines in the user's PSReadLine history file, read without typing anything.
-  const historyLines = () => {
-    const script = '(Get-Content (Get-PSReadLineOption).HistorySavePath).Count';
-    const out = spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
-      `pwsh -NoLogo -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`], { encoding: 'utf8' });
-    return Number(((out.stdout || '').match(/^(\d+)\s*$/m) || [])[1] ?? -1);
-  };
   try {
     // Key auth: the probe answers over the master, before anything is launched.
     const probed = await a.create({ name: 'e2e-probe', remote: host });
@@ -504,9 +496,13 @@ async function probeHub(hasPwsh) {
     gate('hub: a long command arrives whole, typed in pieces', long.exitCode === 0 && long.output === 'a'.repeat(700), said(long));
     const table = await run('e2e-probe', "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}");
     gate('hub: aligned columns survive ConPTY', table.output === 'A   B\n-   -\nx   yy\nzzz w', said(table));
+    const reread = await a.readSince('e2e-probe', table.logOffset);
+    gate('hub: read --since shows the same columns, spacing intact', /^x   yy$/m.test(reread.output) && /^zzz w$/m.test(reread.output), JSON.stringify(reread.output).slice(0, 90));
+    gate('hub: and no raw control character reaches the reader', !/[\x00-\x08\x0b-\x1f]/.test(reread.output), JSON.stringify((reread.output.match(/[\x00-\x08\x0b-\x1f]/g) || []).slice(0, 5)));
     await run('e2e-probe', 'Set-Location C:\\Windows');
     const cwd = await run('e2e-probe', '(Get-Location).Path');
     gate('hub: the working directory persists between commands', cwd.output === 'C:\\Windows', said(cwd));
+    gate('hub: and the hub records it (what ath ls shows)', (await a.get('e2e-probe')).remoteCwd === 'C:\\Windows', String((await a.get('e2e-probe')).remoteCwd));
     // A background job, followed the way an agent follows one.
     const job = await a.start('e2e-probe', 'Start-Sleep -Seconds 2; Write-Output job-done; cmd /c exit 4').catch((e) => ({ error: e.code || String(e) }));
     gate('hub: start launches a PowerShell job', !job.error && job.launched !== false && /^[0-9a-f]{12}$/.test(job.handle || ''), job.error || `launched=${job.launched}`);
@@ -525,6 +521,14 @@ async function probeHub(hasPwsh) {
       const outcome = await a.commandOutcome('e2e-probe', job.handle);
       gate('hub: wait reads the same outcome from the handle', outcome.finished && outcome.exitCode === 4, JSON.stringify(outcome));
     }
+    // A dropped link: tear down the shared connection out from under the
+    // session, then run. It must reconnect, come back in the same directory
+    // with nothing typed to get there, and still report exact exit codes.
+    await ssh.closeSharedConnection(host);
+    for (let i = 0; i < 20 && (await a.get('e2e-probe')).currentCommand === 'ssh'; i++) await sleep(500);
+    const back = await run('e2e-probe', '(Get-Location).Path; cmd /c exit 6');
+    gate('hub: after the link drops, run reconnects and says so', back.reconnecting === true, said(back));
+    gate('hub: and comes back in the same directory, exit codes intact', back.output === 'C:\\Windows' && back.exitCode === 6, said(back));
     const histAfter = historyLines();
     gate("hub: nothing the hub typed reached the user's history file", histBefore >= 0 && histAfter === histBefore, `${histBefore} -> ${histAfter} lines`);
 
@@ -581,7 +585,9 @@ async function probeMatrix(shell) {
   const results = { framed: [], wrapper: [] };
   await capture(
     `matrix-${tag}`,
-    [UTF8_OUT, ps.psHooksScript(), "Write-Host 'ATHPROBE-READY'"].join('\n'),
+    // The product's own install line (gzipped), not the raw hooks: the probe tests
+    // what ships, and the raw form no longer fits cmd.exe's ceiling.
+    [UTF8_OUT, ps.psHooksInstall(), "Write-Host 'ATHPROBE-READY'"].join('\n'),
     {
       shell,
       interactive: true,
@@ -629,9 +635,8 @@ async function probeMatrix(shell) {
         results.history = await drive('wrapper', "$f=(Get-PSReadLineOption).AddToHistoryHandler; [string]$f.Invoke('Get-Date') + '|' + [string]$f.Invoke('. __ath x y')");
         // Only the wrapper can carry a command that spans lines.
         results.wrapper.push({ name: 'multi-line command', want: 3, ...(await drive('wrapper', '$a = 1\n$b = 2\ncmd /c exit ($a + $b)')) });
-        ctx.keys('exit');
-        ctx.enter();
-        await sleep(1500);
+        // No `exit` typed: PSReadLine would save it to the user's history file.
+        // capture() ends the session from outside instead.
       },
     },
   );
@@ -645,6 +650,14 @@ async function probeMatrix(shell) {
     const t = results[via].table;
     gate(`${tag} ${via}: a table is fully rendered before the end marker`, !!t && !!t.frame && t.frame.body.includes('tbl-y'), t && t.err ? t.err : '');
   }
+}
+
+/** Lines in the user's PSReadLine history file, read without typing anything. */
+function historyLines() {
+  const script = '(Get-Content (Get-PSReadLineOption).HistorySavePath).Count';
+  const out = spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
+    `pwsh -NoLogo -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`], { encoding: 'utf8' });
+  return Number(((out.stdout || '').match(/^(\d+)\s*$/m) || [])[1] ?? -1);
 }
 
 // ---- main ---------------------------------------------------------------------
@@ -664,6 +677,9 @@ async function probeMatrix(shell) {
     spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'where pwsh'], { encoding: 'utf8' }).stdout || '',
   );
 
+  // The whole run, not one probe: a leak once came from a probe that no
+  // per-probe count was watching (it typed `exit`, which is a person's line).
+  const historyAtStart = historyLines();
   if (want('baseline')) {
     await probeBaseline('powershell');
     if (hasPwsh) await probeBaseline('pwsh');
@@ -683,6 +699,8 @@ async function probeMatrix(shell) {
   if (want('matrix')) for (const shell of hasPwsh ? ['powershell', 'pwsh'] : ['powershell']) await probeMatrix(shell);
   if (want('hub')) await probeHub(hasPwsh);
   if (want('stress')) await probeStress();
+  const historyAtEnd = historyLines();
+  gate("the whole run left the user's history file untouched", historyAtStart >= 0 && historyAtEnd === historyAtStart, `${historyAtStart} -> ${historyAtEnd} lines`);
 
   let pass = 0;
   let fail = 0;

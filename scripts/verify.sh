@@ -802,6 +802,15 @@ say(/AddToHistoryHandler/.test(hooks) && /Alt\+F12.*RevertLine/.test(hooks),"his
 // The previous handler is a .NET delegate: invoked with `&` it throws, which hung
 // PowerShell 5.1 at its first prompt. Only .Invoke() calls it.
 say(hooks.includes("$global:__ath_hist0.Invoke($line)") && !/& \$global:__ath_hist0/.test(hooks),"chainsByInvoke","CHAINSWITHAMPERSAND");
+// The directory: reported per frame by the prompt AND the wrapper, read back by
+// nonce, and carried into a relaunch so a reconnect comes back where it was \u2014
+// without typing anything into the pane or the history.
+say((hooks.match(/__ath_osc \(\x27cwd;\x27/g)||[]).length===2,"reportsCwd","NOCWDREPORT");
+const CN="0123456789ab", cwdRec="\x1b]777;ath;cwd;"+CN+";"+Buffer.from("C:\\Users\\\u4e2d","utf8").toString("base64")+"\x07";
+say(ps.psFindCwd(cwdRec,CN)==="C:\\Users\\\u4e2d" && ps.psFindCwd(cwdRec,"ffffffffffff")===undefined,"readsCwdByNonce","CWDREAD");
+const withCwd=Buffer.from(ps.psRemoteCommand(ps.psLaunchScript(CN,{cwd:"C:\\Windows"})).split(" ").pop(),"base64").toString("utf16le");
+const setLoc=/Set-Location -LiteralPath \(\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\(\x27([A-Za-z0-9+\/=]+)\x27\)\)\)/.exec(withCwd);
+say(!!setLoc && Buffer.from(setLoc[1],"base64").toString("utf8")==="C:\\Windows" && !/Set-Location/.test(script) && withCwd.indexOf("Set-Location")<withCwd.indexOf("<ATHR:"),"relaunchRestoresCwd","NORESTORE");
 say(d.dialectFor(undefined).id==="posix" && d.dialectFor("windows").id==="powershell","dialectFor","DIALECTFOR");
 // The Windows reader. Concealed text (SGR 8) is its sentinel, so a command that
 // PRINTS a marker cannot end itself or forge its status; and the FIRST start
@@ -816,6 +825,9 @@ const replay=hid("<ATHS:"+N+">")+"before\r\n"+E+"[?25l"+E+"[8;50;140t"+E+"[8m"+E
 const rf=ps.psFrame(replay,N);
 say(rf.repainted && rf.body.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,"").startsWith("before") && !ps.psFrame(merged,N).repainted,"repaintFlaggedFirstWins","REPAINT");
 say(ps.psFindEnd(hid("<ATHS:"+N+">")+"running",N)===undefined,"noEndNoGuess","GUESSEDEND");
+// Backspaces resolve as a terminal shows them: PSReadLine redraws a character
+// over itself, and a counter can back over its digits.
+say(ps.psClean("PS C:\\> [\b[x]\r\nstep 1\b2\b3\r\n")==="PS C:\\> [x]\nstep 3","backspacesResolved","RAWBACKSPACE");
 // The cleaner, against REAL ConPTY frames captured from both PowerShell versions
 // (scripts/fixtures/conpty-frames.json): predictions redrawn into the echo,
 // the error style of each version, a table, a forged marker printed as text, and
@@ -835,6 +847,10 @@ const cut=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const n=ps.psEc
 say(typed.length>=6 && agrees,"echoBoundaryAgrees","ECHOBOUNDARY");
 say(cut,"halfDrawnEchoIsNotYet","EARLYECHOEND");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
+// What a Windows host is left with, said as precisely as the POSIX case: the
+// hub keeps its own lines out of the history file, and a person\u2019s are saved.
+const fp=a.REMOTE_FOOTPRINT.join(" ");
+say(/WINDOWS host/.test(fp) && /kept out of PSReadLine/.test(fp) && /PERSON types in that session is saved/.test(fp) && /your shell writes its own/.test(fp),"footprintCoversWindows","FOOTPRINTPOSIXONLY");
 try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.code==="invalid_option","typoRefused","TYPOWRONGCODE"); }
 (async()=>{
   await a.create({name:"wg",cwd:"/tmp"});
@@ -848,6 +864,21 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   await a.sendLine("wg","echo clear-key-ok-$((40+2))");
   let ck=""; for(let i=0;i<20;i++){ ck=fs.readFileSync(log,"utf8"); if(ck.includes("clear-key-ok-42")) break; await new Promise(r=>setTimeout(r,250)); }
   say(ck.includes("clear-key-ok-42") && !ck.includes("3~echo"),"localPaneGetsPosixKeys","WINDOWSKEYSINLOCALSHELL");
+  // Reading a PowerShell session: `read` must clean as ConPTY needs (a real
+  // frame, appended to the log of this session, must read exactly as the PowerShell
+  // cleaner says), and a capture must not carry the concealed marker TEXT.
+  // The marker is printed via %s so the typed command does not contain one.
+  await a.sendLine("wg","printf \x27\\033[8m<ATH%s:h1:0><ATH%s:h2>\\033[28m\\n\x27 E S");
+  await new Promise(r=>setTimeout(r,800));
+  const cap=await a.capturePane("wg");
+  say(!/<ATH[SE]:h[12]/.test(cap) && /printf/.test(cap),"captureDropsMarkers","MARKERSINCAPTURE");
+  const fr=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-frames.json","utf8")).frames.find(f=>/pwsh: cursor-forward/.test(f.name));
+  await new Promise(r=>setTimeout(r,500));
+  const from=(await a.readSince("wg",0)).nextOffset; fs.appendFileSync(log, fr.body);
+  const rd=await a.readSince("wg",from);
+  say(rd.output===ps.psClean(fr.body) && / {10}~/.test(rd.output),"readCleansLikePowerShell","READCORRUPTS");
+  const tl=await a.readTail("wg",4);
+  say(/ {10}~/.test(tl.output),"tailKeepsSpaces","TAILCORRUPTS");
   // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
   // them. The self-heal exists to type the POSIX helper into whatever shell it
   // finds, so a Windows session whose hooks do not answer must refuse instead.
@@ -871,9 +902,9 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess \
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved \
          cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
-         historyAndClearKey chainsByInvoke osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
+         historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 
