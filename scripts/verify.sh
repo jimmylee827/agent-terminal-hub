@@ -1035,6 +1035,20 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   await a.setMeta("wg","echo",pn5+" "+longCmd);
   const p5b=await a.poll("wg",pn5,0);
   say(p5b.output==="out-line" && /Write-Output/.test(p5a.output),"pollDropsLongEcho","LONGECHOLEAKS:"+JSON.stringify(p5b.output.slice(0,40)));
+  // Only a resize DURING a job can make its capture repeat lines. One before it
+  // (the editor panel attaching after `new`) is reported, but no longer marks a
+  // clean capture incomplete: every first command after an attach was flagged.
+  const wl=a.widthLogPath("wg"), wNow=(await a.get("wg")).paneWidth;
+  fs.writeFileSync(wl, (wNow-70)+"\n"+wNow+"\n");
+  const pn6="aaaabbbb0006", pn7="aaaabbbb0007";
+  await a.setMeta("wg","wmark",pn6+" "+wNow+" 2");
+  fs.appendFileSync(log, C8+"<ATHS:"+pn6+">"+C28+"\r\nclean\r\n"+C8+"<ATHE:"+pn6+":0>"+C28+"\r\n");
+  const p6=await a.poll("wg",pn6,0,undefined,{consumeNotices:false});
+  await a.setMeta("wg","wmark",pn7+" "+wNow+" 2");
+  fs.appendFileSync(wl, (wNow-70)+"\n"+wNow+"\n");
+  fs.appendFileSync(log, C8+"<ATHS:"+pn7+">"+C28+"\r\nduring\r\n"+C8+"<ATHE:"+pn7+":0>"+C28+"\r\n");
+  const p7=await a.poll("wg",pn7,0,undefined,{consumeNotices:false});
+  say(!p6.captureIncomplete && p7.captureIncomplete===true && p7.captureRepainted===true,"onlyResizeDuringFlags","RESIZEBEFOREFLAGGED:"+[p6.captureIncomplete,p7.captureIncomplete].join("|"));
   // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
   // them. The self-heal exists to type the POSIX helper into whatever shell it
   // finds, so a Windows session whose hooks do not answer must refuse instead.
@@ -1065,7 +1079,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         pollDropsLongEcho concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 

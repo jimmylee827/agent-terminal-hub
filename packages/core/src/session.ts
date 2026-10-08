@@ -19,7 +19,7 @@ import {
   tmuxName,
 } from './paths';
 import { dialectFor, posixDialect } from './dialect';
-import { windowsShellOnScreen } from './powershell';
+import { windowsGreetedLast, windowsShellOnScreen } from './powershell';
 import { ensureControlDir, ensureMaster, probeRemoteOs } from './ssh';
 import { clearRequest, listRequests } from './requests';
 import { classify, isNesting, isShell, looksLikeCredentialPrompt } from './state';
@@ -620,13 +620,24 @@ export interface SendLineOptions {
  * now at a cmd or PowerShell prompt. Nothing the hub types for a POSIX shell
  * suits it, and it has none of the hub's hooks.
  */
-export async function windowsShellByHand(name: string, paneCommand?: string): Promise<boolean> {
+export async function windowsShellByHand(
+  name: string,
+  paneCommand?: string,
+  /**
+   * Also when no prompt is showing but the last hop's greeting was Windows': a
+   * Windows program still running. For what the hub READS and the keys it
+   * sends, where a screen reader suits any output; not for refusing `run`, so a
+   * later hand-typed ssh to a POSIX host is never refused on old evidence.
+   */
+  orGreeting = false,
+): Promise<boolean> {
   const clean = validateName(name);
   const command = paneCommand ?? (await paneStatus(clean).catch(() => null))?.command ?? '';
   if (!isNesting(command)) return false;
   if ((await readMeta(clean, 'ros').catch(() => '')) === 'windows') return false;
   const screen = await capturePane(clean, 60).catch(() => '');
-  return windowsShellOnScreen(screen, await logTail(clean, 256 * 1024));
+  const tail = await logTail(clean, 256 * 1024);
+  return windowsShellOnScreen(screen, tail) || (orGreeting && windowsGreetedLast(tail));
 }
 
 /** The last `bytes` of a session's log, or '' if there is none. */
@@ -664,7 +675,7 @@ export async function sendLine(
       // PSReadLine TYPES C-e/C-u as literal control characters in its default
       // edit mode. Its hooks bind this chord to clearing the line instead.
       await tmux(['send-keys', '-t', target, 'M-F12'], { allowFail: true });
-    } else if (await windowsShellByHand(clean, paneCommand)) {
+    } else if (await windowsShellByHand(clean, paneCommand, true)) {
       // A Windows shell the hub did not launch: cmd.exe and an unhooked
       // PowerShell both TYPE C-e/C-u, so `echo` arrived as `^E^Uecho` and was
       // "not recognized". No key clears a line in both safely (Escape is Vi

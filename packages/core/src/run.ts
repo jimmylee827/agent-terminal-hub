@@ -1527,6 +1527,7 @@ async function runLocked(
   // Nor a Windows shell the hub did not launch: there the POSIX path typed its
   // probe and `__ath …` into cmd.exe, and failed as `command_lost`.
   if (!win && (await windowsShellByHand(clean, session.currentCommand))) throw windowsShellByHandError(clean);
+  const startWidth = win ? await widthMark(clean, session.paneWidth) : '';
 
   // Safe here and nowhere else: we hold the lock, so no offset is in flight.
   const trim = await rotateIfNeeded(clean).catch(() => undefined);
@@ -1563,6 +1564,7 @@ async function runLocked(
   // Where this frame begins, for a later `poll`/`wait` of a command that parked:
   // a PowerShell frame is read by replaying it from its start.
   if (win) await markStarted(nonce, discarded + offset);
+  if (win) await setMeta(clean, 'wmark', `${nonce} ${startWidth}`).catch(() => undefined);
   let usedFraming = false;
   let enteredUnknownShell = false;
   if (framed) {
@@ -1812,17 +1814,15 @@ async function runLocked(
     // reviewer finished an audit and found their pane had gone 200 -> 156 with
     // no result having said so; they were using `run`, and the notice was
     // wired to the paths they were not on.
-    const parkWidth = await observeWidth(
-      clean,
-      (await get(clean).catch(() => undefined))?.paneWidth,
-      true,
-    ).catch(() => undefined);
+    const parkNow = (await get(clean).catch(() => undefined))?.paneWidth;
+    const parkMoved = win && (await widthMovedSince(clean, startWidth, parkNow).catch(() => true));
+    const parkWidth = await observeWidth(clean, parkNow, true).catch(() => undefined);
     return {
       session: clean,
       command,
       exitCode: null,
       output: await partial(),
-      ...partialDoubt(parkWidth !== undefined),
+      ...partialDoubt(parkMoved),
       timedOut: completion.kind === 'timeout',
       needsInput: state === 'needs-input',
       state,
@@ -2073,11 +2073,9 @@ async function runLocked(
   // so the change surfaces on the first result after it happens.
   // `run` always consumes: a discrete result a caller reads once. It also now
   // sees the transitions tmux recorded between glances, not just the endpoints.
-  const widthChange = await observeWidth(
-    clean,
-    (await get(clean).catch(() => undefined))?.paneWidth,
-    true,
-  ).catch(() => undefined);
+  const endWidth = (await get(clean).catch(() => undefined))?.paneWidth;
+  const movedDuring = win && (await widthMovedSince(clean, startWidth, endWidth).catch(() => true));
+  const widthChange = await observeWidth(clean, endWidth, true).catch(() => undefined);
 
   // Counted ONCE, here, not inside the result literal: a spread that awaited it
   // would increment on every evaluation and decay the prose in the wrong place.
@@ -2234,8 +2232,8 @@ async function runLocked(
     // is flagged on them separately (`partialDoubt`).
     // Windows 10 announces no resize in-band, so on PowerShell the hub's own
     // observation of the pane's width counts as one.
-    ...(captureIncomplete || (win && widthChange) ? { captureIncomplete: true } : {}),
-    ...(repainted || (win && widthChange) ? { captureRepainted: true } : {}),
+    ...(captureIncomplete || movedDuring ? { captureIncomplete: true } : {}),
+    ...(repainted || movedDuring ? { captureRepainted: true } : {}),
     ...(capped.omittedBytes !== undefined
       ? { omittedBytes: capped.omittedBytes, omittedResumeFrom: discarded + offset }
       : {}),
@@ -2533,6 +2531,23 @@ export interface WidthObservation extends PaneWidthChange {
 }
 
 /**
+ * Where the pane's width stands as a command starts: its width, and how many
+ * resizes tmux has logged so far. `widthMovedSince` then says whether it moved
+ * DURING the command, which is what can make a Windows capture repeat lines.
+ * A resize before it (a person or the editor panel attaching after `new`) is
+ * still reported as `pane_width_changed`; it just no longer marks a clean
+ * capture as possibly incomplete.
+ */
+async function widthMark(name: string, width: number | undefined): Promise<string> {
+  return `${width ?? 0} ${(await recordedWidths(name)).length}`;
+}
+
+async function widthMovedSince(name: string, mark: string, width: number | undefined): Promise<boolean> {
+  const [w, n] = mark.split(' ').map(Number);
+  return (width ?? 0) !== w || (await recordedWidths(name)).length > (n ?? 0);
+}
+
+/**
  * What the pane has done since anyone last looked.
  *
  * `window-size latest` means a human attaching sets the size, which is correct
@@ -2680,6 +2695,8 @@ export async function start(name: string, command: string): Promise<StartResult>
     // job is exactly the one that trims its own log out from under its handle.
     const offset = await logicalEnd(clean);
     await markStarted(nonce, offset);
+    // Where the width stood as this job began, for `poll` (see `widthMark`).
+    if (win) await setMeta(clean, 'wmark', `${nonce} ${await widthMark(clean, session.paneWidth)}`).catch(() => undefined);
 
     // Show the HUMAN the command, not the plumbing.
     //
@@ -3180,11 +3197,20 @@ export async function poll(
   // job driven by start/poll is exactly when a human attaches — usually to
   // answer the password prompt that job raised. Consumed only on the poll that
   // reports `done`, so a polling loop cannot swallow it before a later `run`.
+  //
+  // Whether it moved while THIS job ran, from the mark its `start` or `run`
+  // left; read before the observation below can drain the log it counts.
+  const wmark = win ? await readMeta(clean, 'wmark').catch(() => '') : '';
+  const jobMoved =
+    win && wmark.startsWith(`${handle} `)
+      ? await widthMovedSince(clean, wmark.slice(handle.length + 1), session.paneWidth).catch(() => true)
+      : undefined;
   const widthChange = await observeWidth(
     clean,
     session.paneWidth,
     done && opts.consumeNotices !== false,
   ).catch(() => undefined);
+  const widthMovedInJob = jobMoved ?? (win && widthChange !== undefined);
 
   const timing = await timingFor(handle, done, end?.measuredSeconds);
   // Offsets are per SESSION, so `since` from an earlier job is silently valid
@@ -3241,7 +3267,7 @@ export async function poll(
     ...(widthChange === undefined ? {} : { paneWidthChanged: widthChange }),
     // Windows 10 announces no resize in-band: the hub's own width observation
     // stands in for one there.
-    ...(sliceRepainted || (win && widthChange !== undefined) ? { captureIncomplete: true, captureRepainted: true } : {}),
+    ...(sliceRepainted || widthMovedInJob ? { captureIncomplete: true, captureRepainted: true } : {}),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
@@ -4495,7 +4521,8 @@ export async function readTail(
     const pane = await capturePane(clean, lines);
     return { output: pane, nextOffset, ...(tailIsAllFurniture(pane) ? { emptyTail: true } : {}) };
   }
-  const all = (await isWindowsSession(clean))
+  // A Windows shell reached by a hand-typed ssh draws a screen too.
+  const all = (await isWindowsSession(clean)) || (await windowsShellByHand(clean, undefined, true))
     ? await psReadTail(raw, screenOf(await get(clean).catch(() => undefined)))
     : trimBlankEdges(
         toLines(raw).filter((line) => !MARKER_LINE_RE.test(line) && !ZSH_EOL_MARK_RE.test(line)),
@@ -4545,7 +4572,7 @@ export async function readSince(
   // on a screen instead, from a frame start a little before `since`, so the
   // replay lines up with the real screen (see `psReadSince`).
   let output: string;
-  if (!(await isWindowsSession(clean))) output = cleanSlice(slice.raw);
+  if (!(await isWindowsSession(clean)) && !(await windowsShellByHand(clean, undefined, true))) output = cleanSlice(slice.raw);
   else {
     const screen = screenOf(await get(clean).catch(() => undefined));
     if (slice.omitted !== undefined) output = (await psReadSince(slice.raw, 0, screen)).join('\n');
