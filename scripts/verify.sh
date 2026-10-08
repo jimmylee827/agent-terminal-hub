@@ -1327,7 +1327,7 @@ chk "a POSIX prompt behind ssh still gets C-e/C-u"     "yes" "$(printf '%s' "$WB
 #
 # The refusal for a session waiting at a prompt advises Ctrl-C. An agent that
 # did exactly that and ran at once was refused AGAIN: the pane had not redrawn
-# yet (seen on Windows 10). The state is now confirmed over two seconds before
+# yet (seen on Windows 10). The state is now confirmed over up to five seconds before
 # refusing; a prompt that is really still there is refused as before.
 WPROMPT="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athpr$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
