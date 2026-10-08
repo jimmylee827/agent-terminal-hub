@@ -1309,6 +1309,40 @@ chk "and types nothing into it"                        "yes" "$(printf '%s' "$WB
 chk "send types the line with no C-e/C-u"              "yes" "$(printf '%s' "$WBYHAND" | grep -qw sendClean     && echo yes || echo no)"
 chk "a POSIX prompt behind ssh still gets C-e/C-u"     "yes" "$(printf '%s' "$WBYHAND" | grep -qw posixKeysKept && echo yes || echo no)"
 
+# ---- a prompt that has just gone is not refused -----------------------------
+#
+# The refusal for a session waiting at a prompt advises Ctrl-C. An agent that
+# did exactly that and ran at once was refused AGAIN: the pane had not redrawn
+# yet (seen on Windows 10). The state is now confirmed over two seconds before
+# refusing; a prompt that is really still there is refused as before.
+WPROMPT="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athpr$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const cp=require("child_process"); const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const out=[];
+(async()=>{
+  try{
+    await a.create({name:"pr",cwd:"/tmp"});
+    for(let i=0;i<12;i++){const s=await a.get("pr").catch(()=>null);if(s&&s.state==="idle")break;await sleep(500);}
+    // A real sudo prompt, as the suite parks one elsewhere: the hub knows a
+    // credential prompt by its program as well as its text. Nothing is typed
+    // into it; Ctrl-C ends it. (On a local pane the redraw is too quick to show
+    // the lag; that half was measured on Windows 10, refused before, run after.)
+    const park=async()=>{ await a.sendLine("pr","sudo -k"); await sleep(500); await a.sendLine("pr","sudo -p \x27Password:\x27 true"); for(let i=0;i<24&&(await a.get("pr")).state!=="needs-input";i++) await sleep(250); };
+    await park();
+    const held=await a.run("pr","echo still-parked",{timeoutMs:8000}).then(()=>"ran",e=>e.code);
+    out.push(held==="needs_human"?"stillRefused":"NOTREFUSED:"+held);
+    await a.sendKeys("pr",["C-c"]);
+    const r=await a.run("pr","echo after-ctrl-c",{timeoutMs:15000}).then(x=>x.output,e=>"ERR:"+e.code);
+    out.push(r==="after-ctrl-c"?"ranAfterCtrlC":"REFUSEDAFTERCTRLC:"+r);
+  } finally {
+    await a.kill("pr").catch(()=>{}); cp.spawnSync("tmux",["-L",process.env.ATH_SOCKET,"kill-server"]);
+    process.stdout.write(out.join(" "));
+  }
+})();
+' 2>/dev/null)"
+chk "a prompt really waiting is still refused"         "yes" "$(printf '%s' "$WPROMPT" | grep -qw stillRefused  && echo yes || echo no)"
+chk "a run right after Ctrl-C is not refused"          "yes" "$(printf '%s' "$WPROMPT" | grep -qw ranAfterCtrlC && echo yes || echo no)"
+
 # ---- an unframed capture must not look like an empty result ------------------
 #
 # `extractBetweenMarkers` returns '' when it cannot find the command's START
