@@ -47,6 +47,7 @@ import {
   setMeta,
   shellDepth,
   validateName,
+  windowsShellByHand,
 } from './session';
 import { ensureControlDir } from './ssh';
 import { clearRequest, listRequests, requestHuman } from './requests';
@@ -1504,6 +1505,9 @@ async function runLocked(
   // are concealed text, its wrapper takes base64, and nothing POSIX — above all
   // the self-heal, which TYPES the POSIX helper — may reach it.
   const win = session.remoteOs === 'windows';
+  // Nor a Windows shell the hub did not launch: there the POSIX path typed its
+  // probe and `__ath …` into cmd.exe, and failed as `command_lost`.
+  if (!win && (await windowsShellByHand(clean, session.currentCommand))) throw windowsShellByHandError(clean);
 
   // Safe here and nowhere else: we hold the lock, so no offset is in flight.
   const trim = await rotateIfNeeded(clean).catch(() => undefined);
@@ -2642,6 +2646,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // you could type".
     await assertNotCredentialPrompt(clean);
     const win = session.remoteOs === 'windows';
+    if (!win && (await windowsShellByHand(clean, session.currentCommand))) throw windowsShellByHandError(clean);
 
     const startTrim = await rotateIfNeeded(clean).catch(() => undefined);
     const startTrimmedBytes =
@@ -4038,6 +4043,18 @@ async function raiseHumanWall(
 const TTY_EATS_RE = /[\t\v\f\r\x00-\x08\x0e-\x1f]/;
 
 /** A PowerShell session whose hooks did not answer: there is no safe fallback to type. */
+/** A Windows shell reached by an ssh typed into the pane, not launched by the hub. */
+function windowsShellByHandError(name: string): AthError {
+  return new AthError(
+    'windows_shell_by_hand',
+    `"${name}" is at a Windows prompt that an ssh typed into the pane opened, not one ` +
+      `the hub launched, so it has none of the hub's hooks: nothing was typed or run. ` +
+      `Create the session with "ath new <name> --remote <host>" instead — the hub then ` +
+      `detects Windows and starts PowerShell with its hooks. Type "exit" in this pane ` +
+      `(ath attach ${name}) to leave that shell.`,
+  );
+}
+
 function windowsHooksMissing(name: string): AthError {
   return new AthError(
     'windows_hooks_missing',

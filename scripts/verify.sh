@@ -932,6 +932,19 @@ sayA((async()=>{
   }
   return true;
 })(),"pollJoinsExactly","POLLPIECES");
+// A Windows shell reached by a hand-typed ssh, recognised from the screen: its
+// prompt last, AND a Windows sign (ConPTY hello, conhost title, or a banner).
+// A POSIX prompt is never one, nor a C:\\ prompt with no Windows sign, nor a
+// Windows screen whose last line is output rather than a prompt.
+const W11HELLO="\x1b[?9001h", W10TITLE="\x1b]0;C:\\WINDOWS\\system32\\conhost.exe\x07";
+say([ps.windowsShellOnScreen("Microsoft Windows [Version 10.0.26200.1]\n\nC:\\Users\\t>",""),
+     ps.windowsShellOnScreen("PowerShell 7.6.6\nPS C:\\Users\\t>",""),
+     ps.windowsShellOnScreen("PS C:\\Users\\t> ",W11HELLO),
+     ps.windowsShellOnScreen("user@HOST C:\\Users\\t>\n\n",W10TITLE)].every(Boolean) &&
+    ![ps.windowsShellOnScreen("user@host:~$",W11HELLO),
+      ps.windowsShellOnScreen("C:\\Users\\t>",""),
+      ps.windowsShellOnScreen("Microsoft Windows [Version 10.0.26200.1]\nC:\\Users\\t>dir\ncopying files",W11HELLO)].some(Boolean),
+    "windowsByHandRecognised","BYHANDMISREAD");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 // What a Windows host is left with, said as precisely as the POSIX case: the
 // hub keeps its own lines out of the history file, and a person\u2019s are saved.
@@ -1019,7 +1032,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 
@@ -1210,6 +1223,58 @@ const cp=require("child_process");
 })();
 ' 2>/dev/null)"
 chk "the resize hook works on a fresh server" "yes" "$(printf '%s' "$WHOOK" | grep -q hookRecorded && echo yes || echo no)"
+
+# ---- a Windows shell reached by an ssh typed into a local session -----------
+#
+# The hub did not launch it, so the session is not a Windows one, and it typed
+# what suits zsh: C-e/C-u before every line, which cmd.exe and an unhooked
+# PowerShell both TYPE (`echo` arrived as `^E^Uecho`, "not recognized"), and on
+# `run` its POSIX probe and `__ath …`, which failed as command_lost. Driven here
+# with a fake: a copy of cat NAMED ssh, behind a Windows banner and prompt. And
+# the same fake behind a POSIX prompt must still get C-e/C-u: nothing changes there.
+WBYHAND="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athwb$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const cp=require("child_process"), fs=require("fs"), os=require("os"), path=require("path");
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),"athfake-")), fake=path.join(dir,"ssh");
+fs.copyFileSync("/bin/cat",fake); fs.chmodSync(fake,0o755);
+const out=[];
+const pane=async(name,banner,prompt)=>{
+  await a.create({name,cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get(name).catch(()=>null);if(s&&s.state==="idle")break;await sleep(500);}
+  // printf %s, so nothing in the prompt is read as an escape (C:\\Users lost its U).
+  const q="\x27";
+  await a.sendLine(name,`printf ${q}%s\\r\\n\\r\\n%s${q} ${q}${banner}${q} ${q}${prompt}${q}; exec ${fake}`);
+  for(let i=0;i<20&&(await a.get(name)).currentCommand!=="ssh";i++) await sleep(250);
+  await sleep(500);
+};
+(async()=>{
+  try{
+    await pane("wb","Microsoft Windows [Version 10.0.26200.1]","C:\\Users\\t>");
+    const before=fs.statSync(a.logPath("wb")).size;
+    const r=await a.run("wb","echo hi",{timeoutMs:8000}).then(()=>"ran",e=>e.code);
+    await sleep(500);
+    out.push(r==="windows_shell_by_hand"?"refused":"NOTREFUSED:"+r);
+    out.push(fs.statSync(a.logPath("wb")).size===before?"nothingTyped":"TYPED");
+    await a.sendLine("wb","typed-by-send"); await sleep(800);
+    const sent=fs.readFileSync(a.logPath("wb")).subarray(before).toString("latin1");
+    out.push(/typed-by-send/.test(sent)&&!/\^E|\x05|\x15/.test(sent)?"sendClean":"SENDDIRTY:"+JSON.stringify(sent.slice(0,60)));
+    await pane("pb","","user@host:~$ ");
+    const pBefore=fs.statSync(a.logPath("pb")).size;
+    await a.sendLine("pb","typed-posix"); await sleep(800);
+    const pSent=fs.readFileSync(a.logPath("pb")).subarray(pBefore).toString("latin1");
+    out.push(/\^E/.test(pSent)&&/typed-posix/.test(pSent)?"posixKeysKept":"POSIXCHANGED:"+JSON.stringify(pSent.slice(0,60)));
+  } finally {
+    await a.kill("wb").catch(()=>{}); await a.kill("pb").catch(()=>{});
+    cp.spawnSync("tmux",["-L",process.env.ATH_SOCKET,"kill-server"]); fs.rmSync(dir,{recursive:true,force:true});
+    process.stdout.write(out.join(" "));
+  }
+})();
+' 2>/dev/null)"
+chk "a hand-typed ssh into Windows: run refuses"       "yes" "$(printf '%s' "$WBYHAND" | grep -qw refused       && echo yes || echo no)"
+chk "and types nothing into it"                        "yes" "$(printf '%s' "$WBYHAND" | grep -qw nothingTyped  && echo yes || echo no)"
+chk "send types the line with no C-e/C-u"              "yes" "$(printf '%s' "$WBYHAND" | grep -qw sendClean     && echo yes || echo no)"
+chk "a POSIX prompt behind ssh still gets C-e/C-u"     "yes" "$(printf '%s' "$WBYHAND" | grep -qw posixKeysKept && echo yes || echo no)"
 
 # ---- an unframed capture must not look like an empty result ------------------
 #
