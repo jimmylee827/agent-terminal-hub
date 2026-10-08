@@ -369,13 +369,7 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   // exists. See `discardedBytes`.
   await resetDiscardedBytes(name);
 
-  // Make resizes observable, and clear this NAME's resize state with the log.
-  //
-  // Best effort: a tmux that rejects the hook still gives a working session,
-  // which is the whole reason this is a command rather than a line in
-  // tmux.conf. Set on every create because a restarted server forgets it, and
-  // `-g` means one call covers every session on the socket.
-  await tmux(resizeHookCommand(), { allowFail: true }).catch(() => undefined);
+  // Clear this NAME's resize state with the log (the hook is set below).
   await fs.rm(widthLogPath(name), { force: true }).catch(() => undefined);
   await fs.rm(widthNoteFlagPath(name), { force: true }).catch(() => undefined);
 
@@ -410,6 +404,17 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
     '-e', 'ATH_INSIDE=1',
     ...(fallbackShell ? [fallbackShell] : []),
   ]);
+
+  // Make resizes observable.
+  //
+  // Best effort: a tmux that rejects the hook still gives a working session,
+  // which is the whole reason this is a command rather than a line in
+  // tmux.conf. Set on every create because a restarted server forgets it, and
+  // `-g` means one call covers every session on the socket. AFTER new-session:
+  // on a fresh socket there is no server before it, the hook was rejected
+  // (silently, as best effort is), and the first session a server ever ran
+  // recorded no resize at all — found through a Windows gate, but POSIX too.
+  await tmux(resizeHookCommand(), { allowFail: true }).catch(() => undefined);
 
   await tmux(['set-option', '-t', tmuxName(name), 'remain-on-exit', 'on']);
   // MAKE THE DOCUMENTED BOUND TRUE.

@@ -1146,6 +1146,31 @@ chk "the finishing poll still reports"    "yes" "$(printf '%s' "$WOBS" | grep -q
 chk "and does not repeat the long note"   "yes" "$(printf '%s' "$WOBS" | grep -q explainOnlyOnce && echo yes || echo no)"
 chk "after which it is consumed"          "yes" "$(printf '%s' "$WOBS" | grep -q consumed        && echo yes || echo no)"
 
+# And the hook itself, by the real tmux, on the FIRST session of a fresh server.
+# The hook was set before new-session, when a fresh socket has no server to take
+# it: rejected silently (it is best effort), so that server's sessions recorded
+# no resize, and an out-and-back during a run was invisible. The block above
+# writes the log by hand, so it could never see this.
+WHOOK="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athhk$$" node -e '
+const a=require("'"$RP"'/packages/core/dist/index.js");
+const cp=require("child_process");
+(async()=>{
+  await a.create({name:"wh",cwd:"/tmp"});
+  for(let i=0;i<12;i++){const s=await a.get("wh").catch(()=>null);if(s&&s.state==="idle")break;await new Promise(r=>setTimeout(r,700));}
+  await a.run("wh","echo baseline",{timeoutMs:20000});
+  const now=(await a.get("wh")).paneWidth;
+  // What a person attaching and leaving does: out and back, by tmux, not the hub.
+  const rw=(x)=>cp.spawnSync("tmux",["-L",process.env.ATH_SOCKET,"resize-window","-t","ath-wh","-x",String(x)]);
+  rw(now-60); await new Promise(r=>setTimeout(r,500)); rw(now); await new Promise(r=>setTimeout(r,500));
+  const r=await a.run("wh","echo after",{timeoutMs:20000});
+  const seen=r.paneWidthChanged&&r.paneWidthChanged.seen;
+  process.stdout.write(seen&&seen.includes(now-60)?"hookRecorded":"HOOKMISSING:"+JSON.stringify(r.paneWidthChanged||null));
+  await a.kill("wh").catch(()=>{});
+  cp.spawnSync("tmux",["-L",process.env.ATH_SOCKET,"kill-server"]);
+})();
+' 2>/dev/null)"
+chk "the resize hook works on a fresh server" "yes" "$(printf '%s' "$WHOOK" | grep -q hookRecorded && echo yes || echo no)"
+
 # ---- an unframed capture must not look like an empty result ------------------
 #
 # `extractBetweenMarkers` returns '' when it cannot find the command's START
