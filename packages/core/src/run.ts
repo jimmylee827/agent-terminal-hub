@@ -1341,11 +1341,13 @@ export async function run(
  * A prompt the pane showed a moment ago may already be gone: Ctrl-C, which the
  * refusal itself suggests, takes the shell a beat to redraw. An agent that did
  * exactly that and ran at once was refused a second time (seen on Windows 10).
- * So a waiting prompt is confirmed over two seconds before anything is refused;
- * one that is really there is refused as before, only later.
+ * So a waiting prompt is confirmed over up to five seconds before anything is
+ * refused; one that is really there is refused as before, only later. Two was
+ * not enough once: a first Ctrl-C to Windows PowerShell 5.1 behind a tunnel
+ * took longer, where later ones took under a second.
  */
 async function settledFromPrompt(clean: string, session: Session): Promise<Session> {
-  for (let i = 0; i < 8 && session.state === 'needs-input'; i++) {
+  for (let i = 0; i < 20 && session.state === 'needs-input'; i++) {
     await sleep(250);
     session = await get(clean);
   }
