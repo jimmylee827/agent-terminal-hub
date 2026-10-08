@@ -6,22 +6,21 @@ import { AthError, SessionBusy, SessionGone } from './errors';
 import { dialectFor, posixDialect } from './dialect';
 import {
   conptyAnnounced,
-  psClean,
-  psEchoEnd,
-  psRepainted,
-  psRepaintTouches,
+  psTagLine,
   psLaunchCarries,
   psCwdRestoreScript,
   psEnvRestoreScript,
   psFindEnv,
   psFindCwd,
   psFindEnd,
-  psFrame,
   psLatestHandle,
-  psPartial,
+  psPollFrame,
+  psReadFrame,
+  psReadSince,
+  psReadTail,
   psStartAt,
-  psWindow,
 } from './powershell';
+import type { ScreenSize } from './conscreen';
 import { withSessionLock } from './lock';
 import {
   LOG_MAX_BYTES,
@@ -183,6 +182,13 @@ const MARKER_LINE_RE = /<ATH[SETRD]:[A-Za-z0-9]+(?::-?\d+)?(?::[A-Za-z0-9+/=]*){
 
 /** Enough of the log tail to be certain the end marker is inside it. */
 const MARKER_SCAN_BYTES = 32 * 1024;
+
+/**
+ * How far before `since` a PowerShell `read` looks for a frame start to replay
+ * from. Every prompt opens one, so a few screenfuls is plenty; without one the
+ * replay starts unaligned and cursor moves may land a row off.
+ */
+const READ_LOOKBACK_BYTES = 256 * 1024;
 
 export function startMarker(nonce: string): string {
   return `<ATHS:${nonce}>`;
@@ -1531,10 +1537,13 @@ async function runLocked(
   // safely instead: `__ath` being undefined means nothing runs at all.
   const bare = win ? psBareLine(command) : commandLine(nonce, command);
   const framed = bare !== undefined && (await hooksActive(clean, session));
+  // Where this frame begins, for a later `poll`/`wait` of a command that parked:
+  // a PowerShell frame is read by replaying it from its start.
+  if (win) await markStarted(nonce, discarded + offset);
   let usedFraming = false;
   let enteredUnknownShell = false;
   if (framed) {
-    await sendLine(clean, posixDialect.tagLine(nonce));
+    await sendLine(clean, win ? psTagLine(nonce) : posixDialect.tagLine(nonce));
 
     // WAIT for the tag to acknowledge before sending the bare command.
     //
@@ -1704,14 +1713,16 @@ async function runLocked(
   let partialRepainted = false;
   const partial = async (): Promise<string> => {
     if (!win) return cleanSlice(trimToCommandWindow(await readLogFrom(log, offset), nonce, command));
-    const body = psPartial(await readLogFrom(log, offset), nonce);
-    partialRepainted = psRepainted(body);
-    return psClean(body, usedFraming ? command : undefined, session.paneWidth);
+    const frame = await psReadFrame(await readLogFrom(log, offset), nonce, screenOf(session), usedFraming ? command : undefined);
+    partialRepainted = frame.repainted || frame.truncated;
+    return frame.output;
   };
   // A partial result is the one a person is most likely to have resized: it is
   // what a command parked on a prompt returns, and they attach to answer it.
-  const partialDoubt = (): Partial<RunResult> =>
-    partialRepainted ? { captureIncomplete: true, captureRepainted: true } : {};
+  // Windows 10 announces no resize in-band, so the hub's own observation of the
+  // pane's width counts too.
+  const partialDoubt = (widthMoved = false): Partial<RunResult> =>
+    partialRepainted || (win && widthMoved) ? { captureIncomplete: true, captureRepainted: true } : {};
 
   if (completion.kind === 'lost') {
     throw new AthError(
@@ -1787,7 +1798,7 @@ async function runLocked(
       command,
       exitCode: null,
       output: await partial(),
-      ...partialDoubt(),
+      ...partialDoubt(parkWidth !== undefined),
       timedOut: completion.kind === 'timeout',
       needsInput: state === 'needs-input',
       state,
@@ -1828,23 +1839,23 @@ async function runLocked(
   // Second occurrence of this failure, first one after it was supposedly fixed
   // — because the first fix added a second opinion instead of removing one.
   const flushDeadline = Date.now() + MARKER_FLUSH_MS;
-  // PowerShell frames come from a different reader: concealed markers, first
-  // start to first end, and a cleaner that knows ConPTY's habits. A repaint
-  // inside the frame means the body may hold replayed screen, so it is reported
-  // as incomplete rather than handed back as what the command printed.
+  // PowerShell frames are read off a replay of the screen (see `conscreen.ts`):
+  // ConPTY re-sends what it redraws, so the byte stream holds duplicates the
+  // screen does not. A resize inside the frame re-lays that screen, so it is
+  // reported as incomplete rather than handed back as what the command printed.
   let repainted = false;
-  const captureFrom = (text: string): FramedCapture => {
+  const captureFrom = async (text: string): Promise<FramedCapture> => {
     if (!win) return extractFramed(text, nonce, command);
-    const frame = psFrame(text, nonce);
-    repainted = frame.repainted;
-    return { framed: frame.framed, output: psClean(frame.body, usedFraming ? command : undefined, session.paneWidth) };
+    const frame = await psReadFrame(text, nonce, screenOf(session), usedFraming ? command : undefined);
+    repainted = frame.repainted || frame.truncated;
+    return { framed: frame.opened && frame.closed, output: frame.output };
   };
   let raw = await readLogFrom(log, offset);
-  let capture = captureFrom(raw);
+  let capture = await captureFrom(raw);
   while (!capture.framed && Date.now() < flushDeadline) {
     await sleep(40);
     raw = await readLogFrom(log, offset);
-    capture = captureFrom(raw);
+    capture = await captureFrom(raw);
   }
   // Still not framed after the wait: whatever we return is a guess, and an
   // empty guess is the dangerous one. SAY the capture is incomplete rather
@@ -2197,8 +2208,10 @@ async function runLocked(
     // The flush-loop doubt exists only on the completed path: the early returns
     // never reached the flush loop. A PowerShell repaint, which they can hold,
     // is flagged on them separately (`partialDoubt`).
-    ...(captureIncomplete ? { captureIncomplete: true } : {}),
-    ...(repainted ? { captureRepainted: true } : {}),
+    // Windows 10 announces no resize in-band, so on PowerShell the hub's own
+    // observation of the pane's width counts as one.
+    ...(captureIncomplete || (win && widthChange) ? { captureIncomplete: true } : {}),
+    ...(repainted || (win && widthChange) ? { captureRepainted: true } : {}),
     ...(capped.omittedBytes !== undefined
       ? { omittedBytes: capped.omittedBytes, omittedResumeFrom: discarded + offset }
       : {}),
@@ -2663,7 +2676,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     const bare = win ? psBareLine(command) : commandLine(nonce, command);
     let framed = false;
     if (bare !== undefined && (await hooksActive(clean, session))) {
-      await sendLine(clean, posixDialect.tagLine(nonce));
+      await sendLine(clean, win ? psTagLine(nonce) : posixDialect.tagLine(nonce));
       // Same reasoning as `run`: latency is not evidence of a missing helper.
       framed = await awaitTagAck(clean, nonce, session.remote ? 4000 : 1500);
       if (!framed) framed = await awaitTagAck(clean, nonce, 1500);
@@ -2724,19 +2737,11 @@ export async function start(name: string, command: string): Promise<StartResult>
     // runs, so it appears in milliseconds when things are working, whatever
     // the command goes on to do.
     const launched = await awaitStartMarker(clean, nonce, START_CONFIRM_MS, offset);
-    // PowerShell draws the typed echo after the frame opens and re-renders it
-    // on Enter, so a poll from the dispatch offset can start inside it and hand
-    // the re-render back as output. Point the caller past the echo once it has
-    // fully arrived; if it has not within the window, the dispatch offset stands.
-    const pollFrom =
-      win && framed && launched
-        ? ((await psEchoEndOffset(clean, nonce, command, offset, 3000)) ?? offset)
-        : offset;
     return {
       session: clean,
       command,
       handle: nonce,
-      offset: pollFrom,
+      offset,
       // Reported, not thrown. The command may be sitting in the tty buffer
       // about to run — a session that merely LOOKS idle is exactly the case
       // `lastCommandEvidence` documents — and turning a delayed start into an
@@ -2988,23 +2993,27 @@ export async function poll(
   const omitSeen = await caveatPeek(clean, 'omit').catch(() => 1);
   const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded, omitSeen > 0);
   if (slice.omitted !== undefined) await caveatCountFor(clean, 'omit').catch(() => undefined);
-  // PowerShell: cut at the concealed markers and clean as ConPTY needs. The
-  // typed echo can only be in a slice that holds the start, and only the last
-  // dispatched command's text can match it.
+  // PowerShell: the frame is replayed from where it was dispatched — so the
+  // replayed screen lines up with the real one — up to `since` and up to now,
+  // and only lines completed in between are returned (see `psPollFrame`). The
+  // typed echo is dropped wherever `since` falls in it.
   const win = await isWindowsSession(clean);
   let output: string;
-  // A resize mid-job replays the whole screen into the slice, which would
-  // otherwise read as new output: lines the caller already has, again.
+  // A line already returned that now reads differently, or a resize since
+  // `since`: the screen was redrawn, and this output may hold lines twice.
   let sliceRepainted = false;
   if (win) {
-    const w = psWindow(slice.raw, handle);
     const now = await get(clean).catch(() => undefined);
-    output = psClean(w.body, w.opened ? now?.lastCommand : undefined, now?.paneWidth);
-    // Looking back a screen's worth and more: a repaint begun in the last slice
-    // may still be drawing into this one.
-    const back = Math.min(at.physical, 65536);
-    const before = back > 0 ? (await readLogRange(log, at.physical - back, back)).toString('utf8') : '';
-    sliceRepainted = psRepaintTouches(before + slice.raw.slice(0, w.end), before.length + w.start);
+    const from = (await dispatchedAt(handle))?.offset;
+    const origin = from === undefined ? undefined : await resolveOffset(clean, from).catch(() => undefined);
+    // A handle the hub kept no record of is replayed from a little way back.
+    const startPhys = origin && origin.physical <= at.physical ? origin.physical : Math.max(0, at.physical - 262144);
+    const window = await readLogRange(log, startPhys, Math.max(0, size - startPhys));
+    const text = window.toString('utf8');
+    const sinceIdx = window.subarray(0, at.physical - startPhys).toString('utf8').length;
+    const read = await psPollFrame(text, sinceIdx, handle, screenOf(now), now?.lastCommand);
+    output = read.output;
+    sliceRepainted = read.changed;
   } else {
     output = trimToCommandWindow(slice.raw, handle);
   }
@@ -3198,7 +3207,9 @@ export async function poll(
         }
       : {}),
     ...(widthChange === undefined ? {} : { paneWidthChanged: widthChange }),
-    ...(sliceRepainted ? { captureIncomplete: true, captureRepainted: true } : {}),
+    // Windows 10 announces no resize in-band: the hub's own width observation
+    // stands in for one there.
+    ...(sliceRepainted || (win && widthChange !== undefined) ? { captureIncomplete: true, captureRepainted: true } : {}),
     ...(timing?.seconds === undefined
       ? {}
       : { elapsedSeconds: timing.seconds, elapsedExact: timing.exact }),
@@ -4082,11 +4093,16 @@ async function deliverCommand(session: string, command: string): Promise<string>
  * The POSIX rule plus a length limit, which POSIX typing does not apply but
  * the reason behind MAX_TYPED_LINE does: a terminal's input buffer is finite,
  * and truncation runs the truncated command.
+ *
+ * And ASCII only. Windows 10's ConPTY loses some typed non-ASCII (`中文✓`
+ * arrived as `中文`), and a command that arrives changed is a different
+ * command that still runs. The wrapper carries it as base64, which is ASCII.
  */
 function psBareLine(command: string): string | undefined {
   if (command.includes('\n') || TTY_EATS_RE.test(command) || command.length > MAX_TYPED_LINE) {
     return undefined;
   }
+  if (/[^\x00-\x7f]/.test(command)) return undefined;
   return command;
 }
 
@@ -4116,36 +4132,12 @@ async function endReaderFor(name: string): Promise<(logFile: string, nonce: stri
 }
 
 /**
- * The logical offset just past a typed command's echo, once it has arrived.
- *
- * `psEchoEnd` answers with a position in the decoded text, because a line can
- * end without a newline byte (ConPTY moves to the next row instead). The log is
- * UTF-8, so the text before that position encodes back to exactly the bytes it
- * came from — checked rather than assumed, since a guess here lands mid-output.
+ * The screen a PowerShell session's output is replayed on: the pane's size,
+ * which is the size of the PTY ConPTY renders into. A session that has not
+ * been measured yet gets the hub's default pane.
  */
-async function psEchoEndOffset(
-  name: string,
-  nonce: string,
-  command: string,
-  fromLogical: number,
-  timeoutMs: number,
-): Promise<number | undefined> {
-  const log = logPath(name);
-  const deadline = Date.now() + timeoutMs;
-  const width = (await get(name).catch(() => undefined))?.paneWidth;
-  for (;;) {
-    const at = await resolveOffset(name, fromLogical).catch(() => undefined);
-    if (!at) return undefined;
-    const buf = await readLogRange(log, at.physical, MARKER_SCAN_BYTES * 2);
-    const text = buf.toString('utf8');
-    const end = psEchoEnd(text, nonce, command, width);
-    if (end !== undefined) {
-      const prefix = Buffer.from(text.slice(0, end), 'utf8');
-      return buf.subarray(0, prefix.length).equals(prefix) ? fromLogical + prefix.length : undefined;
-    }
-    if (Date.now() >= deadline) return undefined;
-    await sleep(60);
-  }
+function screenOf(session?: Pick<Session, 'paneWidth' | 'paneHeight'>): ScreenSize {
+  return { cols: session?.paneWidth || 200, rows: session?.paneHeight || 50 };
 }
 
 /** `findCommandEnd` for PowerShell: the concealed end marker in the log's tail. */
@@ -4459,7 +4451,7 @@ export async function readTail(
     return { output: pane, nextOffset, ...(tailIsAllFurniture(pane) ? { emptyTail: true } : {}) };
   }
   const all = (await isWindowsSession(clean))
-    ? psClean(raw, undefined, (await get(clean).catch(() => undefined))?.paneWidth).split('\n')
+    ? await psReadTail(raw, screenOf(await get(clean).catch(() => undefined)))
     : trimBlankEdges(
         toLines(raw).filter((line) => !MARKER_LINE_RE.test(line) && !ZSH_EOL_MARK_RE.test(line)),
       );
@@ -4502,13 +4494,25 @@ export async function readSince(
   const readOmitSeen = await caveatPeek(clean, 'omit').catch(() => 1);
   const slice = await readLogCapped(log, at.physical, size, maxBytes, discarded, readOmitSeen > 0);
   if (slice.omitted !== undefined) await caveatCountFor(clean, 'omit').catch(() => undefined);
+  // ConPTY output corrupts under the POSIX cleaner: runs of spaces arrive as
+  // cursor-forward and vanish when stripped, and `\r\e[m\n` line ends trip the
+  // CR-as-overwrite rule (6 of 10 real frames came out wrong). It is replayed
+  // on a screen instead, from a frame start a little before `since`, so the
+  // replay lines up with the real screen (see `psReadSince`).
+  let output: string;
+  if (!(await isWindowsSession(clean))) output = cleanSlice(slice.raw);
+  else {
+    const screen = screenOf(await get(clean).catch(() => undefined));
+    if (slice.omitted !== undefined) output = (await psReadSince(slice.raw, 0, screen)).join('\n');
+    else {
+      const back = Math.min(at.physical, READ_LOOKBACK_BYTES);
+      const window = await readLogRange(log, at.physical - back, size - (at.physical - back));
+      const sinceIdx = window.subarray(0, back).toString('utf8').length;
+      output = (await psReadSince(window.toString('utf8'), sinceIdx, screen)).join('\n');
+    }
+  }
   return {
-    // ConPTY output corrupts under the POSIX cleaner: runs of spaces arrive as
-    // cursor-forward and vanish when stripped, and `\r\e[m\n` line ends trip
-    // the CR-as-overwrite rule. Measured on real frames: 6 of 10 came out wrong.
-    output: (await isWindowsSession(clean))
-      ? psClean(slice.raw, undefined, (await get(clean).catch(() => undefined))?.paneWidth)
-      : cleanSlice(slice.raw),
+    output,
     nextOffset: at.logicalEnd,
     ...(slice.omitted === undefined
       ? {}
