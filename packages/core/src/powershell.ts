@@ -13,6 +13,7 @@
  */
 import { gzipSync } from 'node:zlib';
 
+import { findConcealed, renderAfter, renderFrom, visible, type ScreenPos, type ScreenSize } from './conscreen';
 import { launchFromBootFile } from './ssh';
 
 /**
@@ -103,6 +104,18 @@ export function psRemoteCommand(script: string): string {
   return remote;
 }
 
+/**
+ * The tag line a PowerShell session is typed before each framed command.
+ *
+ * ASCII on purpose. The POSIX line's arrows are typed keys, and Windows 10's
+ * ConPTY loses some non-ASCII input: on a 19045 host `↓↓↓ AGENT INPUT ID: <id>
+ * ↓↓↓` arrived as `↓ AGENT INPUT ID: <id>` (and a typed `中文✓` as `中文`), so
+ * the tag function was never found and every command was refused.
+ */
+export function psTagLine(nonce: string): string {
+  return `vvv AGENT INPUT ID: ${nonce} vvv`;
+}
+
 export function psLaunchLine(host: string, script: string, bootFile: string): string {
   return launchFromBootFile(host, psRemoteCommand(script), bootFile);
 }
@@ -128,8 +141,18 @@ export const CONPTY_HELLO = '\u001b[?9001h';
  */
 export function conptyAnnounced(log: string, anchor: string, window = 8192): boolean {
   const at = log.lastIndexOf(anchor);
-  return at >= 0 && log.slice(at, at + window).includes(CONPTY_HELLO);
+  if (at < 0) return false;
+  const after = log.slice(at, at + window);
+  return after.includes(CONPTY_HELLO) || CONHOST_TITLE_RE.test(after);
 }
+
+/**
+ * Windows 10's ConPTY sends no `\e[?9001h`. What both versions do send, once,
+ * as a session opens, is a window title naming conhost itself — Windows 10
+ * right after its clear-and-home, Windows 11 after its hello. A POSIX host
+ * would have to title its own terminal after a Windows binary to match.
+ */
+const CONHOST_TITLE_RE = /\u001b\]0;[^\u0007\u001b]*\\conhost\.exe(?:\u0007|\u001b\\)/i;
 
 // ---- the protocol inside PowerShell ------------------------------------------
 //
@@ -169,6 +192,14 @@ export function psHooksScript(): string {
   return [
     "function global:__ath_mark([string]$t) { Write-Host -NoNewline ([char]27 + '[8m' + $t + [char]27 + '[28m') }",
     "function global:__ath_osc([string]$t) { Write-Host -NoNewline ([char]27 + ']777;ath;' + $t + [char]7) }",
+    // Where on the screen a frame begins: the row and column just past its start
+    // marker. The hub replays ConPTY's output on a screen of its own, and
+    // ConPTY's cursor moves name absolute rows, so that screen has to start
+    // where the real one was. Under ConPTY the buffer IS the screen (window at
+    // 0,0, buffer the pane's size), measured on Windows 10 and 11 alike.
+    // The Windows build rides along: Windows 10's ConPTY draws a wrapped line
+    // differently from Windows 11's, and the replay has to know which it is.
+    "function global:__ath_pos([string]$id) { try { $c = $Host.UI.RawUI.CursorPosition; $w = $Host.UI.RawUI.WindowPosition; __ath_osc ('pos;' + $id + ';' + ($c.Y - $w.Y) + ';' + $c.X + ';' + [Environment]::OSVersion.Version.Build) } catch {} }",
     // No read of a variable that may not exist: a profile with `Set-StrictMode
     // -Version Latest` makes that THROW, which left the hooks half-installed and
     // every later prompt failing — commands then never reported an end. Its
@@ -192,7 +223,7 @@ export function psHooksScript(): string {
     "  $global:__ath_skip = if ('Microsoft.PowerShell.AddToHistoryOption' -as [type]) { [Microsoft.PowerShell.AddToHistoryOption]::MemoryOnly } else { $false }",
     '  if (-not (Test-Path variable:global:__ath_hist0)) { $global:__ath_hist0 = (Get-PSReadLineOption).AddToHistoryHandler }',
     '  Set-PSReadLineOption -AddToHistoryHandler { param([string]$line)',
-    "    if (($global:__ath_n -and $global:__ath_n -notlike 'h*') -or $line -match '^(\\u2193\\u2193\\u2193 AGENT INPUT ID: |\\. __ath |\\$__ath_b )') { return $global:__ath_skip }",
+    "    if (($global:__ath_n -and $global:__ath_n -notlike 'h*') -or $line -match '^(vvv AGENT INPUT ID: |\\. __ath |\\$__ath_b )') { return $global:__ath_skip }",
     // A DELEGATE, not a scriptblock: `&` on it throws, on 5.1 and 7 alike, which
     // hung 5.1 outright and would have broken every line a person types on 7.
     '    if ($global:__ath_hist0) { return $global:__ath_hist0.Invoke($line) }; $true }',
@@ -213,8 +244,9 @@ export function psHooksScript(): string {
     "  if ($j -cne $global:__ath_envj) { $global:__ath_envj = $j; __ath_osc ('env;' + $id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j))) }",
     '}',
     // The tag line names the next command. It is a command itself, so it must
-    // exist in this shell, and it acknowledges so the hub knows it does.
-    'function global:↓↓↓ {',
+    // exist in this shell, and it acknowledges so the hub knows it does. ASCII
+    // (see `psTagLine`): Windows 10's ConPTY mangles typed arrows.
+    'function global:vvv {',
     "  $n = [string]$args[3]",
     "  if ($n -match '^[0-9a-f]{12}$') { $global:__ath_pending = $n; $global:LASTEXITCODE = 0; __ath_osc ('<ATHT:' + $n + '>') }",
     '}',
@@ -234,7 +266,7 @@ export function psHooksScript(): string {
     "  $m = if ($global:__ath_n) { '<ATHE:' + $global:__ath_n + ':' + $rc + '>' } else { '' }",
     '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
-    "  __ath_mark ($m + '<ATHS:' + $global:__ath_n + '>'); Write-Host ''",
+    "  __ath_mark ($m + '<ATHS:' + $global:__ath_n + '>'); __ath_pos $global:__ath_n; Write-Host ''",
     // The user's prompt sees the status of THEIR line, not of ours: `$?` cannot
     // be assigned, but a failing statement sets it, and an ignored error is not
     // added to `$Error`. After the wrapper, the line was `. __ath …`, which
@@ -247,7 +279,7 @@ export function psHooksScript(): string {
     // session's scope; its own variables carry a prefix for that reason.
     'function global:__ath([string]$__ath_id, [string]$__ath_b64) {',
     '  $global:LASTEXITCODE = 0; $global:__ath_ok = $true',
-    "  __ath_mark ('<ATHS:' + $__ath_id + '>'); Write-Host ''",
+    "  __ath_mark ('<ATHS:' + $__ath_id + '>'); __ath_pos $__ath_id; Write-Host ''",
     // Parsed alone first, so a syntax error is shown against the agent's own
     // lines, as a typed one would be. Left to `Create`, it surfaced as a failed
     // call on THIS function's source line, pointing into the status line below.
@@ -301,355 +333,226 @@ export function psFindEnd(raw: string, nonce: string): number | undefined {
 }
 
 /**
- * ConPTY repaints by hiding the cursor and homing it — measured on every
- * resize, and never seen in an ordinary frame, which hides it once at start
- * and then clears rather than homes.
+ * A resize, announced in-band by Windows 11's ConPTY (`\e[8;<rows>;<cols>t`).
+ * The replay follows it, but a re-laid screen is where a replay is most likely
+ * to differ from the real one, so a frame holding one is flagged. Windows 10
+ * announces nothing; there the hub's own width observation stands in.
  */
-const REPAINT_RE = /\u001b\[\?25l(?:\u001b\[[0-9;]*[mt])*\u001b\[H/;
+const RESIZE_RE = /\u001b\[8;\d+;\d+t/;
+
+/** Where a frame begins on the screen: the cell just past its start marker. */
+export function psFindPos(raw: string, nonce: string): ScreenPos | undefined {
+  const m = new RegExp(`\\u001b\\]777;ath;pos;${nonce};(\\d+);(\\d+)(?:;(\\d+))?\\u0007`).exec(raw);
+  if (!m) return undefined;
+  const build = m[3] === undefined ? undefined : Number(m[3]);
+  // Windows 11 is build 22000 and up; its ConPTY marks a wrapped row as wrapped.
+  return { row: Number(m[1]), col: Number(m[2]), ...(build !== undefined && build < 22000 ? { legacy: true } : {}) };
+}
 
 export interface PsFrame {
-  /** Both markers were found, in order. */
-  framed: boolean;
-  /** Raw bytes between them: the command's output, still to be cleaned. */
-  body: string;
-  /** A repaint landed inside the frame, so the body may hold replayed screen. */
+  /** The frame's start marker was found. */
+  opened: boolean;
+  /** Its end marker has been written: the command finished. */
+  closed: boolean;
+  /**
+   * Its lines as the screen shows them, from where it began, before the typed
+   * echo is dropped. The last may still be being drawn.
+   */
+  lines: string[];
+  /** How many of `lines` are the prompt and the typed echo. */
+  echo: number;
+  /** The command's output: the lines after the echo, trimmed. */
+  output: string;
+  /** A resize was announced inside the frame. */
   repainted: boolean;
+  /** The replay could not hold the whole frame. */
+  truncated: boolean;
+  /** Its start position was reported; without one the replay began at the top. */
+  positioned: boolean;
 }
 
-/** The command's frame: from the first concealed start to the first end after it. */
-/** Whether a resize repainted the screen into this stretch of the log. */
-export function psRepainted(body: string): boolean {
-  return REPAINT_RE.test(body);
-}
-
-/**
- * Whether a repaint touches `raw` from `from` on: begins there, or began before
- * it and was still being drawn. A poll can land mid-burst, and the rest of the
- * replayed screen then arrives with no signature of its own. ConPTY ends every
- * repaint by showing the cursor again (`\e[?25h`), on all six captured.
- */
-export function psRepaintTouches(raw: string, from: number): boolean {
-  for (const m of raw.matchAll(new RegExp(REPAINT_RE.source, 'g'))) {
-    const at = m.index ?? 0;
-    if (at >= from) return true;
-    const end = raw.indexOf('\u001b[?25h', at + m[0].length);
-    if (end < 0 || end >= from) return true;
-  }
-  return false;
-}
-
-export function psFrame(raw: string, nonce: string): PsFrame {
-  const startMarker = `<ATHS:${nonce}>`;
-  const s = firstConcealed(raw, startMarker);
-  const e = s < 0 ? -1 : firstConcealed(raw, `<ATHE:${nonce}:`, s);
-  if (s < 0 || e < 0) return { framed: false, body: '', repainted: false };
-  const body = raw.slice(s + startMarker.length, e);
-  return { framed: true, body, repainted: REPAINT_RE.test(body) };
-}
+const NOT_OPENED: PsFrame = {
+  opened: false,
+  closed: false,
+  lines: [],
+  echo: 0,
+  output: '',
+  repainted: false,
+  truncated: false,
+  positioned: false,
+};
 
 /**
- * A frame's body as the command printed it.
+ * One command's output, read off a replay of its screen (see `conscreen.ts`).
  *
- * The POSIX cleaner cannot be reused, for three measured reasons:
+ * `raw` must hold the frame's concealed start marker; its `pos` record may sit
+ * anywhere in it, since OSC is not ordered with text. The replay starts on the
+ * cell the marker ended on and runs to the end of `raw`: Windows 10 can redraw
+ * the end marker's line after the bytes where it first appeared. Read up to the
+ * end marker's CELL, so a line redrawn from its start is read once.
  *
- * - **ConPTY writes runs of spaces as cursor-forward** (`\e[10C` inside an
- *   error's underline). Stripped like any other escape, the spaces vanish and
- *   every aligned column collapses — silently. Translated back, they survive.
- * - **ConPTY ends lines `\r\e[m\n`.** The POSIX cleaner treats a CR as an
- *   overwrite and keeps the last segment, which here is the colour reset: the
- *   line's real text would be deleted. Escapes go first, then CRs.
- * - **The markers are concealed text**, not escape sequences, so they are
- *   removed by following the SGR state, not by matching their spelling — a
- *   command that PRINTS a marker-shaped string keeps it in its output.
- *
- * `command`, when given, is the line the agent typed. PSReadLine redraws it as
- * it arrives (predictions, syntax colour, absolute cursor moves), so the echo
- * is several renders run together — but the last always ends with the exact
- * command. It is dropped with whatever precedes it: a prompt may span lines,
- * and a long command may wrap. The wrapper path passes no command: its echo is
- * printed before the frame opens.
+ * `command`, when given, is the line the agent typed. The prompt and its echo
+ * open the frame (PSReadLine draws the echo several times, syntax-coloured, but
+ * the screen holds it once) and are dropped up to the line that ends with it.
+ * The wrapper passes none: its echo comes before the frame opens.
  */
-export function psClean(body: string, command?: string, width?: number): string {
-  let lines = psLines(body, width);
-  const wanted = command?.trim();
-  if (wanted) {
-    for (let i = 0, joined = ''; i < Math.min(lines.length, 8); i++) {
-      joined += lines[i];
-      if (joined.endsWith(wanted)) {
-        lines = lines.slice(i + 1);
-        break;
-      }
-    }
-  }
-  while (lines.length && lines[0] === '') lines.shift();
-  while (lines.length && lines[lines.length - 1] === '') lines.pop();
-  return lines.join('\n');
-}
-
-/**
- * The body as the screen ends up showing it, one entry per LOGICAL line — a
- * line the terminal wrapped is one entry, as it was one line of output.
- *
- * Each line is RENDERED, not stripped: ConPTY re-emits what changed on screen
- * as cursor moves, overwrites and erases, so the text a person sees is the
- * result of applying them. Half-measures failed in turn — stripping cursor-
- * forward deleted runs of spaces, treating a CR as "keep the last segment"
- * deleted text ending `\r\e[m\n`, and honouring backspace while ignoring
- * erase-to-end left the tail of a longer PSReadLine redraw glued to the typed
- * echo, so the echo was no longer recognised. Handled: CR, BS, TAB, cursor
- * right/left (C/D), absolute column (G, H/f), erase in line (K) and erase
- * characters (X). Concealed text is dropped; it only ever sits on a marker line
- * of its own.
- *
- * Positions are COLUMNS: a CJK character takes two, so a move to column 12 of a
- * prompt in a Chinese folder lands where ConPTY means it, not two characters on.
- *
- * ROWS matter too. ConPTY moves within a row with CR or cursor-forward, and to
- * another row with CRLF or an absolute move — so `\e[35;1H` after the echo is a
- * new line with no newline byte, and taking only its column wrote a table's
- * header over the echo, which then went out with it. The row is tracked where
- * it is known (from an absolute move, until a newline might have scrolled), and
- * where it is not, a move to column 1 of a line with text on it is a new row.
- * Rows a move skips over are blank lines.
- *
- * And WRAPPING. With the screen full, ConPTY writes a wrapped row, then CRLF,
- * then moves back onto that row's last cell and writes it again, so the
- * terminal's own wrap carries on from there: a newline that is not one. Read
- * naively, a 164-character path came back as two lines, the second indented by
- * 198 spaces. So a move onto the last cells of the row a newline just ended
- * reopens that line — and says how wide the screen is. Given the width (the
- * pane's, then any resize ConPTY announces), the terminal's wrap is followed
- * too, and the cell a wide character could not fit into is the padding the
- * terminal leaves blank, not a space in the output (ConPTY writes it as one).
- *
- * `ends` gives, for each line, the index in `body` where the next one begins,
- * so a caller can map a line to an offset.
- */
-function psLines(body: string, width?: number): string[] {
-  return psRender(body, width).lines;
-}
-
-/** Columns a character occupies, as ConPTY lays it out. */
-function cellWidth(ch: string): number {
-  const cp = ch.codePointAt(0) ?? 0;
-  if (/^[\p{Mn}\p{Me}\p{Cf}]$/u.test(ch) || (cp >= 0xfe00 && cp <= 0xfe0f)) return 0;
-  return (cp >= 0x1100 && cp <= 0x115f) ||
-    (cp >= 0x2e80 && cp <= 0x303e) ||
-    (cp >= 0x3041 && cp <= 0x33ff) ||
-    (cp >= 0x3400 && cp <= 0x4dbf) ||
-    (cp >= 0x4e00 && cp <= 0x9fff) ||
-    (cp >= 0xa000 && cp <= 0xa4cf) ||
-    (cp >= 0xa960 && cp <= 0xa97f) ||
-    (cp >= 0xac00 && cp <= 0xd7a3) ||
-    (cp >= 0xf900 && cp <= 0xfaff) ||
-    (cp >= 0xfe10 && cp <= 0xfe19) ||
-    (cp >= 0xfe30 && cp <= 0xfe6f) ||
-    (cp >= 0xff00 && cp <= 0xff60) ||
-    (cp >= 0xffe0 && cp <= 0xffe6) ||
-    (cp >= 0x1b000 && cp <= 0x1b2ff) ||
-    (cp >= 0x1f200 && cp <= 0x1f251) ||
-    (cp >= 0x20000 && cp <= 0x3fffd) ||
-    /^\p{Emoji_Presentation}$/u.test(ch)
-    ? 2
-    : 1;
-}
-
-function psRender(body: string, width?: number): { lines: string[]; ends: number[] } {
-  const lines: string[] = [];
-  const ends: number[] = [];
-  // The logical line, one entry per COLUMN: the second column of a wide
-  // character, and a padding cell, hold ''. Wrapped rows follow each other.
-  let cells: string[] = [];
-  let base = 0; // column of `cells` where the cursor's physical row begins
-  let x = 0; // column within that row
-  let w = width && width > 0 ? width : undefined;
-  let concealed = false;
-  let row: number | undefined; // the cursor's screen row, when known
-  let lineRow: number | undefined; // the screen row this line began on, when known
-  let deepest = 0;
-  // The line a newline just ended, kept whole in case ConPTY reopens it.
-  let last: { cells: string[]; base: number; lineRow: number | undefined } | undefined;
-  const rowsInLine = (): number => (w ? Math.max(1, Math.ceil(cells.length / w)) : 1);
-  const blank = (from: number, to: number): void => {
-    // A wide character cut in half by the erase goes entirely.
-    if (cells[from] === '' && from > 0 && cellWidth(cells[from - 1] ?? ' ') === 2) cells[from - 1] = ' ';
-    for (let i = from; i < to && i < cells.length; i++) cells[i] = ' ';
-  };
-  const flush = (end: number, byNewline: boolean): void => {
-    let line = '';
-    for (let i = 0; i < cells.length; i++) line += cells[i] ?? ' ';
-    lines.push(line.trimEnd());
-    ends.push(end);
-    last = byNewline ? { cells, base, lineRow } : undefined;
-    cells = [];
-    base = 0;
-    x = 0;
-  };
-  const put = (ch: string): void => {
-    const cw = cellWidth(ch);
-    if (cw === 0) {
-      // Combining: it belongs to the character before it.
-      let i = base + x - 1;
-      while (i > 0 && cells[i] === '') i--;
-      if (i >= 0 && cells[i] !== undefined) cells[i] += ch;
-      return;
-    }
-    if (w !== undefined && x + cw > w) {
-      // The terminal wraps. A wide character that does not fit in the last
-      // column leaves that cell blank — ConPTY writes the blank as a space.
-      if (cw === 2 && x >= w - 1 && cells[base + w - 1] === ' ') cells[base + w - 1] = '';
-      base += w;
-      x = 0;
-      if (row !== undefined) row = row < deepest ? row + 1 : undefined;
-    }
-    const at = base + x;
-    while (cells.length < at) cells.push(' ');
-    if (cells[at] === '' && at > 0 && cellWidth(cells[at - 1] ?? ' ') === 2) cells[at - 1] = ' ';
-    if (cw === 1 && cellWidth(cells[at] ?? ' ') === 2 && cells[at + 1] === '') cells[at + 1] = ' ';
-    cells[at] = ch;
-    if (cw === 2) cells[at + 1] = '';
-    x += cw;
-    last = undefined;
-  };
-  const re =
-    /\u001b\[([0-9;?]*)[ -/]*([@-~])|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]|([^\u001b]+)/g;
-  for (const m of body.matchAll(re)) {
-    const final = m[2];
-    if (final !== undefined) {
-      const raw = m[1] ?? '';
-      const p = raw.replace(/^\?/, '').split(';');
-      const num = (i: number, fallback: number): number => {
-        const v = Number(p[i]);
-        return p[i] !== undefined && p[i] !== '' && Number.isFinite(v) ? v : fallback;
-      };
-      if (final === 'm' && !raw.startsWith('?')) {
-        const sgr = raw === '' ? ['0'] : raw.split(';');
-        for (let i = 0; i < sgr.length; i++) {
-          // 38/48 carry sub-parameters: a colour index of 8 is not conceal.
-          if (sgr[i] === '38' || sgr[i] === '48') i += sgr[i + 1] === '5' ? 2 : sgr[i + 1] === '2' ? 4 : 0;
-          else if (sgr[i] === '8') concealed = true;
-          else if (sgr[i] === '28' || sgr[i] === '0') concealed = false;
-        }
-      } else if (final === 'C') x += Math.max(1, num(0, 1));
-      else if (final === 'D') x = Math.max(0, x - Math.max(1, num(0, 1)));
-      else if (final === 'G') x = Math.max(0, num(0, 1) - 1);
-      else if (final === 'H' || final === 'f') {
-        const r = num(0, 1);
-        const c = Math.max(0, num(1, 1) - 1);
-        const at = m.index ?? 0;
-        const prev = last;
-        const prevRow = prev ? prev.cells.length - prev.base : 0;
-        if (prev && cells.length === 0 && (row === undefined || r === row - 1) &&
-            c < prevRow && c >= prevRow - 2 && (w === undefined || prevRow === w)) {
-          // ConPTY's wrap: back onto the end of the row just left. That row was
-          // full, which is how wide the screen is.
-          lines.pop();
-          ends.pop();
-          ({ cells, base, lineRow } = prev);
-          w ??= prevRow;
-          last = undefined;
-        } else if (row !== undefined && lineRow !== undefined && w !== undefined &&
-            r >= lineRow && r < lineRow + rowsInLine()) {
-          base = (r - lineRow) * w;
-        } else if (row !== undefined ? r !== row : c === 0 && cells.length > 0) {
-          const lastRow = row !== undefined && lineRow !== undefined ? Math.max(row, lineRow + rowsInLine() - 1) : row;
-          flush(at, false);
-          if (lastRow !== undefined) for (let k = lastRow + 1; k < r; k++) flush(at, false);
-          lineRow = r;
-        } else if (lineRow === undefined) lineRow = r - (w !== undefined ? Math.floor(base / w) : 0);
-        row = r;
-        deepest = Math.max(deepest, r);
-        x = c;
-      } else if (final === 'K') {
-        const mode = num(0, 0);
-        const rowEnd = w !== undefined && cells.length > base + w ? base + w : cells.length;
-        if (mode === 0) {
-          if (rowEnd === cells.length) {
-            blank(base + x, base + x);
-            cells.length = Math.min(cells.length, base + x);
-          } else blank(base + x, rowEnd);
-        } else if (mode === 1) blank(base, base + x + 1);
-        else if (rowEnd === cells.length) cells.length = Math.min(cells.length, base);
-        else blank(base, rowEnd);
-      } else if (final === 'X') {
-        blank(base + x, base + x + Math.max(1, num(0, 1)));
-      } else if (final === 't' && num(0, 0) === 8 && num(2, 0) > 0) {
-        // A resize, announced in-band: the width from here on.
-        w = num(2, 0);
-      }
-      continue;
-    }
-    const text = m[3];
-    if (text === undefined) continue;
-    let at = m.index ?? 0;
-    for (const ch of text) {
-      at += ch.length;
-      if (ch === '\n') {
-        flush(at, true);
-        // Below the deepest row seen, the next row is known; at it, this
-        // newline may have scrolled the screen instead.
-        row = row !== undefined && row < deepest ? row + 1 : undefined;
-        lineRow = row;
-      } else if (ch === '\r') x = 0;
-      else if (ch === '\b') x = Math.max(0, x - 1);
-      else if (ch === '\t') x = (Math.floor(x / 8) + 1) * 8;
-      else if (ch < ' ' || concealed) continue;
-      else put(ch);
-    }
-  }
-  flush(body.length, false);
-  return { lines, ends };
-}
-
-/**
- * How many lines after the start marker the typed echo occupies — once it is
- * COMPLETE, i.e. a newline has closed the line that ends with the command.
- * Undefined while it is still being drawn.
- *
- * PSReadLine draws the echo after the frame opens and re-renders it on Enter,
- * so a poll that starts too early catches a partial echo and the NEXT poll
- * catches the re-render, with nothing left in its slice to say it is echo. A
- * caller that waits for this can start polling past the echo instead.
- */
-export function psEchoLines(raw: string, nonce: string, command: string, width?: number): number | undefined {
-  return echoClose(raw, nonce, command, width)?.lines;
-}
-
-/** Where the closed echo ends in `raw`: the index the output begins at. */
-export function psEchoEnd(raw: string, nonce: string, command: string, width?: number): number | undefined {
-  return echoClose(raw, nonce, command, width)?.end;
-}
-
-function echoClose(
-  raw: string,
-  nonce: string,
-  command: string,
-  width?: number,
-): { lines: number; end: number } | undefined {
+export async function psReadFrame(raw: string, nonce: string, size: ScreenSize, command?: string): Promise<PsFrame> {
   const marker = `<ATHS:${nonce}>`;
   const s = firstConcealed(raw, marker);
-  if (s < 0) return undefined;
+  if (s < 0) return NOT_OPENED;
   const from = s + marker.length;
-  const { lines, ends } = psRender(raw.slice(from), width);
-  const wanted = command.trim();
-  // `lines.length - 1`: the last entry has nothing after it to close it yet.
-  for (let i = 0, joined = ''; i < Math.min(lines.length - 1, 8); i++) {
+  const e = firstConcealed(raw, `<ATHE:${nonce}:`, from);
+  const pos = psFindPos(raw, nonce);
+  const rendered = await renderAfter(raw.slice(from), size, marker, pos, `<ATHE:${nonce}:`);
+  const end = findConcealed(rendered.lines, `<ATHE:${nonce}:`);
+  const cut = end ? rendered.lines.slice(0, end.line + 1) : [...rendered.lines];
+  if (end) cut[end.line] = (cut[end.line] ?? '').slice(0, end.start);
+  const lines = cut.map(visible);
+  const echo = echoLines(lines, command);
+  const out = lines.slice(echo);
+  while (out.length && out[0] === '') out.shift();
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return {
+    opened: true,
+    closed: e >= 0,
+    lines,
+    echo,
+    output: out.join('\n'),
+    repainted: RESIZE_RE.test(raw.slice(from, e < 0 ? raw.length : e)),
+    truncated: rendered.truncated,
+    positioned: !!pos,
+  };
+}
+
+/** How far into a frame its typed echo is looked for. */
+const ECHO_WINDOW = 8;
+
+/** How many leading lines are the prompt and the typed echo of `command`. */
+function echoLines(lines: string[], command?: string): number {
+  const wanted = command?.trim();
+  if (!wanted) return 0;
+  for (let i = 0, joined = ''; i < Math.min(lines.length, ECHO_WINDOW); i++) {
     joined += lines[i];
-    if (joined.endsWith(wanted)) return { lines: i + 1, end: from + (ends[i] ?? 0) };
+    if (joined.endsWith(wanted)) return i + 1;
   }
-  return undefined;
+  return 0;
+}
+
+export interface PsPoll {
+  /** Lines completed since `since`, and the rest once the command has ended. */
+  output: string;
+  /** The command's end marker has been written. */
+  closed: boolean;
+  /** A line returned before has since been redrawn differently, or the screen was resized. */
+  changed: boolean;
+  /** The frame's start was not in `raw`. */
+  opened: boolean;
 }
 
 /**
- * A frame that has not closed: from the first concealed start marker to
- * whatever has arrived. For results that end before the command does — a
- * timeout, a prompt, a shell that exited — where demanding both markers would
- * throw away output sitting in the log.
+ * What a frame printed between two moments, for `poll`.
+ *
+ * The frame is replayed twice from its start — up to `since` and up to now —
+ * and only lines that were not yet complete at `since` are returned. A line
+ * still being drawn is held back until it is finished or the command ends, so
+ * a progress line rewritten in place is never returned twice. If a line that
+ * WAS complete reads differently now, something redrew history (a resize
+ * repaint), and the result says so instead of returning it as new.
  */
-export function psPartial(raw: string, nonce: string): string {
-  const marker = `<ATHS:${nonce}>`;
-  const s = firstConcealed(raw, marker);
-  return s < 0 ? '' : raw.slice(s + marker.length);
+export async function psPollFrame(
+  raw: string,
+  since: number,
+  nonce: string,
+  size: ScreenSize,
+  command?: string,
+): Promise<PsPoll> {
+  const now = await psReadFrame(raw, nonce, size, command);
+  if (!now.opened) return { output: '', closed: false, changed: false, opened: false };
+  const before = since > 0 ? await psReadFrame(raw.slice(0, since), nonce, size, command) : NOT_OPENED;
+  const done = settled(before, command);
+  const from = Math.max(done, now.echo);
+  // Only a resize that arrived since \`since\`; an earlier one was reported then.
+  let changed = now.repainted && !before.repainted;
+  for (let i = now.echo; i < Math.min(done, now.lines.length); i++) {
+    if ((before.lines[i] ?? '') !== (now.lines[i] ?? '')) changed = true;
+  }
+  const fresh = now.lines.slice(from, Math.max(from, settled(now, command)));
+  if (from === now.echo) while (fresh.length && fresh[0] === '') fresh.shift();
+  while (fresh.length && fresh[fresh.length - 1] === '' && now.closed) fresh.pop();
+  return { output: fresh.join('\n'), closed: now.closed, changed, opened: true };
+}
+
+/**
+ * How many of a frame's lines are settled enough to hand out: all of them once
+ * it has ended. Before that, not the last line (it may be half drawn), not
+ * blank lines at the end (a command's output ends with some, which the final
+ * read trims), and nothing while the typed echo is still being drawn and so
+ * cannot yet be told from output — Windows 10 redraws the echo's row in place
+ * with the row below still showing what was there before.
+ */
+function settled(frame: PsFrame, command?: string): number {
+  if (!frame.opened) return 0;
+  if (frame.closed) return frame.lines.length;
+  if (command?.trim() && frame.echo === 0 && frame.lines.length <= ECHO_WINDOW) return 0;
+  let n = Math.max(0, frame.lines.length - 1);
+  while (n > frame.echo && frame.lines[n - 1] === '') n--;
+  return n;
+}
+
+/**
+ * A stretch of a session as its screen shows it, for `read`.
+ *
+ * Replayed from the last frame start before `since` whose position is known,
+ * so the replay is aligned with the real screen; without one, from the top of
+ * `raw`. Returns the lines not yet complete at `since`, as `psPollFrame`
+ * does, so a line that was half drawn is shown whole.
+ */
+export async function psReadSince(raw: string, since: number, size: ScreenSize): Promise<string[]> {
+  let anchor = 0;
+  let marker: string | undefined;
+  let until: string | undefined;
+  let pos: ScreenPos | undefined;
+  for (const m of raw.matchAll(/<ATHS:([0-9a-z]{1,16})>/g)) {
+    const at = m.index ?? 0;
+    if (at >= Math.max(since, 1)) break;
+    if (!concealedAt(raw, at)) continue;
+    const p = psFindPos(raw, m[1] ?? '');
+    if (p) {
+      anchor = at + m[0].length;
+      marker = m[0];
+      until = `<ATHE:${m[1]}:`;
+      pos = p;
+    }
+  }
+  const replay = (text: string): Promise<{ lines: string[] }> =>
+    marker ? renderAfter(text, size, marker, pos, until) : renderFrom(text, size);
+  const now = (await replay(raw.slice(anchor))).lines.map(visible);
+  const before = since > anchor ? (await replay(raw.slice(anchor, since))).lines : [];
+  const done = Math.max(0, before.length - 1);
+  const out = now.slice(Math.min(done, now.length));
+  while (out.length && out[0] === '') out.shift();
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out;
+}
+
+/**
+ * The end of a session as its screen shows it, for `read --tail`: replayed
+ * from the EARLIEST frame start in `raw` whose position is known, so the
+ * replay is aligned for as much of the window as possible.
+ */
+export async function psReadTail(raw: string, size: ScreenSize): Promise<string[]> {
+  let lines: string[] | undefined;
+  for (const m of raw.matchAll(/<ATHS:([0-9a-z]{1,16})>/g)) {
+    const at = m.index ?? 0;
+    const pos = concealedAt(raw, at) ? psFindPos(raw, m[1] ?? '') : undefined;
+    if (!pos) continue;
+    lines = (await renderAfter(raw.slice(at + m[0].length), size, m[0], pos, `<ATHE:${m[1]}:`)).lines;
+    break;
+  }
+  const out = (lines ?? (await renderFrom(raw, size)).lines).map(visible);
+  while (out.length && out[0] === '') out.shift();
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out;
 }
 
 /** Where the command's concealed start marker is, or -1. */
@@ -667,24 +570,6 @@ export function psLatestHandle(raw: string): string | undefined {
     if (concealedAt(raw, m.index ?? 0)) found = m[1];
   }
   return found;
-}
-
-/**
- * One command's part of a slice that may begin or end mid-command — what a
- * poll sees. Cut at its concealed start when the slice holds it, and at its
- * concealed end when that has arrived. `opened` says whether the start was in
- * the slice, i.e. whether the typed echo can be in it too.
- */
-export function psWindow(
-  raw: string,
-  nonce: string,
-): { body: string; opened: boolean; start: number; end: number } {
-  const startMarker = `<ATHS:${nonce}>`;
-  const s = firstConcealed(raw, startMarker);
-  const from = s < 0 ? 0 : s + startMarker.length;
-  const e = firstConcealed(raw, `<ATHE:${nonce}:`, from);
-  const to = e < 0 ? raw.length : e;
-  return { body: raw.slice(from, to), opened: s >= 0, start: from, end: to };
 }
 
 /** The directory a command left the shell in, from its keyed OSC record. */

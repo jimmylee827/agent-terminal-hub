@@ -188,6 +188,26 @@ function splitConcealed(s) {
   return { visible, hidden };
 }
 
+/**
+ * Windows 10's ConPTY (build < 22000) redraws the line it is on from its start
+ * and repaints the screen whenever PSReadLine starts reading, so its byte
+ * stream carries duplicates by design: there the ordering gates judge the
+ * replayed screen, which is what the hub reads. Set from `ver` in main.
+ */
+let legacy = false;
+
+/** The capture replayed on a screen of the probe's size: the reader's view, as one string. */
+async function screenText(raw) {
+  const cs = require(path.join(CORE, 'conscreen.js'));
+  return (await cs.renderFrom(asText(raw), { cols: W, rows: H }, undefined, false, legacy)).lines.join('\n');
+}
+
+/** Concealed and visible text of a replayed screen. */
+function splitScreen(s) {
+  const hidden = (s.match(/\u0001[^\u0002]*/g) || []).map((r) => r.slice(1)).join('');
+  return { visible: s.replace(/\u0001[^\u0002]*\u0002?/g, ''), hidden };
+}
+
 /** How many rounds kept S < output < E, each marker seen once. */
 function framedRounds(text, prefix, count, osc) {
   let good = 0;
@@ -243,7 +263,14 @@ async function probeBaseline(shell) {
   info(`${tag}: erased 300-char marker, longest surviving run`, String(qrun));
   info(`${tag}: window titles arrived (of 3 sent)`, String(['ttl1', 'ttl2', 'ttl3'].filter((t) => text.includes(`]0;${t}`)).length));
   gate(`${tag}: OSC 777 carries a 300-char payload intact`, text.includes(`\x1b]777;ath;long:${'W'.repeat(300)}\x07`));
-  gate(`${tag}: a concealed marker crossing the right edge stays whole`, plain.includes('<ATHE:wrapedge:3>'));
+  // Windows 10 wraps it with a newline of its own, so there it is whole on the
+  // replayed screen, which is what the hub reads.
+  if (!legacy) gate(`${tag}: a concealed marker crossing the right edge stays whole`, plain.includes('<ATHE:wrapedge:3>'));
+  else {
+    info(`${tag}: a marker crossing the right edge, whole in the byte stream`, plain.includes('<ATHE:wrapedge:3>') ? 'yes' : 'no (Windows 10 wraps it)');
+    const ss = splitScreen(await screenText(raw));
+    gate(`${tag}: a concealed marker crossing the right edge is whole on the replayed screen`, ss.hidden.includes('<ATHE:wrapedge:3>') && !ss.visible.includes('wrapedge'));
+  }
   const at = raw.indexOf(Buffer.from('UTF='));
   const got = at >= 0 ? hex(raw.subarray(at + 4, at + 4 + 9)) : '';
   gate(`${tag}: UTF-8 output survives once the encoding is forced`, got === UTF8_HEX, `got ${got || 'nothing'}`);
@@ -257,13 +284,28 @@ async function probeOrdering() {
   const text = stripCsi(asText(raw));
   const c = framedRounds(text, 'ci', 20, false);
   const o = framedRounds(text, 'oi', 10, true);
-  gate('idle: concealed markers frame their output, no sleep (20/20)', c.good === 20, `${c.good}/20${c.bad.length ? `, e.g. ${c.bad}` : ''}`);
+  const framedDetail = `${c.good}/20${c.bad.length ? `, e.g. ${c.bad}` : ''}`;
   info('idle: OSC-only markers that framed their output', `${o.good}/10`);
   const { visible, hidden } = splitConcealed(asText(raw));
   const inHidden = (hidden.match(/<ATH[SE]:ci\d+>/g) || []).length;
   const inVisible = (visible.match(/<ATH[SE]:ci\d+>/g) || []).length;
-  gate('idle: every marker arrives inside a concealed span (SGR-8 sentinel)', inHidden === 40 && inVisible === 0, `${inHidden} concealed, ${inVisible} visible`);
+  const spanDetail = `${inHidden} concealed, ${inVisible} visible`;
+  if (legacy) {
+    info('idle: rounds framed in the byte stream (redraws repeat markers)', framedDetail);
+    info('idle: marker copies in the byte stream', spanDetail);
+  } else {
+    gate('idle: concealed markers frame their output, no sleep (20/20)', c.good === 20, framedDetail);
+    gate('idle: every marker arrives inside a concealed span (SGR-8 sentinel)', inHidden === 40 && inVisible === 0, spanDetail);
+  }
   gate('idle: no output leaks into the concealed spans', !/o-ci\d+-/.test(hidden));
+  // On the replayed screen, on every host: each marker once, concealed, in order.
+  const screen = await screenText(raw);
+  const sc = framedRounds(screen, 'ci', 20, false);
+  gate('idle: on the replayed screen, concealed markers frame their output (20/20)', sc.good === 20, `${sc.good}/20${sc.bad.length ? `, e.g. ${sc.bad}` : ''}`);
+  const ss = splitScreen(screen);
+  const sHidden = (ss.hidden.match(/<ATH[SE]:ci\d+>/g) || []).length;
+  const sVisible = (ss.visible.match(/<ATH[SE]:ci\d+>/g) || []).length;
+  gate('idle: on the replayed screen, every marker is concealed cells, once', sHidden === 40 && sVisible === 0, `${sHidden} concealed, ${sVisible} visible`);
 }
 
 /**
@@ -302,7 +344,14 @@ async function probeBurst() {
     missing.length === 0,
     `${have.size}/5000 present${missing.length ? `, first missing ${missing.slice(0, 5)}` : ''}`,
   );
-  gate('burst: and none is duplicated or reordered', ordered && seen.length === have.size, `${seen.length} seen, ${have.size} distinct`);
+  if (!legacy) gate('burst: and none is duplicated or reordered', ordered && seen.length === have.size, `${seen.length} seen, ${have.size} distinct`);
+  else {
+    info('burst: lines in the byte stream (redraws repeat some)', `${seen.length} seen, ${have.size} distinct`);
+    const screen = await screenText(raw);
+    const ss = screen.slice(screen.indexOf('<ATHS:bf>'), screen.indexOf('<ATHE:bf>'));
+    const onScreen = [...ss.matchAll(/bl-(\d+)\b/g)].map((m) => Number(m[1]));
+    gate('burst: on the replayed screen, every line once and in order', onScreen.length === 5000 && onScreen.every((v, i) => v === i + 1), `${onScreen.length} lines`);
+  }
 }
 
 /**
@@ -526,7 +575,10 @@ async function probeHub(hasPwsh) {
       const full = buf.subarray(fillerAt).toString('utf8');
       const width = (await a.get('e2e-probe')).paneWidth;
       const reemit = new RegExp(`\\r\\n(?:\\x1b\\[[0-9;?]*[a-zA-Z])*\\x1b\\[\\d+;(?:${width - 1}|${width})H`);
-      gate("hub: and both of ConPTY's wraps really occurred (padding, re-emit)", /[\u4e00-\u9fff] [\u4e00-\u9fff]/.test(roomy) && reemit.test(full), `width ${width}`);
+      if (!legacy) gate("hub: and both of ConPTY's wraps really occurred (padding, re-emit)", /[\u4e00-\u9fff] [\u4e00-\u9fff]/.test(roomy) && reemit.test(full), `width ${width}`);
+      // Windows 10 wraps its own way: a full row then \b\r\n on the bottom row,
+      // and a wide character that misses the last column starts the next row.
+      else gate("hub: and both of Windows 10's wraps really occurred (\\b-wrap, wide straddle)", /\x08(?:\x1b\[[0-9;?]*[hlm])*\r\n/.test(full) && /[\u4e00-\u9fff] ?\x08?(?:\x1b\[[0-9;?]*[hlm])*\r\n[\u4e00-\u9fff]/.test(roomy + full), `width ${width}`);
     }
     const native = await run('e2e-probe', 'Write-Output hub-ok; cmd /c exit 3');
     gate('hub: run returns a native exit code and exactly what was printed', native.exitCode === 3 && native.output === 'hub-ok' && !native.captureIncomplete, said(native));
@@ -560,8 +612,9 @@ async function probeHub(hasPwsh) {
       const drawn = fs.readFileSync(a.logPath('e2e-probe')).subarray(before).toString('utf8');
       await a.sendKeys('e2e-probe', ['M-F12']);
       await sleep(500);
-      const src = await run('e2e-probe', '"$((Get-PSReadLineOption).PredictionSource)"');
-      gate('hub: typing draws no history: predictions are off in a hub session', src.output === 'None' && /\$zq/.test(drawn) && !/predicted-7f3/.test(drawn), `PredictionSource=${src.output} drew-history=${/predicted-7f3/.test(drawn)}`);
+      // PSReadLine 2.0.0 (Windows PowerShell 5.1's) has no predictions to turn off.
+      const src = await run('e2e-probe', "$o = Get-PSReadLineOption; if ($o.PSObject.Properties['PredictionSource']) { \"$($o.PredictionSource)\" } else { 'absent' }");
+      gate('hub: typing draws no history: predictions are off in a hub session', (src.output === 'None' || src.output === 'absent') && /\$zq/.test(drawn) && !/predicted-7f3/.test(drawn), `PredictionSource=${src.output} drew-history=${/predicted-7f3/.test(drawn)}`);
     }
     await run('e2e-probe', 'Set-Location C:\\Windows');
     const cwd = await run('e2e-probe', '(Get-Location).Path');
@@ -594,7 +647,9 @@ async function probeHub(hasPwsh) {
     {
       const psm = require(path.join(CORE, 'powershell.js'));
       const log = () => fs.readFileSync(a.logPath('e2e-probe'));
-      const repaintedSince = (at) => psm.psRepainted(log().subarray(at).toString('utf8'));
+      // ConPTY's repaint: the cursor hidden, then home (a resize first, when
+      // announced). Windows 10 sometimes hides it as \e[25l, without the ?.
+      const repaintedSince = (at) => /\u001b\[\??25l(?:\u001b\[[0-9;]*[mt])*\u001b\[H/.test(log().subarray(at).toString('utf8'));
       const jiggle = async (after) => {
         await sleep(after);
         await a.setWidth('e2e-probe', 150);
@@ -659,7 +714,11 @@ async function probeHub(hasPwsh) {
         ['one with a help message', 'Deploy-AthProbe'],
         ['-Confirm', 'New-Item -ItemType Directory -Path $env:TEMP\\ath-probe-confirm -Confirm'],
         ['PromptForChoice', "$Host.UI.PromptForChoice('Deploy', 'Proceed?', @('&Yes','&No'), 1)"],
-        ['Get-Credential', 'Get-Credential'],
+        // Windows PowerShell 5.1 opens the GUI credential dialog instead, on a
+        // desktop an ssh session does not have (measured on build 19045: it
+        // ignores typing, Ctrl-C and Escape, and never returns), so it would
+        // wedge the session for every gate after it. Recorded below, not run.
+        ...(hasPwsh ? [['Get-Credential', 'Get-Credential']] : []),
         ['choice.exe', 'choice /C YN /M "Continue"'],
       ]) {
         const t0 = Date.now();
@@ -669,7 +728,8 @@ async function probeHub(hasPwsh) {
         for (let i = 0; i < 20 && (await a.get('e2e-probe')).state !== 'idle'; i++) await sleep(300);
       }
       const left = await run('e2e-probe', 'Test-Path $env:TEMP\\ath-probe-confirm');
-      gate('hub: PowerShell prompts park as needs_input (6 kinds), and Ctrl-C leaves nothing', parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
+      gate(`hub: PowerShell prompts park as needs_input (${hasPwsh ? 6 : 5} kinds), and Ctrl-C leaves nothing`, parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
+      if (!hasPwsh) info('hub: Get-Credential on Windows PowerShell 5.1', 'not run: it opens a GUI dialog an ssh session cannot show, and cannot be interrupted (platform limit, DESIGN.md)');
     }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
@@ -718,7 +778,7 @@ async function probeHub(hasPwsh) {
   } finally {
     // The deep directory, if a failure left it behind.
     spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
-      `pwsh -NoLogo -NonInteractive -EncodedCommand ${Buffer.from("Get-ChildItem -LiteralPath $env:TEMP -Filter 'ath-probe-*' -Directory | Remove-Item -Recurse -Force", 'utf16le').toString('base64')}`]);
+      `powershell -NoLogo -NonInteractive -EncodedCommand ${Buffer.from("Get-ChildItem -LiteralPath $env:TEMP -Filter 'ath-probe-*' -Directory | Remove-Item -Recurse -Force", 'utf16le').toString('base64')}`]);
     for (const n of ['e2e-probe', 'e2e-detect']) await a.kill(n).catch(() => undefined);
     await ssh.closeSharedConnection(host).catch(() => undefined);
   }
@@ -781,7 +841,7 @@ async function probeMatrix(shell, strict = false) {
           const n = nonce();
           const text = command.split('NONCE').join(n);
           if (via === 'framed') {
-            ctx.keys(`\u2193\u2193\u2193 AGENT INPUT ID: ${n} \u2193\u2193\u2193`);
+            ctx.keys(ps.psTagLine(n));
             ctx.enter();
             if (!(await ctx.waitFor(new RegExp(`<ATHT:${n}>`), 10_000))) return { err: 'no tag ack' };
             ctx.keys(text);
@@ -802,7 +862,9 @@ async function probeMatrix(shell, strict = false) {
                 while (at >= 0 && !ps.concealedAt(raw, at)) at = raw.indexOf(`<ATHE:${n}:`, at + 1);
                 saw = at < 0 ? undefined : (/PSQ\[(True|False)\]>/.exec(raw.slice(at)) || [])[1];
               }
-              return { rc, saw, frame: ps.psFrame(ctx.read(), n) };
+              // The capture is read one byte per character; the reader needs the text.
+              const text8 = Buffer.from(ctx.read(), 'latin1').toString('utf8');
+              return { rc, saw, frame: await ps.psReadFrame(text8, n, { cols: W, rows: H }, via === 'framed' ? text : undefined) };
             }
           }
           return { err: 'no end marker' };
@@ -822,9 +884,15 @@ async function probeMatrix(shell, strict = false) {
         }
         // A syntax error through the wrapper, which parses the whole command first.
         results.syntax = await drive('wrapper', "Write-Output ran-anyway\nif (");
-        // Text outside ASCII and outside the BMP, typed key by key and carried as
-        // base64: the console defaults to GB2312 here, which turns ✓ into `?`.
-        results.utf8 = [await drive('framed', `Write-Output '${UTF8_TEXT}'`), await drive('wrapper', `Write-Output '${UTF8_TEXT}'`)];
+        // Text outside ASCII and outside the BMP, PRINTED on both paths: the console
+        // defaults to GB2312 here, which turns ✓ into `?`. The typed command is
+        // ASCII that prints it, as the hub only ever types ASCII; the wrapper
+        // carries the text itself as base64.
+        const u8b64 = Buffer.from(UTF8_TEXT, 'utf8').toString('base64');
+        results.utf8 = [
+          await drive('framed', `Write-Output ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${u8b64}')))`),
+          await drive('wrapper', `Write-Output '${UTF8_TEXT}'`),
+        ];
         // The history handler, asked directly rather than by typing into the real
         // file: a person's line goes where it always did, a hub line stays in memory.
         results.history = await drive('wrapper', "$f=(Get-PSReadLineOption).AddToHistoryHandler; [string]$f.Invoke('Get-Date') + '|' + [string]$f.Invoke('. __ath x y')");
@@ -841,35 +909,35 @@ async function probeMatrix(shell, strict = false) {
     gate(`${tag}: strict mode set first trips nothing in the hooks`, !!results.raw && results.raw.includes('<ATHS:') && !tripped, tripped ? tripped[0] : '');
   }
   const h = results.history;
-  const said = h && h.frame ? require(path.join(CORE, 'powershell.js')).psClean(h.frame.body) : (h && h.err) || '';
-  gate(`${tag}: the history handler keeps a person's line and drops a hub line`, /MemoryAndFile\|MemoryOnly/.test(said), said.slice(0, 80));
+  const said = h && h.frame ? h.frame.output : (h && h.err) || '';
+  gate(`${tag}: the history handler keeps a person's line and drops a hub line`, /MemoryAndFile\|MemoryOnly|True\|False/.test(said), said.slice(0, 80));
   for (const via of ['framed', 'wrapper']) {
     const rows = results[via];
     const wrong = rows.filter((r) => r.rc !== r.want).map((r) => `${r.name}: ${r.err ?? `got ${r.rc}`}, want ${r.want}`);
     gate(`${tag} ${via}: every exit code exact (${rows.length} cases)`, rows.length > 0 && wrong.length === 0, wrong.length ? wrong.slice(0, 3).join('; ') : `${rows.length}/${rows.length}`);
     const t = results[via].table;
-    gate(`${tag} ${via}: a table is fully rendered before the end marker`, !!t && !!t.frame && t.frame.body.includes('tbl-y'), t && t.err ? t.err : '');
+    gate(`${tag} ${via}: a table is fully rendered before the end marker`, !!t && !!t.frame && t.frame.closed && /^tbl-y$/m.test(t.frame.output), t && t.err ? t.err : '');
     const blind = rows.filter((r) => !r.err && r.saw !== (r.rc === 0 ? 'True' : 'False')).map((r) => `${r.name}: exit ${r.rc}, prompt saw ${r.saw}`);
     gate(`${tag} ${via}: the user's prompt sees the status the hub reports`, rows.some((r) => r.saw) && blind.length === 0, blind.length ? blind.slice(0, 3).join('; ') : '');
   }
   const [u8typed, u8wrapped] = results.utf8 || [];
-  // The capture is read one byte per character; this check needs the text.
-  const u8 = (r, cmd) =>
-    r && r.frame
-      ? require(path.join(CORE, 'powershell.js')).psClean(Buffer.from(r.frame.body, 'latin1').toString('utf8'), cmd)
-      : (r && r.err) || '';
-  const u8got = [u8(u8typed, `Write-Output '${UTF8_TEXT}'`), u8(u8wrapped)];
+  const u8 = (r) => (r && r.frame ? r.frame.output : (r && r.err) || '');
+  const u8got = [u8(u8typed), u8(u8wrapped)];
   gate(`${tag}: 中文✓, emoji and accents arrive intact, typed and wrapped`, u8got.every((o) => o === UTF8_TEXT), JSON.stringify(u8got).slice(0, 100));
   const sx = results.syntax;
-  const sxOut = sx && sx.frame ? require(path.join(CORE, 'powershell.js')).psClean(sx.frame.body) : (sx && sx.err) || '';
+  const sxOut = sx && sx.frame ? sx.frame.output : (sx && sx.err) || '';
   gate(`${tag}: a wrapped syntax error names the agent's line, and nothing ran`, !!sx && sx.rc === 1 && /\bif \(/.test(sxOut) && /Missing/.test(sxOut) && !/__ath|Create|MethodInvocation|ran-anyway/.test(sxOut), JSON.stringify(sxOut).slice(0, 100));
 }
 
-/** Lines in the user's PSReadLine history file, read without typing anything. */
+/**
+ * Lines in the user's PSReadLine history file, read without typing anything.
+ * Through `powershell`, which every Windows host has: a host without pwsh read
+ * as -1 here, and the gate could not tell untouched from unknown.
+ */
 function historyLines() {
   const script = '(Get-Content (Get-PSReadLineOption).HistorySavePath).Count';
   const out = spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
-    `pwsh -NoLogo -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`], { encoding: 'utf8' });
+    `powershell -NoLogo -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`], { encoding: 'utf8' });
   return Number(((out.stdout || '').match(/^(\d+)\s*$/m) || [])[1] ?? -1);
 }
 
@@ -878,16 +946,24 @@ function historyLines() {
 (async () => {
   const pre = spawnSync(
     'ssh',
-    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'echo %COMSPEC%'],
+    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'echo %OS% $env:OS'],
     { encoding: 'utf8' },
   );
-  if (!/cmd\.exe/i.test(pre.stdout || '')) {
+  // Read by cmd or by PowerShell, whichever the host's sshd runs: one of the two
+  // halves expands to Windows_NT either way.
+  if (!/Windows_NT/.test(pre.stdout || '')) {
     console.error(`conpty-probe: ${host} is not reachable as a Windows host with key auth:\n${(pre.stderr || pre.stdout || '').trim()}`);
     cleanup();
     process.exit(1);
   }
+  // `cmd /c ver` (PowerShell has no `ver`): "Microsoft Windows [Version 10.0.<build>.<rev>]"; Windows 11 is 22000 and up.
+  const build = Number((/\[Version \d+\.\d+\.(\d+)/.exec(
+    spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'cmd /c ver'], { encoding: 'utf8' }).stdout || '',
+  ) || [])[1] ?? 0);
+  legacy = build > 0 && build < 22000;
+  info('Windows build', build ? `${build}${legacy ? ' (Windows 10: ordering judged on the replayed screen)' : ''}` : 'unknown');
   const hasPwsh = /pwsh/i.test(
-    spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'where pwsh'], { encoding: 'utf8' }).stdout || '',
+    spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'where.exe pwsh'], { encoding: 'utf8' }).stdout || '',
   );
 
   // The whole run, not one probe: a leak once came from a probe that no
@@ -905,8 +981,10 @@ function historyLines() {
     for (const utf8In of [false, true]) {
       const r = await probeInput(shell, utf8In);
       const line = `${r.got || 'no answer'} (PSReadLine loaded: ${r.psrl})`;
-      if (utf8In) gate(`${r.tag}: typed 中文✓ arrives as UTF-8`, r.got === UTF8_HEX, line);
-      else info(`${r.tag}: typed 中文✓ arrives as`, r.got === UTF8_HEX ? `UTF-8 ${line}` : line);
+      // Recorded, not gated: the hub never TYPES non-ASCII into PowerShell (the
+      // wrapper carries it as base64), because Windows 10's ConPTY lost the ✓
+      // here either way. What arrives is a fact about the host.
+      info(`${r.tag}${utf8In ? '' : ' (default input)'}: typed 中文✓ arrives as`, r.got === UTF8_HEX ? `UTF-8 ${line}` : line);
     }
   }
   if (want('matrix')) {

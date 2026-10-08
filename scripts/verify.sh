@@ -775,6 +775,10 @@ const ps=require("'"$RP"'/packages/core/dist/powershell.js");
 const d=require("'"$RP"'/packages/core/dist/dialect.js");
 const fs=require("fs"), out=[];
 const say=(ok,yes,no)=>out.push(ok?yes:no);
+// The PowerShell reader replays output on an emulated screen, which is async:
+// those checks are collected here and awaited before the block reports.
+const pend=[];
+const sayA=(p,yes,no)=>pend.push(Promise.resolve(p).then(ok=>out.push(ok?yes:no),e=>out.push(no+":"+String(e).replace(/\s/g,"_").slice(0,60))));
 say(ssh.parseOsProbe("Windows_NT $env:OS\n")==="windows","probeCmd","PROBECMD");
 say(ssh.parseOsProbe("%OS%\nWindows_NT\n")==="windows","probePwsh","PROBEPWSH");
 say(ssh.parseOsProbe("%OS% :OS\n")==="posix","probePosix","PROBEPOSIX");
@@ -796,7 +800,7 @@ say(/& pwsh .*-EncodedCommand/.test(script),"upgradesToPwsh","NOUPGRADE");
 const gz=/FromBase64String\(\x27([A-Za-z0-9+\/=]+)\x27\)/.exec(script);
 const hooks=gz ? require("zlib").gunzipSync(Buffer.from(gz[1],"base64")).toString("utf8") : "";
 const iUp=script.indexOf("& pwsh"), iHooks=gz ? gz.index : -1, iReady=script.indexOf("<ATHR:");
-say(iUp>=0 && iHooks>iUp && iReady>iHooks && hooks===ps.psHooksScript() && hooks.includes("$global:__ath_prompt0 = $function:prompt") && hooks.includes("function global:\u2193\u2193\u2193"),"hooksRideLaunch","HOOKSMISSING");
+say(iUp>=0 && iHooks>iUp && iReady>iHooks && hooks===ps.psHooksScript() && hooks.includes("$global:__ath_prompt0 = $function:prompt") && hooks.includes("function global:vvv"),"hooksRideLaunch","HOOKSMISSING");
 // The history handler and the clear chord, both inside the hooks.
 say(/AddToHistoryHandler/.test(hooks) && /Alt\+F12.*RevertLine/.test(hooks),"historyAndClearKey","NOHISTORYGUARD");
 // The previous handler is a .NET delegate: invoked with `&` it throws, which hung
@@ -826,21 +830,22 @@ say(d.dialectFor(undefined).id==="posix" && d.dialectFor("windows").id==="powers
 // and end win, because a ConPTY repaint replays whatever is still on screen.
 const E="\x1b", N="0123456789ab", hid=(t)=>E+"[8m"+t+E+"[28m";
 const merged=E+"[8m<ATHE:h1:0><ATHS:"+N+">"+E+"[28m\r\nPS C:\\> x\r\nout\r\n"+hid("<ATHE:"+N+":3><ATHS:h2>");
-say(ps.psFindEnd(merged,N)===3 && ps.psFrame(merged,N).body.includes("out"),"readsMergedRun","MERGEDRUN");
+const SZ={cols:200,rows:50};
+sayA(ps.psReadFrame(merged,N,SZ).then(f=>ps.psFindEnd(merged,N)===3 && f.output==="PS C:\\> x\nout"),"readsMergedRun","MERGEDRUN");
 const forged=hid("<ATHS:"+N+">")+"\r\n<ATHE:"+N+":0>\r\n"+hid("<ATHE:"+N+":9>");
 say(ps.psFindEnd(forged,N)===9,"forgedEndIgnored","FORGEDBELIEVED");
 say(ps.psFindEnd(E+"[38;5;8m<ATHE:"+N+":0>",N)===undefined && ps.psFindEnd(E+"[8;1m<ATHE:"+N+":4>",N)===4,"sgrParsedRight","SGRMISREAD");
 const replay=hid("<ATHS:"+N+">")+"before\r\n"+E+"[?25l"+E+"[8;50;140t"+E+"[8m"+E+"[H<ATHS:"+N+">"+E+"[28mbefore\r\n"+hid("<ATHE:"+N+":0>");
-const rf=ps.psFrame(replay,N);
-say(rf.repainted && rf.body.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,"").startsWith("before") && !ps.psFrame(merged,N).repainted,"repaintFlaggedFirstWins","REPAINT");
+// A resize inside a frame flags it: the replay follows it, but a re-laid screen
+// is where a replay is most likely to differ from the real one.
+sayA(Promise.all([ps.psReadFrame(replay,N,SZ),ps.psReadFrame(merged,N,SZ)]).then(([r,m])=>r.repainted && r.output==="before" && !m.repainted),"repaintFlaggedFirstWins","REPAINT");
 say(ps.psFindEnd(hid("<ATHS:"+N+">")+"running",N)===undefined,"noEndNoGuess","GUESSEDEND");
-// Backspaces resolve as a terminal shows them: PSReadLine redraws a character
-// over itself, and a counter can back over its digits.
-say(ps.psClean("PS C:\\> [\b[x]\r\nstep 1\b2\b3\r\n")==="PS C:\\> [x]\nstep 3","backspacesResolved","RAWBACKSPACE");
-// Each line is RENDERED: a PSReadLine redraw moves back and erases, and only
-// honouring both leaves what the screen shows. Ignoring erase left the tail of a
-// longer redraw glued to the echo, so the echo stopped being recognised.
-say(ps.psClean("PS C:\\> Get-Da\x1b[2;9HGet-Date | Out-Null\x1b[K\r\n")==="PS C:\\> Get-Date | Out-Null" && ps.psClean("long render text here\r\x1b[Kshort\r\n")==="short" && ps.psClean("abcdef\x1b[4D\x1b[2Xz\r\n")==="abz ef","linesAreRendered","NOTRENDERED");
+// Output is read off a replayed screen, so it is what the screen showed: a
+// backspace redraws, an erase erases, a move lands where ConPTY meant it. Each
+// body opens a fresh line, below the frame start marker.
+const scr=(body,size)=>ps.psReadFrame(hid("<ATHS:"+N+">")+body+hid("<ATHE:"+N+":0>"),N,size||{cols:80,rows:24}).then(f=>f.output);
+sayA(scr("\r\nPS C:\\> [\b[x]\r\nstep 1\b2\b3\r\n").then(o=>o==="PS C:\\> [x]\nstep 3"),"backspacesResolved","RAWBACKSPACE");
+sayA(Promise.all([scr("\r\nPS C:\\> Get-Da\x1b[2;9HGet-Date | Out-Null\x1b[K\r\n"),scr("\r\nlong render text here\r\x1b[Kshort\r\n"),scr("\r\nabcdef\x1b[4D\x1b[2Xz\r\n")]).then(([a1,a2,a3])=>a1==="PS C:\\> Get-Date | Out-Null" && a2==="short" && a3==="abz ef"),"linesAreRendered","NOTRENDERED");
 // What an exit code covers depends on the shell. PowerShell fails a pipeline
 // when ANY stage fails, so there only a block run as a command hides a failure;
 // and the POSIX answers must not move.
@@ -849,16 +854,43 @@ say(cv("a | b")==="last-pipeline-stage-only" && cv("a; b")==="last-command-only"
 say(cv("cmd /c exit 3 | Out-Null","windows")===undefined && cv("a; b","windows")==="last-command-only" && cv("1 | ForEach-Object { x }","windows")==="outside-script-blocks-only" && cv("ls | %{ x }","windows")==="outside-script-blocks-only" && cv("& { x }","windows")==="outside-script-blocks-only" && cv("foreach ($i in 1) { x }","windows")===undefined && cv("if ($t) { x }","windows")===undefined && cv("where git","windows")===undefined && cv("[pscustomobject]@{A=1;B=2}","windows")===undefined && cv("@{a=@{b=1;c=2};d=3}","windows")===undefined && cv("$h=@{a=1}; b","windows")==="last-command-only","caveatIsPowerShells","PSCAVEAT");
 // ConPTY moves to another row with an absolute move and no newline; that is a
 // new line. A move within a known row is not, and rows it skips are blank.
-say(ps.psClean("one\x1b[7;1Htwo\r\n")==="one\ntwo" && ps.psClean("\x1b[7;1Hone\x1b[7;1Htwo\r\n")==="two" && ps.psClean("\x1b[3;1Ha\x1b[4;1Hb\x1b[7;1Hc\r\n")==="a\nb\n\n\nc" && ps.psClean("PS C:\\> Get-Da\x1b[2;9HGet-Date\r\n")==="PS C:\\> Get-Date","rowJumpIsANewLine","ROWJUMPOVERWRITES");
+sayA(Promise.all([scr("\r\none\x1b[3;1Htwo\r\n"),scr("\r\n\x1b[2;1Hone\x1b[2;1Htwo\r\n"),scr("\r\n\x1b[3;1Ha\x1b[4;1Hb\x1b[7;1Hc\r\n")]).then(([r1,r2,r3])=>r1==="one\ntwo" && r2==="two" && r3==="a\nb\n\n\nc"),"rowJumpIsANewLine","ROWJUMPOVERWRITES");
 // Positions are columns: a CJK character is two, so a redraw at column 13 of a
 // prompt in a Chinese folder lands on the a, not two characters further on.
 // And a resize ConPTY announces in-band sets the width wrapping follows.
-say(ps.psClean("PS C:\\\u7528\u6237> abc\x1b[1;13Hx\r\n")==="PS C:\\\u7528\u6237> xbc" && ps.psClean("ab\u4e2dcd\x1b[4D\x1b[Kz\r\n")==="abz" && ps.psClean("ab\u4e2dcd\x1b[3D\x1b[Kz\r\n")==="ab z","columnsNotCharacters","CHARINDEXED");
-say(ps.psClean("\x1b[8;24;6tabcde \u4e2d\r\n",undefined,80)==="abcde\u4e2d" && ps.psClean("abcde \u4e2d\r\n",undefined,80)==="abcde \u4e2d","resizeSetsWidth","RESIZEIGNORED");
-// A repaint reaches from its signature to the cursor being shown again: a slice
-// that starts inside it is touched by it, one that starts after it is not.
-const RPT=E+"[?25l"+E+"[H", rpRaw="a\r\n"+RPT+"screen 1\r\nscreen 2\r\n"+E+"[5;1H"+E+"[?25hnew\r\n";
-say(ps.psRepaintTouches(rpRaw,0) && ps.psRepaintTouches(rpRaw,rpRaw.indexOf("screen 2")) && !ps.psRepaintTouches(rpRaw,rpRaw.indexOf("new")) && ps.psRepainted(rpRaw) && !ps.psRepainted("a\r\nb\r\n"),"repaintExtent","REPAINTEXTENT");
+sayA(Promise.all([scr("\r\nPS C:\\\u7528\u6237> abc\x1b[2;13Hx\r\n"),scr("\r\nab\u4e2dcd\x1b[4D\x1b[Kz\r\n"),scr("\r\nab\u4e2dcd\x1b[3D\x1b[Kz\r\n")]).then(([c1,c2,c3])=>c1==="PS C:\\\u7528\u6237> xbc" && c2==="abz" && c3==="ab z"),"columnsNotCharacters","CHARINDEXED");
+sayA(Promise.all([scr("\r\n\x1b[8;24;21t"+"a".repeat(20)+" \u4e2d\r\n"),scr("\r\n"+"a".repeat(20)+" \u4e2d\r\n")]).then(([w1,w2])=>w1==="a".repeat(20)+"\u4e2d" && w2==="a".repeat(20)+" \u4e2d"),"resizeSetsWidth","RESIZEIGNORED");
+// Windows 10 marks no wrapped row (measured on build 19045): a full row then
+// \b\r\n continues the line anywhere, and above the bottom row so does a full
+// row then a bare \r\n; on the bottom row a bare \r\n ends it. Windows 11 marks
+// its wraps itself, so there a bare \r\n always ends the line. A line one cell
+// short is sent WITHOUT a padding space above the bottom row, so a full row
+// ending in a space there is a wrap at a space (measured: y*199, space, z*10).
+const w10=(row,body,build)=>ps.psReadFrame(hid("<ATHS:"+N+">")+"\x1b]777;ath;pos;"+N+";"+row+";19"+(build?";"+build:"")+"\x07"+body+hid("<ATHE:"+N+":0>"),N,{cols:30,rows:6}).then(f=>f.output);
+const X30="x".repeat(30);
+sayA(Promise.all([w10(1,"\r\n"+X30+"\r\nyy\r\n",19045),w10(1,"\r\n"+X30+"\r\nyy\r\n",26200),w10(4,"\r\n"+X30+"\r\nyy\r\n",19045),w10(4,"\r\n"+X30+"\b\x1b[?25h\r\nyy\r\n",19045),w10(1,"\r\n"+X30.slice(1)+" \r\nyy\r\n",19045)]).then(([l1,l2,l3,l4,l5])=>l1===X30+"yy" && l2===X30+"\nyy" && l3===X30+"\nyy" && l4===X30+"yy" && l5===X30.slice(1)+" yy"),"windows10WrapRules","W10WRAP");
+// A wide character that misses the last column: Windows 10 leaves that cell
+// untouched and starts a new row; one cell short with nothing drawn there and
+// a wide character next is one line. (So is a line truly one cell short followed
+// by one starting with a wide character: the bytes are identical, measured.)
+// One cell shorter still, or a narrow character next, is two lines.
+const Y29="y".repeat(29);
+sayA(Promise.all([w10(1,"\r\n"+Y29+"\r\n\u4e2d\u6587\r\n",19045),w10(1,"\r\n"+Y29+"\r\nab\r\n",19045),w10(1,"\r\n"+Y29.slice(1)+"\r\n\u4e2d\u6587\r\n",19045)]).then(([s1,s2,s3])=>s1===Y29+"\u4e2d\u6587" && s2===Y29+"\nab" && s3===Y29.slice(1)+"\n\u4e2d\u6587"),"wideWrapJoined","WIDEWRAPSPLIT");
+// Read from wherever the start marker FINALLY is: a repaint that redraws it
+// higher (scrolls the stream never carried) moves the frame with it.
+sayA(w10(5,"\r\nPS> cmd\x1b[?25l\x1b[H"+hid("<ATHE:h1:0><ATHS:"+N+">")+"\x1b[K\r\nPS> cmd\x1b[K\r\nresult\x1b[K\r\n",19045).then(o=>o==="PS> cmd\nresult"),"frameFollowsItsMarker","MARKERLEFTBEHIND");
+// poll returns only what was completed since the last look: a half-drawn line
+// waits, a line already returned that now reads differently is reported.
+const SN=hid("<ATHS:"+N+">");
+sayA((async()=>{
+  const half=SN+"\r\nalpha\r\nhal";
+  const p1=await ps.psPollFrame(half,0,N,SZ);
+  const full=half+"f done\r\n"+hid("<ATHE:"+N+":0>");
+  const p2=await ps.psPollFrame(full,half.length,N,SZ);
+  const redraw=SN+"\r\nalpha\r\nbeta\r\n";
+  const p3=await ps.psPollFrame(redraw+"\x1b[2;1Hgamma\x1b[K\x1b[4;1Hdelta\r\n",redraw.length,N,SZ);
+  return p1.output==="alpha" && !p1.closed && p2.output==="half done" && p2.closed && !p2.changed && p3.changed;
+})(),"pollWaitsAndReportsRedraws","POLLLINES");
 // The user prompt is called with the status of the line that ran: the statement
 // that sets it must come right before the call, and the wrapper must leave its
 // result for it. The wrapper parses the command alone before running it.
@@ -874,29 +906,32 @@ const deep="C:\\\u7528\u6237\\"+"\u6587\u6863\\".repeat(60), T12="0123456789ab";
 let deepOk=false; try { deepOk=ps.psRemoteCommand(ps.psLaunchScript(T12,{cwd:deep})).length<=ps.CMD_LINE_MAX && !ps.psLaunchCarries(T12,deep) && ps.psLaunchCarries(T12,"C:\\Windows"); } catch {}
 const cwdB64=(/FromBase64String\(.([A-Za-z0-9+\/=]+).\)/.exec(ps.psCwdRestoreScript(deep))||[])[1];
 say(deepOk && !!cwdB64 && Buffer.from(cwdB64,"base64").toString("utf8")===deep,"longCwdLeftToWrapper","LONGCWDTHROWS");
-// The cleaner, against REAL ConPTY frames captured from both PowerShell versions
-// (scripts/fixtures/conpty-frames.json): predictions redrawn into the echo,
-// the error style of each version, a table, a forged marker printed as text, and
-// runs of spaces that ConPTY wrote as cursor-forward.
-const frames=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-frames.json","utf8")).frames;
-const cleanWrong=frames.filter(f=>ps.psClean(f.body, f.command===null?undefined:f.command, f.width)!==f.expect).map(f=>f.name);
-say(frames.length>=16 && cleanWrong.length===0,"cleanerOnRealFrames","CLEANER:"+cleanWrong.join("|").replace(/\s/g,"_"));
-// The streamed wraps hold a padding space only the WIDTH can tell from output:
-// without it they must come out wrong, or they prove nothing.
-const padded=frames.filter(f=>/padding|after ASCII wrapped/.test(f.name));
-say(padded.length===2 && padded.every(f=>ps.psClean(f.body,f.command,f.width)===f.expect && ps.psClean(f.body,f.command)!==f.expect),"widthDropsPadding","PADDINGKEPT");
-say(frames.filter(f=>/cursor-forward/.test(f.name)).every(f=>/ {10}/.test(ps.psClean(f.body))),"cursorForwardKeptAsSpaces","SPACESLOST");
-say(frames.filter(f=>/native exit/.test(f.name)).every(f=>ps.psClean(f.body,f.command)===""),"silentStaysEmpty","ECHODEBRIS");
-// Where a poll may start: past the typed echo, once its line is closed (by a
-// newline, or by a move to the next row with none: two of the real frames).
-// Agreed with the cleaner on every real typed frame, and "not yet" while the
-// echo is still being drawn \u2014 polling from a half-drawn echo is how the
-// re-render on Enter leaked into a later poll as output.
-const typed=frames.filter(f=>f.command!==null && !/forged/.test(f.name));
-const agrees=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const end=ps.psEchoEnd(raw,N,f.command,f.width); return end!==undefined && ps.psClean(raw.slice(end),undefined,f.width)===f.expect; });
-const cut=typed.every(f=>{ const raw=E+"[8m<ATHS:"+N+">"+f.body; const end=ps.psEchoEnd(raw,N,f.command,f.width); return end!==undefined && ps.psEchoEnd(raw.slice(0,end-1),N,f.command,f.width)===undefined; });
-say(typed.length>=6 && agrees,"echoBoundaryAgrees","ECHOBOUNDARY");
-say(cut,"halfDrawnEchoIsNotYet","EARLYECHOEND");
+// The reader, against REAL frames (scripts/fixtures/conpty-screens.json):
+// Windows 11 and Windows 10, a fresh screen and a full one, captured through
+// the hub with their position records. Every command prints something known.
+const frames=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-screens.json","utf8")).frames;
+const readAs=(f,size)=>ps.psReadFrame(f.raw,f.nonce,size||f.size,f.command===null?undefined:f.command).then(r=>r.output);
+sayA(Promise.all(frames.map(f=>readAs(f).then(o=>o===f.expect?"":f.name))).then(bad=>frames.length>=28 && new Set(frames.map(f=>f.host)).size>=2 && bad.every(b=>!b)),"screensOnRealFrames","SCREENS");
+// Each kind of real frame is there and reads right: cursor-forward, runs of
+// spaces, a repaint after the start, a silent command. Padding before a wide
+// wrap is dropped only at the true width: at another, the frame reads wrong.
+const repainted=frames.filter(f=>/\x1b\[\??25l(?:\x1b\[[0-9;]*m)*\x1b\[H/.test(f.raw.slice(f.raw.indexOf("<ATHS:"+f.nonce))));
+sayA(Promise.all(frames.filter(f=>/\x1b\[\d+C/.test(f.raw)).map(f=>readAs(f).then(o=>o===f.expect))).then(r=>r.length>=4 && r.every(Boolean)),"cursorForwardKeptAsSpaces","SPACESLOST");
+sayA(Promise.all(repainted.map(f=>readAs(f).then(o=>o===f.expect))).then(r=>r.length>=3 && r.every(Boolean)),"repaintAfterStartReadRight","REPAINTMISREAD");
+sayA(Promise.all(frames.filter(f=>/native exit/.test(f.name)).map(f=>readAs(f))).then(r=>r.length>=2 && r.every(o=>o==="")),"silentStaysEmpty","ECHODEBRIS");
+const cjk=frames.filter(f=>/fresh screen: wide CJK/.test(f.name) && /\u6df1 \u5c42/.test(f.raw));
+sayA(Promise.all(cjk.map(f=>Promise.all([readAs(f),readAs(f,{cols:f.size.cols+100,rows:f.size.rows})]))).then(r=>r.length>=1 && r.every(([at,wider],i)=>at===cjk[i].expect && wider!==cjk[i].expect)),"widthDropsPadding","PADDINGKEPT");
+// poll, followed through every real frame at many points: the pieces join to
+// exactly the output, never the typed echo and never a line twice.
+sayA((async()=>{
+  for (const f of frames) {
+    const pieces=[]; let since=0;
+    const cuts=[...Array(9).keys()].map(i=>Math.floor((i+1)*f.raw.length/10)).concat(f.raw.length);
+    for (const c of cuts) { const p=await ps.psPollFrame(f.raw.slice(0,c),since,f.nonce,f.size,f.command===null?undefined:f.command); if (p.output) pieces.push(p.output); since=c; }
+    if (pieces.join("\n")!==f.expect) return false;
+  }
+  return true;
+})(),"pollJoinsExactly","POLLPIECES");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 // What a Windows host is left with, said as precisely as the POSIX case: the
 // hub keeps its own lines out of the history file, and a person\u2019s are saved.
@@ -933,27 +968,27 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   await new Promise(r=>setTimeout(r,800));
   const cap=await a.capturePane("wg");
   say(!/<ATH[SE]:h[12]/.test(cap) && /printf/.test(cap),"captureDropsMarkers","MARKERSINCAPTURE");
-  const fr=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-frames.json","utf8")).frames.find(f=>/pwsh: cursor-forward/.test(f.name));
+  // A real Windows 10 error view, its padding drawn with cursor-forward, after
+  // a full repaint: read and tail must show it as its screen did.
+  const fr=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-screens.json","utf8")).frames.find(f=>/win10.*full screen: cmdlet error/.test(f.name));
   await new Promise(r=>setTimeout(r,500));
-  const from=(await a.readSince("wg",0)).nextOffset; fs.appendFileSync(log, fr.body);
+  const from=(await a.readSince("wg",0)).nextOffset; fs.appendFileSync(log, fr.raw);
   const rd=await a.readSince("wg",from);
-  say(rd.output===ps.psClean(fr.body) && / {10}~/.test(rd.output),"readCleansLikePowerShell","READCORRUPTS");
-  const tl=await a.readTail("wg",4);
-  say(/ {10}~/.test(tl.output),"tailKeepsSpaces","TAILCORRUPTS");
-  // A resize mid-job replays the whole screen into the log. poll must say so,
-  // with the reason, rather than hand the replay back as new output: on the
-  // slice that holds it, and on one that starts while it is still being drawn.
+  say(rd.output.includes("CategoryInfo          : ObjectNotFound") && rd.output.includes(fr.expect.split("\n")[0]),"readCleansLikePowerShell","READCORRUPTS");
+  const tl=await a.readTail("wg",8);
+  say(/CategoryInfo {10}:/.test(tl.output),"tailKeepsSpaces","TAILCORRUPTS");
+  // A resize mid-job re-lays the screen. poll must say so, with the reason, on
+  // the slice whose interval holds it, and must not on a clean frame.
   const C8=E+"[8m", C28=E+"[28m", RP=E+"[?25l"+E+"[8;50;150t"+E+"[H";
   const pn1="aaaabbbb0001", pn2="aaaabbbb0002";
   const p0=(await a.readSince("wg",0)).nextOffset;
   const ch1=C8+"<ATHS:"+pn1+">"+C28+"\r\nrow 1\r\n"+RP+"row 1\r\nrow 2\r\n"+E+"[3;1H"+E+"[?25hrow 3\r\n"+C8+"<ATHE:"+pn1+":0>"+C28+"\r\n";
   fs.appendFileSync(log, ch1);
   const pr1=await a.poll("wg",pn1,p0);
-  const pr3=await a.poll("wg",pn1,p0+Buffer.byteLength(ch1.slice(0, ch1.indexOf("row 2"))));
   const p1=(await a.readSince("wg",0)).nextOffset;
   fs.appendFileSync(log, C8+"<ATHS:"+pn2+">"+C28+"\r\nrow 1\r\nrow 2\r\n"+C8+"<ATHE:"+pn2+":0>"+C28+"\r\n");
   const pr2=await a.poll("wg",pn2,p1);
-  say(pr1.captureIncomplete===true && pr1.captureRepainted===true && pr3.captureRepainted===true && !pr2.captureIncomplete && !pr2.captureRepainted,"pollFlagsRepaint","POLLREPLAYSILENT:"+[pr1.captureRepainted,pr3.captureRepainted,pr2.captureRepainted].join("|"));
+  say(pr1.captureIncomplete===true && pr1.captureRepainted===true && !pr2.captureIncomplete && !pr2.captureRepainted,"pollFlagsRepaint","POLLREPLAYSILENT:"+[pr1.captureRepainted,pr2.captureRepainted].join("|"));
   // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
   // them. The self-heal exists to type the POSIX helper into whatever shell it
   // finds, so a Windows session whose hooks do not answer must refuse instead.
@@ -962,24 +997,29 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   await new Promise(r=>setTimeout(r,2500));
   await a.setMeta("wg","frame","bash");
   const before=fs.statSync(log).size, codes=[];
-  for (const call of [()=>a.run("wg","echo one-line",{timeoutMs:15000}), ()=>a.start("wg","echo one-line"), ()=>a.run("wg","echo a\necho b",{timeoutMs:15000})]) {
+  for (const call of [()=>a.run("wg","echo one-line",{timeoutMs:15000}), ()=>a.start("wg","echo one-line"), ()=>a.run("wg","echo a\necho b",{timeoutMs:15000}), ()=>a.run("wg","echo 中文-typed",{timeoutMs:15000})]) {
     try { await call(); codes.push("ran"); } catch(e){ codes.push(e.code); }
   }
   await new Promise(r=>setTimeout(r,1000));
   const added=fs.readFileSync(log).subarray(before).toString("utf8");
-  say(codes.join()==="windows_hooks_missing,windows_hooks_missing,command_lost","refusesWithoutHooks","CODES:"+codes.join("|"));
+  say(codes.slice(0,3).join()==="windows_hooks_missing,windows_hooks_missing,command_lost","refusesWithoutHooks","CODES:"+codes.join("|"));
+  // Only ASCII is ever typed into PowerShell: ConPTY on Windows 10 loses some
+  // typed non-ASCII, so the tag line is ASCII and a command holding any goes
+  // through the wrapper (refused here as command_lost, never typed bare).
+  say(codes[3]==="command_lost" && added.includes("vvv AGENT INPUT ID: ") && !added.includes("↓↓↓ AGENT INPUT ID") && !added.includes("中文-typed"),"windowsTypesAscii","NONASCIITYPED:"+codes[3]);
   say(!added.includes("__ath() {") && !added.includes("__ath_bpost") && !added.includes("add-zsh-hook"),"noPosixSelfHeal","POSIXHELPERTYPED");
   await a.setMeta("wg","ros","");
   say((await a.get("wg")).remoteOs===undefined,"blankMeansPosix","BLANKREADASWINDOWS");
   await a.kill("wg").catch(()=>{});
+  await Promise.all(pend);
   process.stdout.write(out.join(" "));
 })();
 ' 2>/dev/null)"
 for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIgnored \
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
-         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth repaintExtent pollFlagsRepaint predictionsOff strictModeSafe \
-         cleanerOnRealFrames cursorForwardKeptAsSpaces silentStaysEmpty echoBoundaryAgrees halfDrawnEchoIsNotYet \
-         historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks noPosixSelfHeal blankMeansPosix; do
+         upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
+         screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
+         historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 

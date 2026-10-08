@@ -116,6 +116,12 @@ export interface Session {
   paneTail?: string;
   /** Pane width in columns, for wrap-aware prompt detection. */
   paneWidth?: number;
+  /**
+   * Pane height in rows. A PowerShell session is read by replaying ConPTY's
+   * output on a screen of exactly this size: its cursor moves name absolute
+   * rows, and a screen of another height scrolls at another moment.
+   */
+  paneHeight?: number;
 }
 
 export interface RunResult {

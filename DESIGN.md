@@ -117,11 +117,22 @@ start and end markers, ordered with the output because it is output, and
 ready, working directory, environment). The POSIX path is untouched, pinned by
 byte-level golden fixtures.
 
-Reading follows from the same fact: ConPTY output is *rendered*, not stripped —
-cursor moves, erases, autowrap, double-width CJK, the padding cell a wide
-character leaves, and the way it redraws a wrapped row once the screen is full.
-A resize replays the whole screen into the log, so any result it touches is
-flagged `capture_incomplete` rather than returned with lines twice.
+Reading follows from the same fact: ConPTY output is a screen, so it is read
+as one. The log is replayed on a terminal emulator (`@xterm/headless`) at the
+pane's exact size, starting at the cell the hooks report the start marker
+ended on, and a frame is the cells between its two markers. Windows 10's
+ConPTY makes this necessary rather than tidy: it redraws the current line from
+its start and repaints the whole screen whenever PSReadLine starts reading, so
+its byte stream repeats markers and output by design (measured: 16 of 20 rounds
+framed in bytes, 20 of 20 on the screen). Its wraps leave no mark on the screen
+it draws, so two Windows 10 cases are ambiguous in the bytes themselves and are
+read as one line: a line exactly as wide as the pane, ending above the bottom
+row, followed by any line; and a line one cell short followed by one starting
+with a wide character. Both were measured byte-identical to a wrapped line,
+which is far the commoner. A resize replays the whole screen; any result it
+touches is flagged `capture_incomplete` rather than returned with lines twice.
+Windows 10 announces no resize in-band, so there the hub's own record of the
+pane's widths decides.
 
 What it costs the person in the session: one blank-looking line before each
 prompt (the markers sit there, concealed), and PSReadLine's inline predictions
@@ -132,7 +143,10 @@ The OS is detected, not configured: probed over the shared connection when key
 auth allows, otherwise recognised from ConPTY's greeting after a POSIX launch
 lands there, and relaunched as PowerShell. Limits that are the platform's, not
 the hub's: a UAC prompt or anything else on the interactive desktop cannot be
-reached over ssh, and cmd is a command (`cmd /c "…"`), never the session shell.
+reached over ssh — Windows PowerShell 5.1's `Get-Credential` is one: it opens
+the credential dialog there, ignores typing and Ctrl-C, and never returns, so
+only killing the session ends it (PowerShell 7 asks in the console, and parks);
+and cmd is a command (`cmd /c "…"`), never the session shell.
 
 ### Knowing a command ended when the shell it ran in is gone
 

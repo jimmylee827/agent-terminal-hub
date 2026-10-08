@@ -57,6 +57,7 @@ const FIELDS = [
   '#{@ath_frame}',
   '#{@ath_wrap}',
   '#{@ath_ros}',
+  '#{pane_height}',
 ].join(FS);
 
 export interface ListOptions {
@@ -114,6 +115,7 @@ function parseRow(line: string, paneTail: string): Session | undefined {
     frameShell: parts[17] || undefined,
     wrapperInstalled: parts[18] === '1',
     remoteOs: parts[19] === 'windows' ? 'windows' : undefined,
+    paneHeight: Number(parts[20] ?? '0') || undefined,
     creatorPids: (parts[14] || '')
       .split(',')
       .map(Number)
