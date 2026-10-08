@@ -19,6 +19,7 @@ import {
   tmuxName,
 } from './paths';
 import { dialectFor, posixDialect } from './dialect';
+import { windowsShellOnScreen } from './powershell';
 import { ensureControlDir, ensureMaster, probeRemoteOs } from './ssh';
 import { clearRequest, listRequests } from './requests';
 import { classify, isNesting, isShell, looksLikeCredentialPrompt } from './state';
@@ -596,6 +597,36 @@ export interface SendLineOptions {
   clearLine?: boolean;
 }
 
+/**
+ * Whether the pane is showing a Windows shell the hub did not launch: a session
+ * not set up as Windows, whose foreground is an ssh (or similar) typed into it,
+ * now at a cmd or PowerShell prompt. Nothing the hub types for a POSIX shell
+ * suits it, and it has none of the hub's hooks.
+ */
+export async function windowsShellByHand(name: string, paneCommand?: string): Promise<boolean> {
+  const clean = validateName(name);
+  const command = paneCommand ?? (await paneStatus(clean).catch(() => null))?.command ?? '';
+  if (!isNesting(command)) return false;
+  if ((await readMeta(clean, 'ros').catch(() => '')) === 'windows') return false;
+  const screen = await capturePane(clean, 60).catch(() => '');
+  return windowsShellOnScreen(screen, await logTail(clean, 256 * 1024));
+}
+
+/** The last `bytes` of a session's log, or '' if there is none. */
+async function logTail(name: string, bytes: number): Promise<string> {
+  const handle = await fs.open(logPath(name), 'r').catch(() => undefined);
+  if (!handle) return '';
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, bytes);
+    const buf = Buffer.alloc(length);
+    await handle.read(buf, 0, length, size - length);
+    return buf.toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Type a line and press Enter. Text is sent literally; the shell parses it. */
 export async function sendLine(
   name: string,
@@ -611,13 +642,17 @@ export async function sendLine(
     // Judged by what is in the pane NOW, not by what the far side will be: the
     // launch and reconnect lines of a Windows session are typed into the LOCAL
     // shell, where M-F12 arrived as `;;3~` and turned `ssh …` into `3~ssh`.
-    if (
-      (await readMeta(clean, 'ros')) === 'windows' &&
-      isNesting((await paneStatus(clean).catch(() => null))?.command ?? '')
-    ) {
+    const paneCommand = (await paneStatus(clean).catch(() => null))?.command ?? '';
+    if ((await readMeta(clean, 'ros')) === 'windows' && isNesting(paneCommand)) {
       // PSReadLine TYPES C-e/C-u as literal control characters in its default
       // edit mode. Its hooks bind this chord to clearing the line instead.
       await tmux(['send-keys', '-t', target, 'M-F12'], { allowFail: true });
+    } else if (await windowsShellByHand(clean, paneCommand)) {
+      // A Windows shell the hub did not launch: cmd.exe and an unhooked
+      // PowerShell both TYPE C-e/C-u, so `echo` arrived as `^E^Uecho` and was
+      // "not recognized". No key clears a line in both safely (Escape is Vi
+      // mode's command key), so nothing is sent: a line left half typed by
+      // hand is the lesser harm, and visible.
     } else {
       // C-e first so C-u clears the whole line under bash's kill-to-start binding
       // as well as zsh's kill-whole-line.

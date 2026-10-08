@@ -147,6 +147,31 @@ export function conptyAnnounced(log: string, anchor: string, window = 8192): boo
 }
 
 /**
+ * Whether a pane is showing a Windows shell at its prompt, judged by what is on
+ * the screen: the last line is cmd's `C:\\…>` or PowerShell's `PS C:\\…>` (a
+ * custom prefix such as `user@HOST ` allowed), AND something says Windows: its
+ * ConPTY's greeting in `logTail`, or a Windows banner on the screen. Both, so a
+ * POSIX prompt that happens to end in `C:\\x>` is not taken for one.
+ *
+ * For a shell the hub did NOT launch: an ssh typed into a local session. That
+ * pane's session is not a Windows one (`conptyAnnounced` deliberately ignores a
+ * greeting that is not its own launch's), but what the hub TYPES there must
+ * still suit the shell actually in it.
+ */
+export function windowsShellOnScreen(screen: string, logTail: string): boolean {
+  const lines = screen.split('\n').map((l) => l.trimEnd()).filter((l) => l !== '');
+  const last = lines[lines.length - 1] ?? '';
+  if (!WINDOWS_PROMPT_RE.test(last)) return false;
+  return (
+    logTail.includes(CONPTY_HELLO) ||
+    CONHOST_TITLE_RE.test(logTail) ||
+    /Microsoft Windows \[Version \d|Windows PowerShell|^PowerShell \d/m.test(screen)
+  );
+}
+
+const WINDOWS_PROMPT_RE = /(?:^|\s)(?:PS )?[A-Za-z]:\\[^\n<>|"]*>$/;
+
+/**
  * Windows 10's ConPTY sends no `\e[?9001h`. What both versions do send, once,
  * as a session opens, is a window title naming conhost itself — Windows 10
  * right after its clear-and-home, Windows 11 after its hello. A POSIX host
