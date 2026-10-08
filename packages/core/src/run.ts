@@ -12,6 +12,7 @@ import {
   psEnvRestoreScript,
   psFindEnv,
   psFindCwd,
+  psFindDur,
   psFindEnd,
   psLatestHandle,
   psPollFrame,
@@ -4163,7 +4164,8 @@ async function psCommandEnd(logFile: string, nonce: string): Promise<CommandEnd 
   const code = psFindEnd(tail, nonce);
   if (code === undefined) return undefined;
   const cwd = psFindCwd(tail, nonce);
-  return { code, ...(cwd ? { cwd } : {}) };
+  const measuredSeconds = psFindDur(tail, nonce);
+  return { code, ...(cwd ? { cwd } : {}), ...(measuredSeconds !== undefined ? { measuredSeconds } : {}) };
 }
 
 /**

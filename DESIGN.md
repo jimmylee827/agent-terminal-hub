@@ -114,7 +114,8 @@ overtake the text written before them. So a PowerShell session uses the two
 channels that measurably survive: **concealed text** (`\e[8m…\e[28m`) for the
 start and end markers, ordered with the output because it is output, and
 **OSC 777** for keyed records whose order does not matter (tag acknowledgement,
-ready, working directory, environment). The POSIX path is untouched, pinned by
+ready, working directory, environment, and the command's duration, which
+PowerShell's own history measures). The POSIX path is untouched, pinned by
 byte-level golden fixtures.
 
 Reading follows from the same fact: ConPTY output is a screen, so it is read
