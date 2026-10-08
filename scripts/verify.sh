@@ -1024,6 +1024,17 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   say(o3.seconds===44 && pd3.elapsedSeconds===44 && pd3.elapsedExact===true && o4.finished && o4.seconds===undefined &&
       /\$agent -and \$hnew\) \{ .;. \+ \[int\]\(\$hl\.EndExecutionTime - \$hl\.StartExecutionTime\)/.test(ps.psHooksScript()) && /\[int\]\(\(Get-Date\) - \$__ath_t0\)\.TotalSeconds\); __ath_envreport \$__ath_id/.test(ps.psHooksScript()) && !/ath;dur;|.dur;./.test(ps.psHooksScript()),
       "windowsTimesItself","DURATIONGUESSED:"+[o3.seconds,pd3.elapsedSeconds,pd3.elapsedExact,o4.seconds].join("|"));
+  // poll tells a typed line from output by the line ITSELF, kept by handle as
+  // sent. The display record is shortened past 200 characters, and a shortened
+  // line never matched: a long command came back with its echo as output.
+  const pn5="aaaabbbb0005", longCmd="Write-Output "+"x".repeat(230);
+  fs.appendFileSync(log, C8+"<ATHS:"+pn5+">"+C28+"\r\nPS C:\\> "+longCmd+"\r\nout-line\r\n"+C8+"<ATHE:"+pn5+":0>"+C28+"\r\n");
+  await a.setMeta("wg","last_cmd",longCmd.slice(0,197)+"\u2026 (truncated)");
+  await a.setMeta("wg","echo","");
+  const p5a=await a.poll("wg",pn5,0);
+  await a.setMeta("wg","echo",pn5+" "+longCmd);
+  const p5b=await a.poll("wg",pn5,0);
+  say(p5b.output==="out-line" && /Write-Output/.test(p5a.output),"pollDropsLongEcho","LONGECHOLEAKS:"+JSON.stringify(p5b.output.slice(0,40)));
   // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
   // them. The self-heal exists to type the POSIX helper into whatever shell it
   // finds, so a Windows session whose hooks do not answer must refuse instead.
@@ -1054,7 +1065,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         pollDropsLongEcho concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 
