@@ -549,10 +549,27 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
       // command — which can never be typed as one line, so always needs the
       // wrapper — from re-typing 400 characters that are already there.
       await setMeta(name, 'wrap', '1').catch(() => undefined);
+      // PowerShell's ready record is an OSC, which ConPTY forwards AHEAD of text
+      // written before it, so `new` could return before the first prompt was on
+      // the screen, and a `run` sent at once found no prompt and was refused as
+      // busy (seen on Windows 10). Wait for the prompt itself: its concealed
+      // start marker, then a pane that reads idle. Bounded: a slow profile only
+      // delays, as it always did.
+      if (dialect.id !== 'posix') await awaitFirstPrompt(name, 8000);
     }
   }
 
   return get(name);
+}
+
+/** Until the first PowerShell prompt is drawn and the pane reads idle, or `timeoutMs`. */
+async function awaitFirstPrompt(name: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const raw = await fs.readFile(logPath(name), 'utf8').catch(() => '');
+    if (/<ATHS:h\d+>/.test(raw.slice(-16384)) && (await get(name).catch(() => undefined))?.state === 'idle') return;
+    await sleep(120);
+  }
 }
 
 async function nextFreeName(): Promise<string> {

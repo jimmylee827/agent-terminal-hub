@@ -537,6 +537,20 @@ async function probeHub(hasPwsh) {
       gate('hub: the hooks are live at the first prompt (concealed <ATHS:h1>)', ready >= 0 && first > ready && psm.concealedAt(raw, first), first < 0 ? 'missing' : psm.concealedAt(raw, first) ? '' : 'found, not concealed');
       gate("hub: and the user's own prompt still draws", /PS [A-Z]:\\[^\r\n]*>/.test(raw.slice(Math.max(first, 0))));
     }
+    // `new` then `run` at once, as an agent does. The ready record is an OSC,
+    // which ConPTY sends ahead of the prompt it was written before; `new` once
+    // returned in that gap and the `run` was refused as busy (twice, Windows 10).
+    {
+      const refused = [];
+      for (let i = 0; i < 3; i++) {
+        const name = `e2e-quick${i}`;
+        await a.create({ name, remote: host });
+        const r = await a.run(name, 'Write-Output quick', { timeoutMs: 30000 }).catch((e) => ({ error: e.code || String(e) }));
+        if (r.error || r.output !== 'quick') refused.push(r.error || JSON.stringify(r.output));
+        await a.kill(name).catch(() => {});
+      }
+      gate('hub: a run sent the moment new returns is not refused (3 rounds)', refused.length === 0, refused.join('; '));
+    }
     // run, through every path a command can take.
     const histBefore = historyLines();
     // Lines wider than the pane. ConPTY wraps them two ways: streamed, while the
@@ -956,9 +970,12 @@ function historyLines() {
     cleanup();
     process.exit(1);
   }
-  // `cmd /c ver` (PowerShell has no `ver`): "Microsoft Windows [Version 10.0.<build>.<rev>]"; Windows 11 is 22000 and up.
-  const build = Number((/\[Version \d+\.\d+\.(\d+)/.exec(
-    spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, 'cmd /c ver'], { encoding: 'utf8' }).stdout || '',
+  // Asked through PowerShell, encoded: it needs no quoting under either login
+  // shell. (`ver` is not a PowerShell command, and a nested `cmd /c ver` came
+  // back from sshd's own `cmd /c` as `'ver"' is not recognized`.) Windows 11 is 22000 and up.
+  const build = Number((/^(\d{4,6})\s*$/m.exec(
+    spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host,
+      `powershell -NoLogo -NonInteractive -NoProfile -EncodedCommand ${Buffer.from('[Environment]::OSVersion.Version.Build', 'utf16le').toString('base64')}`], { encoding: 'utf8' }).stdout || '',
   ) || [])[1] ?? 0);
   legacy = build > 0 && build < 22000;
   info('Windows build', build ? `${build}${legacy ? ' (Windows 10: ordering judged on the replayed screen)' : ''}` : 'unknown');
@@ -968,6 +985,15 @@ function historyLines() {
 
   // The whole run, not one probe: a leak once came from a probe that no
   // per-probe count was watching (it typed `exit`, which is a person's line).
+  // The launch budget must fit what THIS host really runs: sshd wraps the line
+  // in cmd.exe /c, which took 35 of cmd's 8,191 here. A harmless command padded
+  // to exactly the budget must run.
+  {
+    const budget = require(path.join(CORE, 'powershell.js')).CMD_LINE_MAX;
+    const base = `powershell -NoLogo -NonInteractive -EncodedCommand ${Buffer.from("Write-Output 'budget-ok'", 'utf16le').toString('base64')}`;
+    const r = spawnSync('ssh', ['-o', 'BatchMode=yes', '-o', 'RemoteCommand=none', '-o', 'RequestTTY=no', host, base + ' '.repeat(budget - base.length)], { encoding: 'utf8', timeout: 60_000 });
+    gate(`the launch budget (${budget}) fits this host's real command-line ceiling`, /budget-ok/.test(r.stdout || ''), ((r.stderr || '').match(/command line is too long/i) || [''])[0]);
+  }
   const historyAtStart = historyLines();
   if (want('baseline')) {
     await probeBaseline('powershell');

@@ -1031,7 +1031,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       } else if (result.elapsedLowerSeconds !== undefined) {
         payload.ran_between_seconds = [result.elapsedLowerSeconds, result.elapsedUpperSeconds];
         payload.timing_note = result.elapsedObserved
-          ? 'A bracket, not a measurement: the shell running this could not time it (no `date`), ' +
+          ? 'A bracket, not a measurement: the shell running this did not time it, ' +
             'so this is only when the hub looked — it was still running at one check and done by ' +
             'the next. Poll more often for a tighter figure.'
           : `Upper bound only. The 0 is because nothing ever saw it running; the ` +

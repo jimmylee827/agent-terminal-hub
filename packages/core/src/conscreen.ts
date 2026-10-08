@@ -80,6 +80,24 @@ function mayFillRow(segment: string, cols: number): boolean {
   return width >= cols;
 }
 
+/**
+ * Undo a Windows 10 ConPTY slip, in place and at the same length.
+ *
+ * When the line before a concealed run ends in a colour, ConPTY must reset the
+ * colour and turn conceal on for the next row, and it emits the two the wrong
+ * way round: `\e[8m\e[m\r\n<ATHE:…>`. The cells are concealed in the console;
+ * the bytes say otherwise, so the end marker of a silent command such as
+ * `Get-Date | Out-Null` was not believed, and `run` sat until its timeout (3
+ * in 10 on build 19045). Conceal then reset with nothing drawn between is never
+ * meaningful output, only this, so it is put back in the order meant. Same
+ * length, so every offset into the log still holds.
+ */
+export function repairConceal(raw: string): string {
+  return raw.replace(CONCEAL_SLIP_RE, '$1\r\n\u001b[8m');
+}
+
+const CONCEAL_SLIP_RE = /\u001b\[8m(\u001b\[0?m)\r\n/g;
+
 export interface Rendered {
   /** Logical lines from `start` on: wrapped rows joined, concealed runs bracketed. */
   lines: string[];
@@ -113,7 +131,7 @@ export async function renderFrom(
     const legacy = !!start?.legacy || legacyHint;
     let pending = '';
     let segment = '';
-    for (const piece of raw.split(REPLAY_RE)) {
+    for (const piece of repairConceal(raw).split(REPLAY_RE)) {
       if (!piece) continue;
       const resize = RESIZE_RE.exec(piece);
       const newline = resize ? null : NEWLINE_RE.exec(piece);

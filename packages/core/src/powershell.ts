@@ -13,16 +13,19 @@
  */
 import { gzipSync } from 'node:zlib';
 
-import { findConcealed, renderAfter, renderFrom, visible, type ScreenPos, type ScreenSize } from './conscreen';
+import { findConcealed, renderAfter, renderFrom, repairConceal, visible, type ScreenPos, type ScreenSize } from './conscreen';
 import { launchFromBootFile } from './ssh';
 
 /**
- * cmd.exe's command-line ceiling is 8,191 characters, and the encoded launch
- * passes through it. UTF-16LE then base64 costs ~2.67x, which puts the script
- * budget near 3,000 characters — so this stage carries only what must exist
- * before the first prompt.
+ * The longest launch a Windows host runs. cmd.exe's ceiling is 8,191
+ * characters, but sshd hands it `cmd.exe /c "…"`, and that wrapping counts:
+ * measured on Windows 11 and Windows 10 (OpenSSH as shipped), 8,156 runs and
+ * 8,157 is "The command line is too long." A relaunch at 8,175 passed the old
+ * 8,191 check and failed the reconnect. 56 more are kept back for an sshd
+ * that wraps differently. UTF-16LE then base64 costs ~2.67x, so this stage
+ * carries only what must exist before the first prompt.
  */
-export const CMD_LINE_MAX = 8191;
+export const CMD_LINE_MAX = 8100;
 
 /**
  * What runs first on the far side.
@@ -55,8 +58,14 @@ export const CMD_LINE_MAX = 8191;
  * what it tests is the install the product performs, not a look-alike.
  */
 export function psHooksInstall(): string {
-  const packed = gzipSync(Buffer.from(psHooksScript(), 'utf8')).toString('base64');
-  return `. ([scriptblock]::Create([IO.StreamReader]::new([IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('${packed}')), [IO.Compression.CompressionMode]::Decompress)).ReadToEnd()))`;
+  // One character per compressed byte: U+0100 plus the byte. The launch is sent
+  // as UTF-16 in base64 (-EncodedCommand), where every character costs the same,
+  // so base64 inside it spent 4/3 characters per byte for nothing: the hooks
+  // went from ~3.6 characters of cmd.exe's line per byte to ~2.7. This block
+  // holds no quote, newline or surrogate, and never travels typed.
+  const gz = gzipSync(Buffer.from(psHooksScript(), 'utf8'), { level: 9 });
+  const packed = Array.from(gz, (b) => String.fromCharCode(0x100 + b)).join('');
+  return `. ([scriptblock]::Create([IO.StreamReader]::new([IO.Compression.GZipStream]::new([IO.MemoryStream]::new([byte[]]([int[]][char[]]'${packed}' | ForEach-Object { $_ - 256 })), [IO.Compression.CompressionMode]::Decompress)).ReadToEnd()))`;
 }
 
 export function psLaunchScript(token: string, state: { cwd?: string } = {}): string {
@@ -99,7 +108,7 @@ function remoteFor(script: string): string {
 export function psRemoteCommand(script: string): string {
   const remote = remoteFor(script);
   if (remote.length > CMD_LINE_MAX) {
-    throw new Error(`PowerShell launch is ${remote.length} characters, over cmd.exe's ${CMD_LINE_MAX}`);
+    throw new Error(`PowerShell launch is ${remote.length} characters, over the ${CMD_LINE_MAX} a Windows host runs`);
   }
   return remote;
 }
@@ -281,13 +290,19 @@ export function psHooksScript(): string {
     // line's, and the console does not put the error in `$Error` either. Its
     // history entry is new and says Failed; a re-parse tells it from a line
     // that ran and failed, whose status `$?` already has right.
-    "  $hl = Get-History -Count 1; if ($ok -and $hl -and $hl.Id -ne $global:__ath_hid -and \"$($hl.ExecutionStatus)\" -eq 'Failed') { $pe = $null; [void][Management.Automation.Language.Parser]::ParseInput($hl.CommandLine, [ref]$null, [ref]$pe); if ($pe) { $ok = $false } }; if ($hl) { $global:__ath_hid = $hl.Id }",
+    "  $hl = Get-History -Count 1; $hnew = $hl -and $hl.Id -ne $global:__ath_hid; if ($ok -and $hnew -and \"$($hl.ExecutionStatus)\" -eq 'Failed') { $pe = $null; [void][Management.Automation.Language.Parser]::ParseInput($hl.CommandLine, [ref]$null, [ref]$pe); if ($pe) { $ok = $false } }; if ($hl) { $global:__ath_hid = $hl.Id }",
     "  $agent = $global:__ath_n -and $global:__ath_n -notlike 'h*'",
     '  $rc = if ($ok) { 0 } elseif ($lec -and ($agent -or $lec -ne $global:__ath_lec)) { $lec } else { 1 }',
     '  $global:__ath_lec = $lec',
     // Where the command left the shell, keyed by its frame: OSC order does not
     // matter, and the hub needs it to answer `ath ls` and to reconnect in place.
-    "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))); __ath_envreport $global:__ath_n }",
+    // And how long the agent's typed line took, from PowerShell's own record of
+    // it: the shell's measurement, as `date` gives a POSIX one. In the SAME
+    // record, not one of its own: on Windows 10 every OSC that lands while
+    // ConPTY paints a line is a chance for it to reset the marker's conceal
+    // before the line break (`\e[8m\e[m\r\n<ATHE:…>`), which a third record
+    // here made happen in 1 case in 20.
+    "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)) + $(if ($agent -and $hnew) { ';' + [int]($hl.EndExecutionTime - $hl.StartExecutionTime).TotalSeconds })); __ath_envreport $global:__ath_n }",
     "  $m = if ($global:__ath_n) { '<ATHE:' + $global:__ath_n + ':' + $rc + '>' } else { '' }",
     '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
@@ -303,7 +318,7 @@ export function psHooksScript(): string {
     // Dot-sourced by the hub (`. __ath <nonce> <b64>`), so it runs in the
     // session's scope; its own variables carry a prefix for that reason.
     'function global:__ath([string]$__ath_id, [string]$__ath_b64) {',
-    '  $global:LASTEXITCODE = 0; $global:__ath_ok = $true',
+    '  $global:LASTEXITCODE = 0; $global:__ath_ok = $true; $__ath_t0 = Get-Date',
     "  __ath_mark ('<ATHS:' + $__ath_id + '>'); __ath_pos $__ath_id; Write-Host ''",
     // Parsed alone first, so a syntax error is shown against the agent's own
     // lines, as a typed one would be. Left to `Create`, it surfaced as a failed
@@ -313,7 +328,7 @@ export function psHooksScript(): string {
     '  if ($__ath_perr) { $global:__ath_ok = $false; [Management.Automation.ParseException]::new($__ath_perr).ErrorRecord | Out-Default }',
     "  else { try { . ([scriptblock]::Create($__ath_src + [char]10 + '$global:__ath_ok = $?')) | Out-Default } catch { $global:__ath_ok = $false; $_ | Out-Default } }",
     '  $__ath_rc = if ($global:__ath_ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }',
-    "  __ath_osc ('cwd;' + $__ath_id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path))); __ath_envreport $__ath_id",
+    "  __ath_osc ('cwd;' + $__ath_id + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)) + ';' + [int]((Get-Date) - $__ath_t0).TotalSeconds); __ath_envreport $__ath_id",
     "  __ath_mark ('<ATHE:' + $__ath_id + ':' + $__ath_rc + '>'); $global:__ath_w = $true",
     '}',
   ].join('\n');
@@ -322,7 +337,8 @@ export function psHooksScript(): string {
 /** Whether the conceal attribute is on at `index`, following every SGR before it. */
 export function concealedAt(raw: string, index: number): boolean {
   let on = false;
-  for (const m of raw.slice(Math.max(0, index - 8192), index).matchAll(/\u001b\[([0-9;]*)m/g)) {
+  // Windows 10 can slip the order of a reset and a conceal (see `repairConceal`).
+  for (const m of repairConceal(raw.slice(Math.max(0, index - 8192), index)).matchAll(/\u001b\[([0-9;]*)m/g)) {
     const p = (m[1] ?? '') === '' ? ['0'] : (m[1] ?? '').split(';');
     for (let i = 0; i < p.length; i++) {
       // 38/48 carry sub-parameters: a colour index of 8 is not conceal.
@@ -599,10 +615,16 @@ export function psLatestHandle(raw: string): string | undefined {
 
 /** The directory a command left the shell in, from its keyed OSC record. */
 export function psFindCwd(raw: string, nonce: string): string | undefined {
-  const m = new RegExp(`\\u001b\\]777;ath;cwd;${nonce};([A-Za-z0-9+/=]*)\\u0007`).exec(raw);
+  const m = new RegExp(`\\u001b\\]777;ath;cwd;${nonce};([A-Za-z0-9+/=]*)(?:;\\d+)?\\u0007`).exec(raw);
   if (!m || !m[1]) return undefined;
   const text = Buffer.from(m[1], 'base64').toString('utf8');
   return text || undefined;
+}
+
+/** How many seconds the command `nonce` took, as the shell measured it: the end of its cwd record. */
+export function psFindDur(raw: string, nonce: string): number | undefined {
+  const m = new RegExp(`\\u001b\\]777;ath;cwd;${nonce};[A-Za-z0-9+/=]*;(\\d+)\\u0007`).exec(raw);
+  return m ? Number(m[1]) : undefined;
 }
 
 /** The latest environment report in `raw`: the cumulative diff, as JSON. */

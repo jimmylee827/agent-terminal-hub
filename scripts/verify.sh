@@ -789,7 +789,9 @@ say(!ps.conptyAnnounced(H+"old windows session\n$ ssh … "+A+"\r\nLinux 6.1\n",
 say(!ps.conptyAnnounced("$ ssh … "+A+"\r\n"+"x".repeat(9000)+H,"box.boot"),"handTypedSshIgnored","LATEHELLOCOUNTED");
 say(!ps.conptyAnnounced(H,"box.boot"),"noLaunchNoVerdict","NOANCHORCOUNTED");
 const cmd=ps.psRemoteCommand(ps.psLaunchScript("0123456789ab"));
-say(cmd.length<ps.CMD_LINE_MAX && cmd.startsWith("powershell -NoLogo -NoExit -EncodedCommand "),"fitsCmdExe","OVERCEILING");
+// The budget is what a Windows host RUNS: sshd wraps the line in cmd.exe /c,
+// measured 8,156 (Windows 10 and 11); 8,191 let a relaunch fail.
+say(cmd.length<ps.CMD_LINE_MAX && ps.CMD_LINE_MAX<=8156 && cmd.startsWith("powershell -NoLogo -NoExit -EncodedCommand "),"fitsCmdExe","OVERCEILING");
 say(!/-NoProfile/.test(cmd),"keepsProfile","DROPSPROFILE");
 const script=Buffer.from(cmd.split(" ").pop(),"base64").toString("utf16le");
 say(/OutputEncoding = \[Text\.UTF8Encoding\]/.test(script) && /InputEncoding = \[Text\.UTF8Encoding\]/.test(script),"forcesUtf8","NOUTF8");
@@ -797,8 +799,8 @@ say(script.includes("<ATHR:0123456789ab:") && /\]777;ath;/.test(script),"readyVi
 say(/& pwsh .*-EncodedCommand/.test(script),"upgradesToPwsh","NOUPGRADE");
 // The hooks ride the launch, between the upgrade and the ready marker: typed
 // afterwards they would echo into the pane and land in the PSReadLine history.
-const gz=/FromBase64String\(\x27([A-Za-z0-9+\/=]+)\x27\)/.exec(script);
-const hooks=gz ? require("zlib").gunzipSync(Buffer.from(gz[1],"base64")).toString("utf8") : "";
+const gz=/\[char\[\]\]\x27([\u0100-\u01ff]+)\x27/.exec(script);
+const hooks=gz ? require("zlib").gunzipSync(Buffer.from([...gz[1]].map(c=>c.charCodeAt(0)-256))).toString("utf8") : "";
 const iUp=script.indexOf("& pwsh"), iHooks=gz ? gz.index : -1, iReady=script.indexOf("<ATHR:");
 say(iUp>=0 && iHooks>iUp && iReady>iHooks && hooks===ps.psHooksScript() && hooks.includes("$global:__ath_prompt0 = $function:prompt") && hooks.includes("function global:vvv"),"hooksRideLaunch","HOOKSMISSING");
 // The history handler and the clear chord, both inside the hooks.
@@ -898,7 +900,7 @@ const hs=ps.psHooksScript();
 say(/if \(-not \$ok\) \{ Write-Error .. -ErrorAction Ignore \}\n  & \$global:__ath_prompt0/.test(hs) && /__ath_w = \$true/.test(hs),"promptSeesStatus","PROMPTBLIND");
 say(hs.indexOf("ParseInput(")>0 && hs.indexOf("ParseInput(")<hs.indexOf("[scriptblock]::Create("),"wrapperParsesFirst","CREATEPARSES");
 // A typed line that fails to PARSE never runs, so the prompt finds it in history.
-say(/Get-History -Count 1; if \(\$ok -and .*Failed.*ParseInput\(\$hl\.CommandLine/.test(hs),"typedSyntaxErrorFails","SYNTAXREADSTALE");
+say(/Get-History -Count 1; .*if \(\$ok -and .*Failed.*ParseInput\(\$hl\.CommandLine/.test(hs),"typedSyntaxErrorFails","SYNTAXREADSTALE");
 // A directory too long for the relaunch is left out of it rather than pushing
 // it past the ceiling (which threw, failing the reconnect), and the restore
 // script carries it instead.
@@ -921,6 +923,14 @@ sayA(Promise.all(repainted.map(f=>readAs(f).then(o=>o===f.expect))).then(r=>r.le
 sayA(Promise.all(frames.filter(f=>/native exit/.test(f.name)).map(f=>readAs(f))).then(r=>r.length>=2 && r.every(o=>o==="")),"silentStaysEmpty","ECHODEBRIS");
 const cjk=frames.filter(f=>/fresh screen: wide CJK/.test(f.name) && /\u6df1 \u5c42/.test(f.raw));
 sayA(Promise.all(cjk.map(f=>Promise.all([readAs(f),readAs(f,{cols:f.size.cols+100,rows:f.size.rows})]))).then(r=>r.length>=1 && r.every(([at,wider],i)=>at===cjk[i].expect && wider!==cjk[i].expect)),"widthDropsPadding","PADDINGKEPT");
+// Windows 10 slips a conceal at a line break when the line before ends in a
+// colour: `\e[8m\e[m\r\n<ATHE:…>` (measured: 3 silent commands in 10 sat to
+// their timeout). Real frames where it happened must end, with their code, and
+// read empty; the repair keeps every offset (same length).
+const slipped=frames.filter(f=>/\x1b\[8m\x1b\[0?m\r\n<ATHE:/.test(f.raw));
+const cs=require("'"$RP"'/packages/core/dist/conscreen.js");
+sayA(Promise.all(slipped.map(f=>ps.psReadFrame(f.raw,f.nonce,f.size,f.command).then(r=>r.closed && r.output==="" && ps.psFindEnd(f.raw,f.nonce)===0)))
+  .then(r=>r.length>=2 && r.every(Boolean) && slipped.every(f=>cs.repairConceal(f.raw).length===f.raw.length)),"concealSlipRepaired","SLIPHANGS");
 // poll, followed through every real frame at many points: the pieces join to
 // exactly the output, never the typed echo and never a line twice.
 sayA((async()=>{
@@ -1002,6 +1012,18 @@ try { a.parseOsOption("windwos"); out.push("TYPOACCEPTED"); } catch(e){ say(e.co
   fs.appendFileSync(log, C8+"<ATHS:"+pn2+">"+C28+"\r\nrow 1\r\nrow 2\r\n"+C8+"<ATHE:"+pn2+":0>"+C28+"\r\n");
   const pr2=await a.poll("wg",pn2,p1);
   say(pr1.captureIncomplete===true && pr1.captureRepainted===true && !pr2.captureIncomplete && !pr2.captureRepainted,"pollFlagsRepaint","POLLREPLAYSILENT:"+[pr1.captureRepainted,pr2.captureRepainted].join("|"));
+  // A PowerShell command is timed by the shell, as `date` times a POSIX one: the
+  // prompt from PowerShell history for a typed line, the wrapper by itself, both
+  // in the cwd record (a record of its own let Windows 10 drop a marker conceal).
+  // Reported exact; absent, nothing invented.
+  const pn3="aaaabbbb0003", pn4="aaaabbbb0004";
+  fs.appendFileSync(log, C8+"<ATHS:"+pn3+">"+C28+"\r\ntimed\r\n"+E+"]777;ath;cwd;"+pn3+";"+Buffer.from("C:\\x").toString("base64")+";44\x07"+C8+"<ATHE:"+pn3+":0>"+C28+"\r\n");
+  fs.appendFileSync(log, C8+"<ATHS:"+pn4+">"+C28+"\r\nuntimed\r\n"+C8+"<ATHE:"+pn4+":0>"+C28+"\r\n");
+  const o3=await a.commandOutcome("wg",pn3), o4=await a.commandOutcome("wg",pn4);
+  const pd3=await a.poll("wg",pn3,0);
+  say(o3.seconds===44 && pd3.elapsedSeconds===44 && pd3.elapsedExact===true && o4.finished && o4.seconds===undefined &&
+      /\$agent -and \$hnew\) \{ .;. \+ \[int\]\(\$hl\.EndExecutionTime - \$hl\.StartExecutionTime\)/.test(ps.psHooksScript()) && /\[int\]\(\(Get-Date\) - \$__ath_t0\)\.TotalSeconds\); __ath_envreport \$__ath_id/.test(ps.psHooksScript()) && !/ath;dur;|.dur;./.test(ps.psHooksScript()),
+      "windowsTimesItself","DURATIONGUESSED:"+[o3.seconds,pd3.elapsedSeconds,pd3.elapsedExact,o4.seconds].join("|"));
   // The safety property PowerShell sessions rest on: NOTHING POSIX is typed into
   // them. The self-heal exists to type the POSIX helper into whatever shell it
   // finds, so a Windows session whose hooks do not answer must refuse instead.
@@ -1032,7 +1054,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 
