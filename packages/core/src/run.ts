@@ -1335,6 +1335,23 @@ export async function run(
   );
 }
 
+/**
+ * The session, looked at again if it reads as waiting at a prompt.
+ *
+ * A prompt the pane showed a moment ago may already be gone: Ctrl-C, which the
+ * refusal itself suggests, takes the shell a beat to redraw. An agent that did
+ * exactly that and ran at once was refused a second time (seen on Windows 10).
+ * So a waiting prompt is confirmed over two seconds before anything is refused;
+ * one that is really there is refused as before, only later.
+ */
+async function settledFromPrompt(clean: string, session: Session): Promise<Session> {
+  for (let i = 0; i < 8 && session.state === 'needs-input'; i++) {
+    await sleep(250);
+    session = await get(clean);
+  }
+  return session;
+}
+
 async function runLocked(
   clean: string,
   command: string,
@@ -1358,6 +1375,7 @@ async function runLocked(
   // --wait, the one remedy offered, blocks until its timeout because nothing
   // will move until a human types — while nobody has told the human. An agent
   // that follows the advice burns its timeout and reports the session as stuck.
+  session = await settledFromPrompt(clean, session);
   if (session.state === 'needs-input') {
     throw new AthError(
       'needs_human',
@@ -2624,6 +2642,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     }
     // Same distinction as `run`: a prompt is not a busy command, and telling a
     // caller to wait it out is the one piece of advice that cannot work.
+    session = await settledFromPrompt(clean, session);
     if (session.state === 'needs-input') {
       throw new AthError(
         'needs_human',
