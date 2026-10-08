@@ -1587,6 +1587,7 @@ async function runLocked(
       // it again sends C-e/C-u to a shell that may still be starting, which
       // echoes them as a literal `^E^U` into the shared console.
       await sendLine(clean, bare as string, { clearLine: false });
+      if (win) await setMeta(clean, 'echo', `${nonce} ${bare}`).catch(() => undefined);
     } else if (win) {
       // PowerShell's tag function and wrapper are installed together, so a
       // shell that does not answer the tag has neither — and there is nothing
@@ -2687,6 +2688,7 @@ export async function start(name: string, command: string): Promise<StartResult>
       framed = await awaitTagAck(clean, nonce, session.remote ? 4000 : 1500);
       if (!framed) framed = await awaitTagAck(clean, nonce, 1500);
       if (framed) await sendLine(clean, bare);
+      if (framed && win) await setMeta(clean, 'echo', `${nonce} ${bare}`).catch(() => undefined);
       // Same as `run`: PowerShell has nothing safe to fall back to.
       else if (win) throw windowsHooksMissing(clean);
     }
@@ -3017,7 +3019,12 @@ export async function poll(
     const window = await readLogRange(log, startPhys, Math.max(0, size - startPhys));
     const text = window.toString('utf8');
     const sinceIdx = window.subarray(0, at.physical - startPhys).toString('utf8').length;
-    const read = await psPollFrame(text, sinceIdx, handle, screenOf(now), now?.lastCommand);
+    // The typed line exactly as sent, to tell its echo from output. `last_cmd`
+    // is shortened past 200 characters for display, and a shortened line never
+    // matched: the echo of a long command came back as output.
+    const echo = await readMeta(clean, 'echo').catch(() => '');
+    const typed = echo.startsWith(`${handle} `) ? echo.slice(handle.length + 1) : now?.lastCommand;
+    const read = await psPollFrame(text, sinceIdx, handle, screenOf(now), typed);
     output = read.output;
     sliceRepainted = read.changed;
   } else {
