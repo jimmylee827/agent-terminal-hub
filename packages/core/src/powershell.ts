@@ -178,6 +178,18 @@ export function windowsShellOnScreen(screen: string, logTail: string): boolean {
   );
 }
 
+/**
+ * Whether the last hop in `logTail` reached Windows: its ConPTY greeting comes
+ * after the last POSIX marker sentinel (`\x1e`, which ConPTY strips, so none
+ * arrives from the far side). For a Windows program that is still running, when
+ * there is no prompt on the screen to see.
+ */
+export function windowsGreetedLast(logTail: string): boolean {
+  let greeted = logTail.lastIndexOf(CONPTY_HELLO);
+  for (const m of logTail.matchAll(new RegExp(CONHOST_TITLE_RE.source, 'gi'))) greeted = Math.max(greeted, m.index ?? -1);
+  return greeted >= 0 && greeted > logTail.lastIndexOf('\u001e');
+}
+
 const WINDOWS_PROMPT_RE = /(?:^|\s)(?:PS )?[A-Za-z]:\\[^\n<>|"]*>$/;
 
 /**
