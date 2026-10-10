@@ -1,35 +1,139 @@
 {
-  "note": "What must be verified before a change is called done. Targets are KINDS of machine; which of your hosts is which lives in .verify/targets.json (never committed: the repository is public). A target is verified for a commit when a gate record for that exact tree shows every listed section VALID and green. scripts/done-check.js reads this; scripts/verify.sh writes the records.",
+  "note": "What must be verified before a change is called done. Targets are KINDS of machine; which of your hosts is which lives in .verify/targets.json (never committed: the repository is public). A target is verified for a commit when a gate record for that exact tree shows every listed section VALID and green. scripts/done-check.js reads this; scripts/verify.sh writes the records. A remote target verified on an earlier commit is CARRIED to this one when nothing in `product` or its own `tests` changed since (done-check reports it as carried, with the commit). Mac local is never carried.",
+  "product": [
+    "packages/**",
+    "package.json",
+    "package-lock.json",
+    "tsconfig*.json"
+  ],
   "targets": {
     "mac-local": {
-      "sections": ["NESTING", "CONTRACT", "REGRESSION", "LOCAL"],
-      "how": "verify.sh --local"
+      "sections": [
+        "NESTING",
+        "CONTRACT",
+        "REGRESSION",
+        "LOCAL"
+      ],
+      "how": "verify.sh --local",
+      "carry": false
     },
     "linux-remote": {
-      "sections": ["REMOTE"],
-      "how": "verify.sh --remote <linux host>"
+      "sections": [
+        "REMOTE"
+      ],
+      "how": "verify.sh --remote <linux host>",
+      "tests": [
+        "scripts/verify.sh"
+      ]
     },
     "windows-11": {
-      "sections": ["WINDOWS"],
-      "how": "verify.sh --remote-windows <Windows 11 test host> (full battery, stress included)"
+      "sections": [
+        "WINDOWS"
+      ],
+      "how": "verify.sh --remote-windows <Windows 11 test host> (full battery, stress included)",
+      "tests": [
+        "scripts/conpty-probe.js",
+        "scripts/fixtures/**"
+      ]
     },
     "windows-10": {
-      "sections": ["WINDOWS"],
+      "sections": [
+        "WINDOWS"
+      ],
       "how": "verify.sh --remote-windows <Windows 10 host> --windows-light, or a recorded live check (done-check.js --note). Only production machines run Windows 10 here, so light only, and only when the user allows it.",
-      "mayBeGap": true
+      "mayBeGap": true,
+      "tests": [
+        "scripts/conpty-probe.js",
+        "scripts/fixtures/**"
+      ]
     }
   },
   "scenarios": [
-    { "id": "exit codes and output", "targets": ["mac-local", "linux-remote", "windows-11", "windows-10"] },
-    { "id": "multi-line and long commands", "targets": ["mac-local", "linux-remote", "windows-11", "windows-10"] },
-    { "id": "silent commands", "targets": ["mac-local", "windows-11", "windows-10"] },
-    { "id": "start / poll / wait", "targets": ["mac-local", "linux-remote", "windows-11", "windows-10"] },
-    { "id": "prompts park; Ctrl-C then run", "targets": ["mac-local", "windows-11", "windows-10"] },
-    { "id": "full screen and wrapping (ConPTY)", "targets": ["windows-11", "windows-10"] },
-    { "id": "resize before and during a command", "targets": ["mac-local", "windows-11", "windows-10"] },
-    { "id": "reconnect keeps cwd and env", "targets": ["linux-remote", "windows-11", "windows-10"] },
-    { "id": "hand-typed ssh into Windows", "targets": ["windows-11", "windows-10"] },
-    { "id": "Windows PowerShell 5.1 and 7", "targets": ["windows-11", "windows-10"] },
-    { "id": "stress (console starved)", "targets": ["windows-11"] }
+    {
+      "id": "exit codes and output",
+      "targets": [
+        "mac-local",
+        "linux-remote",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "multi-line and long commands",
+      "targets": [
+        "mac-local",
+        "linux-remote",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "silent commands",
+      "targets": [
+        "mac-local",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "start / poll / wait",
+      "targets": [
+        "mac-local",
+        "linux-remote",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "prompts park; Ctrl-C then run",
+      "targets": [
+        "mac-local",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "full screen and wrapping (ConPTY)",
+      "targets": [
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "resize before and during a command",
+      "targets": [
+        "mac-local",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "reconnect keeps cwd and env",
+      "targets": [
+        "linux-remote",
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "hand-typed ssh into Windows",
+      "targets": [
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "Windows PowerShell 5.1 and 7",
+      "targets": [
+        "windows-11",
+        "windows-10"
+      ]
+    },
+    {
+      "id": "stress (console starved)",
+      "targets": [
+        "windows-11"
+      ]
+    }
   ]
 }

@@ -4209,7 +4209,7 @@ done
 # has a gate record for exactly the committed tree, built fresh, unchanged
 # during the run, each section VALID and green. Proven on fake records.
 DSELF="$(node "$RP/scripts/done-check.js" --selftest 2>&1)"
-for w in allVerifiedIsDone windows10GapDeclared liveCheckFillsGap invalidIsNotGreen staleBuildIgnored changedTreeIgnored otherTreeIgnored uncommittedIsNotDone noteCannotReplaceGate; do
+for w in allVerifiedIsDone windows10GapDeclared liveCheckFillsGap invalidIsNotGreen staleBuildIgnored changedTreeIgnored otherTreeIgnored macLocalNeverCarried docsChangeCarries ownTestChangeBlocks productChangeBlocks onlyVerifiedCarries uncommittedIsNotDone noteCannotReplaceGate; do
   chk "done-check: $w" "yes" "$(printf '%s' "$DSELF" | grep -qw "$w" && echo yes || echo no)"
 done
 

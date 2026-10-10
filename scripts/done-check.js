@@ -128,6 +128,40 @@ function lastVerified(root, target, matrix, hosts) {
   return undefined;
 }
 
+/** A glob from test-matrix.json ("packages/**", "tsconfig*.json") as a regex. */
+function globRe(glob) {
+  const body = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*');
+  return new RegExp(`^${body}$`);
+}
+
+/**
+ * Carry a remote target's verification from an earlier commit: the newest
+ * ancestor it was verified on by the gate, if nothing in `product` or the
+ * target's own `tests` changed between that commit and HEAD. Mac local is never
+ * carried; it is cheap and covers everything.
+ */
+function carryFrom(root, target, matrix, hosts) {
+  const spec = matrix.targets[target];
+  if (spec.carry === false) return undefined;
+  let log = [];
+  try {
+    log = git(root, 'log', '--format=%H %T', '-200').split('\n').map((l) => l.split(' ')).slice(1);
+  } catch {}
+  for (const [commit, tree] of log) {
+    if (verdictFor(root, tree, matrix, hosts).targets[target]?.state !== 'verified') continue;
+    let changed = [];
+    try {
+      changed = git(root, 'diff', '--name-only', commit, 'HEAD').split('\n').filter(Boolean);
+    } catch {
+      return undefined;
+    }
+    const guards = [...(matrix.product ?? []), ...(spec.tests ?? [])].map(globRe);
+    const blocking = changed.filter((f) => guards.some((re) => re.test(f)));
+    return blocking.length ? { commit: commit.slice(0, 7), blocking } : { commit: commit.slice(0, 7), changed };
+  }
+  return undefined;
+}
+
 function check(root, { quiet = false } = {}) {
   const matrix = JSON.parse(fs.readFileSync(path.join(root, 'scripts', 'test-matrix.json'), 'utf8'));
   const hostsFile = path.join(root, '.verify', 'targets.json');
@@ -141,11 +175,20 @@ function check(root, { quiet = false } = {}) {
   if (tree !== headTree) reasons.push('the working tree has uncommitted changes: commit them, then verify that commit');
   if (!fs.existsSync(hostsFile)) reasons.push('no .verify/targets.json: remote hosts cannot be credited to a target (see scripts/verify-targets.example.json)');
   const { targets, skipped } = verdictFor(root, headTree, matrix, hosts);
+  for (const [t, v] of Object.entries(targets)) {
+    if (v.state === 'verified' || v.state === 'live-check') continue;
+    const c = carryFrom(root, t, matrix, hosts);
+    if (c && !c.blocking) {
+      v.state = 'carried';
+      v.carried = c;
+    } else if (c) v.blockedCarry = c;
+  }
   const out = [];
   out.push(`done-check for ${head.slice(0, 7)} (tree ${headTree.slice(0, 7)})`);
   for (const [t, v] of Object.entries(targets)) {
     const how = matrix.targets[t].how;
     if (v.state === 'verified') out.push(`  verified    ${t}`);
+    else if (v.state === 'carried') out.push(`  carried     ${t}: verified at ${v.carried.commit}; nothing it depends on changed since (${v.carried.changed.length} file(s), none product or its tests)`);
     else if (v.state === 'live-check') out.push(`  live check  ${t}: ${v.note.map((n) => n.note).join('; ')}`);
     else if (v.state === 'gap') {
       const last = lastVerified(root, t, matrix, hosts);
@@ -155,6 +198,7 @@ function check(root, { quiet = false } = {}) {
       out.push(`  MISSING     ${t}: needs ${v.missing.join(', ')} VALID and green on this tree — ${how}`);
       reasons.push(`${t} not verified on this tree`);
     }
+    if (v.blockedCarry) out.push(`              (not carried from ${v.blockedCarry.commit}: ${v.blockedCarry.blocking.slice(0, 3).join(', ')}${v.blockedCarry.blocking.length > 3 ? ', …' : ''} changed)`);
     for (const b of v.bad) out.push(`              (a record shows ${b})`);
   }
   for (const r of skipped) {
@@ -162,7 +206,7 @@ function check(root, { quiet = false } = {}) {
   }
   out.push('  scenarios:');
   for (const sc of matrix.scenarios) {
-    const cells = sc.targets.map((t) => `${t}=${{ verified: 'ok', 'live-check': 'live', gap: 'GAP', missing: 'NO' }[targets[t].state]}`);
+    const cells = sc.targets.map((t) => `${t}=${{ verified: 'ok', carried: 'carried', 'live-check': 'live', gap: 'GAP', missing: 'NO' }[targets[t].state]}`);
     out.push(`    ${sc.id.padEnd(38)} ${cells.join('  ')}`);
   }
   let code;
@@ -249,8 +293,34 @@ function selftest() {
     clear();
     record([...local, 'REMOTE lin\tlin\tok', 'WINDOWS w11\tw11\tok'], { tree: 'f'.repeat(40) });
     say(code() === 1, 'otherTreeIgnored');
+    // Carrying forward: every target verified on this commit, then new commits.
     clear();
-    record([...local, 'REMOTE lin\tlin\tok', 'WINDOWS w11\tw11\tok']);
+    record([...local, 'REMOTE lin\tlin\tok', 'WINDOWS w11\tw11\tok', 'WINDOWS w10 (light)\tw10\tok']);
+    const commitFile = (file, text) => {
+      fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      fs.writeFileSync(path.join(dir, file), text);
+      sh('add', '-A');
+      sh('commit', '-qm', file);
+    };
+    const localNow = () => record(local, { tree: git(dir, 'rev-parse', 'HEAD^{tree}') });
+    const stateOf = (t) => check(dir, { quiet: true }).out.split('\n').find((l) => l.includes(` ${t}`) && !l.includes('='));
+    commitFile('README.md', 'docs only\n');
+    say(code() === 1 && /MISSING\s+mac-local/.test(stateOf('mac-local')), 'macLocalNeverCarried');
+    localNow();
+    say(code() === 0 && /carried\s+linux-remote/.test(stateOf('linux-remote')) && /carried\s+windows-10/.test(stateOf('windows-10')), 'docsChangeCarries');
+    commitFile('scripts/conpty-probe.js', '// test changed\n');
+    localNow();
+    say(/carried\s+linux-remote/.test(stateOf('linux-remote')) && /MISSING\s+windows-11/.test(stateOf('windows-11')) && /GAP\s+windows-10/.test(stateOf('windows-10')), 'ownTestChangeBlocks');
+    commitFile('packages/core/src/x.ts', 'export {}\n');
+    localNow();
+    say(code() === 1 && /MISSING\s+linux-remote/.test(stateOf('linux-remote')), 'productChangeBlocks');
+    // A docs-only commit on top of an UNVERIFIED product change: the last real
+    // verification is behind that product change, so nothing may carry.
+    commitFile('NOTES.md', 'more docs\n');
+    localNow();
+    say(/MISSING\s+linux-remote/.test(stateOf('linux-remote')) && /MISSING\s+windows-11/.test(stateOf('windows-11')), 'onlyVerifiedCarries');
+    clear();
+    record([...local, 'REMOTE lin\tlin\tok', 'WINDOWS w11\tw11\tok'], { tree: git(dir, 'rev-parse', 'HEAD^{tree}') });
     fs.writeFileSync(path.join(dir, 'a.txt'), 'two\n');
     say(code() === 1, 'uncommittedIsNotDone');
     // Clean again, so a refusal below can only come from the rule it tests.
