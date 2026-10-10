@@ -927,13 +927,17 @@ say(deepOk && !!cwdB64 && Buffer.from(cwdB64,"base64").toString("utf8")===deep,"
 // the hub with their position records. Every command prints something known.
 const frames=JSON.parse(fs.readFileSync("'"$RP"'/scripts/fixtures/conpty-screens.json","utf8")).frames;
 const readAs=(f,size)=>ps.psReadFrame(f.raw,f.nonce,size||f.size,f.command===null?undefined:f.command).then(r=>r.output);
-sayA(Promise.all(frames.map(f=>readAs(f).then(o=>o===f.expect?"":f.name))).then(bad=>frames.length>=28 && new Set(frames.map(f=>f.host)).size>=2 && bad.every(b=>!b)),"screensOnRealFrames","SCREENS");
+// What a frame must read as: its truth, or for a reviewed, documented ambiguity
+// (knownLimit) exactly what the reader returns today, so a change either way
+// is noticed. A frame whose reading differs with no reviewed reason fails.
+const want=(f)=>f.knownLimit ? f.reads : f.expect;
+sayA(Promise.all(frames.map(f=>readAs(f).then(o=>o===want(f)?"":f.name))).then(bad=>frames.length>=60 && new Set(frames.map(f=>f.host)).size>=2 && bad.every(b=>!b)),"screensOnRealFrames","SCREENS");
 // Each kind of real frame is there and reads right: cursor-forward, runs of
 // spaces, a repaint after the start, a silent command. Padding before a wide
 // wrap is dropped only at the true width: at another, the frame reads wrong.
 const repainted=frames.filter(f=>/\x1b\[\??25l(?:\x1b\[[0-9;]*m)*\x1b\[H/.test(f.raw.slice(f.raw.indexOf("<ATHS:"+f.nonce))));
-sayA(Promise.all(frames.filter(f=>/\x1b\[\d+C/.test(f.raw)).map(f=>readAs(f).then(o=>o===f.expect))).then(r=>r.length>=4 && r.every(Boolean)),"cursorForwardKeptAsSpaces","SPACESLOST");
-sayA(Promise.all(repainted.map(f=>readAs(f).then(o=>o===f.expect))).then(r=>r.length>=3 && r.every(Boolean)),"repaintAfterStartReadRight","REPAINTMISREAD");
+sayA(Promise.all(frames.filter(f=>/\x1b\[\d+C/.test(f.raw)).map(f=>readAs(f).then(o=>o===want(f)))).then(r=>r.length>=4 && r.every(Boolean)),"cursorForwardKeptAsSpaces","SPACESLOST");
+sayA(Promise.all(repainted.map(f=>readAs(f).then(o=>o===want(f)))).then(r=>r.length>=3 && r.every(Boolean)),"repaintAfterStartReadRight","REPAINTMISREAD");
 sayA(Promise.all(frames.filter(f=>/native exit/.test(f.name)).map(f=>readAs(f))).then(r=>r.length>=2 && r.every(o=>o==="")),"silentStaysEmpty","ECHODEBRIS");
 const cjk=frames.filter(f=>/fresh screen: wide CJK/.test(f.name) && /\u6df1 \u5c42/.test(f.raw));
 sayA(Promise.all(cjk.map(f=>Promise.all([readAs(f),readAs(f,{cols:f.size.cols+100,rows:f.size.rows})]))).then(r=>r.length>=1 && r.every(([at,wider],i)=>at===cjk[i].expect && wider!==cjk[i].expect)),"widthDropsPadding","PADDINGKEPT");
@@ -945,6 +949,12 @@ const slipped=frames.filter(f=>/\x1b\[8m\x1b\[0?m\r\n<ATHE:/.test(f.raw));
 const cs=require("'"$RP"'/packages/core/dist/conscreen.js");
 sayA(Promise.all(slipped.map(f=>ps.psReadFrame(f.raw,f.nonce,f.size,f.command).then(r=>r.closed && r.output==="" && ps.psFindEnd(f.raw,f.nonce)===0)))
   .then(r=>r.length>=2 && r.every(Boolean) && slipped.every(f=>cs.repairConceal(f.raw).length===f.raw.length)),"concealSlipRepaired","SLIPHANGS");
+// Windows 10 at the edge of the pane, recorded on real hardware: every line length
+// around one and two widths, Chinese meeting the edge at every column, silent
+// commands repeated. Each known limit carries its reason and still reads as the
+// truth would NOT (or it is no longer a limit, and the fixture says so wrongly).
+const edges=frames.filter(f=>f.set==="edges"), limits=frames.filter(f=>f.knownLimit);
+say(edges.length>=30 && limits.length>=3 && limits.every(f=>f.reads!==f.expect && f.knownLimit.length>40) && frames.every(f=>f.reads===undefined || f.knownLimit),"windows10EdgesRecorded","EDGESUNREVIEWED");
 // poll, followed through every real frame at many points: the pieces join to
 // exactly the output, never the typed echo and never a line twice.
 sayA((async()=>{
@@ -952,7 +962,7 @@ sayA((async()=>{
     const pieces=[]; let since=0;
     const cuts=[...Array(9).keys()].map(i=>Math.floor((i+1)*f.raw.length/10)).concat(f.raw.length);
     for (const c of cuts) { const p=await ps.psPollFrame(f.raw.slice(0,c),since,f.nonce,f.size,f.command===null?undefined:f.command); if (p.output) pieces.push(p.output); since=c; }
-    if (pieces.join("\n")!==f.expect) return false;
+    if (pieces.join("\n")!==want(f)) return false;
   }
   return true;
 })(),"pollJoinsExactly","POLLPIECES");
@@ -1093,7 +1103,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 

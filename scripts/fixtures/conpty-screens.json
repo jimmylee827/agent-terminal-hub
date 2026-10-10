@@ -11,7 +11,8 @@
       "nonce": "31308d2e57b8",
       "command": "cmd /c exit 3",
       "raw": "\u001b]777;ath;pos;31308d2e57b8;7;30;26200\u0007\u001b[m\u001b[8m<ATHE:h2:0><ATHS:31308d2e57b8>\u001b[28m\r\nPS C:\\Users\\userx> \u001b[?25l\u001b[93mcmd \u001b[37m/c exit \u001b[97m3\r\n\u001b[?25h\u001b[m\u001b]777;ath;cwd;31308d2e57b8;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h3;9;30;26200\u0007\u001b[8m<ATHE:31308d2e57b8:3><ATHS:h3>\u001b[28m\r\nPS C:\\Users\\ji",
-      "expect": ""
+      "expect": "",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), fresh screen: cmdlet error",
@@ -23,7 +24,8 @@
       "nonce": "fae7b8c5f1d8",
       "command": "Get-Item C:\\no\\such\\ath-path",
       "raw": "\u001b]777;ath;pos;fae7b8c5f1d8;11;30;26200\u0007\u001b[m\u001b[8m<ATHE:h3:0><ATHS:fae7b8c5f1d8>\u001b[28m\r\nPS C:\\Users\\userx> \u001b[?25l\u001b[93mGet-Item \u001b[37mC:\\no\\such\\ath-path\r\n\u001b[?25h\u001b[m\u001b[31m\u001b[1mGet-Item: Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\r\n\u001b]777;ath;cwd;fae7b8c5f1d8;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h4;14;30;26200\u0007\u001b[m\u001b[8m<ATHE:fae7b8c5f1d8:1><ATHS:h4>\u001b[28m\r\nPS C:\\Users\\ji",
-      "expect": "Get-Item: Cannot find path 'C:\\no\\such\\ath-path' because it does not exist."
+      "expect": "Get-Item: Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), fresh screen: table",
@@ -35,7 +37,8 @@
       "nonce": "d2c9e55d7943",
       "command": "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}",
       "raw": "\u001b]777;ath;pos;d2c9e55d7943;16;30;26200\u0007\u001b[m\u001b[8m<ATHE:h4:0><ATHS:d2c9e55d7943>\u001b[28m\r\nPS C:\\Users\\userx> \u001b[?25l\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'x'\u001b[37m;B\u001b[90m=\u001b[36m'yy'\u001b[37m}\u001b[90m,\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'zzz'\u001b[37m;B\u001b[90m=\u001b[36m'w'\u001b[37m}\u001b[?25h\u001b[m\r\n\u001b]777;ath;cwd;d2c9e55d7943;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h5;24;30;26200\u0007\u001b[?25l\u001b[32m\u001b[1m\r\nA   B\r\n-  \u001b[m \u001b[32m\u001b[1m-\u001b[m\r\nx   yy\r\nzzz w\u001b[8m\u001b[25;1H<ATHE:d2c9e55d7943:0><ATHS:h5>\u001b[28m\r\nPS C:\\Users\\ji",
-      "expect": "A   B\n-   -\nx   yy\nzzz w"
+      "expect": "A   B\n-   -\nx   yy\nzzz w",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), fresh screen: multi-line, wrapped",
@@ -47,7 +50,8 @@
       "nonce": "fa7946f30ec6",
       "command": null,
       "raw": "\u001b]777;ath;pos;fa7946f30ec6;26;19;26200\u0007\u001b]777;ath;cwd;fa7946f30ec6;QzpcVXNlcnNcamltbXk=\u0007\u001b[m\u001b[8m<ATHS:fa7946f30ec6>\u001b[28m\r\nl1\r\nl2\r\n\u001b]777;ath;cwd;h5;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h6;30;20;26200\u0007\u001b[8m<ATHE:fa7946f30ec6:0>\r\n<ATHE:h5:0><ATHS:h6>\u001b[28m\r\nPS C:\\Users\\ji",
-      "expect": "l1\nl2"
+      "expect": "l1\nl2",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), fresh screen: long ASCII line",
@@ -59,7 +63,8 @@
       "nonce": "214635e6c018",
       "command": "'a' * 450",
       "raw": "\u001b]777;ath;pos;214635e6c018;32;30;26200\u0007\u001b[8m<ATHE:h6:0><ATHS:214635e6c018>\u001b[28m\r\nPS C:\\Users\\userx> \u001b[?25l\u001b[36m'a' \u001b[90m* \u001b[97m450\u001b[?25h\u001b[m\r\n\u001b]777;ath;cwd;214635e6c018;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h7;37;30;26200\u0007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u001b[8m\r\n<ATHE:214635e6c018:0><ATHS:h7>\u001b[28m\r\nPS C:\\Users\\ji",
-      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), fresh screen: wide CJK line",
@@ -71,7 +76,8 @@
       "nonce": "e0c3da9c63b5",
       "command": null,
       "raw": "\u001b]777;ath;pos;e0c3da9c63b5;39;19;26200\u0007\u001b[m\u001b[8m\r\n<ATHS:e0c3da9c63b5>\r\n\u001b]777;ath;cwd;e0c3da9c63b5;QzpcVXNlcnNcamltbXk=\u0007\u001b[28mC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 层目录深层目录深层目录深层目录深层目录深层目录\r\n\u001b]777;ath;cwd;h7;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h8;43;20;26200\u0007\u001b[8m<ATHE:e0c3da9c63b5:0>\r\n<ATHE:h7:0><ATHS:h8>\u001b[28m\r\nPS C:\\Users\\ji",
-      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录"
+      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), fresh screen: exact-width and wrapped lines",
@@ -83,7 +89,8 @@
       "nonce": "28004c287aba",
       "command": "Write-Output ('b' * 200); Write-Output 'c-after'; Write-Output ('d' * 450); Write-Output ('e' * 199); Write-Output 'f-after'",
       "raw": "\u001b]777;ath;pos;28004c287aba;45;30;26200\u0007\u001b[m\u001b[8m<ATHE:h8:0><ATHS:28004c287aba>\u001b[28m\r\nPS C:\\Users\\userx> \u001b[?25l\u001b[93mWrite-Output \u001b[37m(\u001b[36m'b' \u001b[90m* \u001b[97m200\u001b[37m); \u001b[93mWrite-Output \u001b[36m'c-after'\u001b[37m; \u001b[93mWrite-Output \u001b[37m(\u001b[36m'd' \u001b[90m* \u001b[97m450\u001b[37m); \u001b[93mWrite-Output \u001b[37m(\u001b[36m'e' \u001b[90m* \u001b[97m199\u001b[37m); \u001b[93mWrite-Output \u001b[36m'f-after'\r\n\u001b[?25h\u001b[mbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\r\nc-after\r\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\r\n\u001b[49;200Hddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\r\n\u001b[49;200Hddddddddddddddddddddddddddddddddddddddddddddddddddd\r\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \u001b[50;1H\nf-after\r\u001b]777;ath;cwd;28004c287aba;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h9;49;30;26200\u0007\n\u001b[8m<ATHE:28004c287aba:0><ATHS:h9>\u001b[28m\u001b[K\r\nPS C:\\Users",
-      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after"
+      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: native exit, no output",
@@ -95,7 +102,8 @@
       "nonce": "d4aae12588bc",
       "command": "cmd /c exit 3",
       "raw": "\u001b]777;ath;pos;d4aae12588bc;49;31;26200\u0007\u001b[8m<ATHE:h10:0><ATHS:d4aae12588bc>\r\u001b[28m\nPS C:\\Users\\userx> \u001b[?25l\u001b[93mcmd \u001b[37m/c exit \u001b[97m3\u001b[?25h\u001b[m\r\n\u001b]777;ath;cwd;d4aae12588bc;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h11;49;31;26200\u0007\u001b[8m<ATHE:d4aae12588bc:3><ATHS:h11>\r\u001b[28m\nPS C:\\Users\\j",
-      "expect": ""
+      "expect": "",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: cmdlet error",
@@ -107,7 +115,8 @@
       "nonce": "db265ec87693",
       "command": "Get-Item C:\\no\\such\\ath-path",
       "raw": "\u001b[8m<ATHE:h11:0><ATHS:db265ec87693>\u001b]777;ath;pos;db265ec87693;49;31;26200\u0007\u001b[28m\r\nPS C:\\Users\\userx>\u001b[1C\u001b[?25l\u001b[93mGet-Item \u001b[37mC:\\no\\such\\ath-path\u001b[?25h\u001b[m\r\n\u001b[31m\u001b[1mGet-Item: Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\r\u001b]777;ath;cwd;db265ec87693;QzpcVXNlcnNcamltbXk=\u0007\u001b[m\n\u001b]777;ath;pos;h12;49;31;26200\u0007\u001b[8m<ATHE:db265ec87693:1><ATHS:h12>\r\u001b[28m\nPS C:\\Users\\j",
-      "expect": "Get-Item: Cannot find path 'C:\\no\\such\\ath-path' because it does not exist."
+      "expect": "Get-Item: Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: table",
@@ -119,7 +128,8 @@
       "nonce": "3b020c22b516",
       "command": "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}",
       "raw": "\u001b]777;ath;pos;3b020c22b516;49;31;26200\u0007\u001b[8m<ATHE:h12:0><ATHS:3b020c22b516>\r\u001b[28m\nPS C:\\Users\\userx>\u001b[1C\u001b[?25l\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'x'\u001b[37m;B\u001b[90m=\u001b[36m'yy'\u001b[37m}\u001b[90m,\u001b[37m[pscustomobject]@{A\u001b[90m=\u001b[36m'zzz'\u001b[37m;B\u001b[90m=\u001b[36m'w'\u001b[37m}\u001b[?25h\u001b[m\r\n\n\u001b[32m\u001b[1mA   B\u001b[m\u001b[K\r\n\u001b[32m\u001b[1m-  \u001b[m \u001b[32m\u001b[1m-\u001b[m\u001b[K\r\nx   yy\r\nzzz w\r\n\u001b]777;ath;cwd;3b020c22b516;QzpcVXNlcnNcamltbXk=\u0007\n\u001b]777;ath;pos;h13;49;31;26200\u0007\u001b[8m<ATHE:3b020c22b516:0><ATHS:h13>\r\u001b[28m\nPS C:\\Users\\j",
-      "expect": "A   B\n-   -\nx   yy\nzzz w"
+      "expect": "A   B\n-   -\nx   yy\nzzz w",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: multi-line, wrapped",
@@ -131,7 +141,8 @@
       "nonce": "183e5674b384",
       "command": null,
       "raw": "\u001b]777;ath;pos;183e5674b384;49;19;26200\u0007\u001b[8m<ATHS:183e5674b384>\r\u001b[28m\nl1\r\nl2\r\u001b]777;ath;cwd;183e5674b384;QzpcVXNlcnNcamltbXk=\u0007\n\u001b[8m<ATHE:183e5674b384:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h13;QzpcVXNlcnNcamltbXk=\u0007\n\u001b]777;ath;pos;h14;49;22;26200\u0007\u001b[8m<ATHE:h13:0><ATHS:h14>\r\u001b[28m\nPS C:\\Users\\j",
-      "expect": "l1\nl2"
+      "expect": "l1\nl2",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: long ASCII line",
@@ -143,7 +154,8 @@
       "nonce": "19c6d62b7f38",
       "command": "'a' * 450",
       "raw": "\u001b]777;ath;pos;19c6d62b7f38;49;31;26200\u0007\u001b[8m<ATHE:h14:0><ATHS:19c6d62b7f38>\r\u001b[28m\nPS C:\\Users\\userx>\u001b[1C\u001b[?25l\u001b[36m'a' \u001b[90m* \u001b[97m450\u001b[?25h\u001b[m\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\u001b[49;200Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\u001b[49;200Haaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\u001b]777;ath;cwd;19c6d62b7f38;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h15;49;31;26200\u0007\n\u001b[8m<ATHE:19c6d62b7f38:0><ATHS:h15>\u001b[28m\u001b[K\r\nPS C:\\User",
-      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: wide CJK line",
@@ -155,7 +167,8 @@
       "nonce": "b4c487878b9c",
       "command": null,
       "raw": "\u001b]777;ath;pos;b4c487878b9c;49;19;26200\u0007\u001b[8m<ATHS:b4c487878b9c>\r\u001b[28m\nC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 \r\n\u001b[49;200H 层目录深层目录深层目录深层目录深层目录深层目录\r\u001b]777;ath;cwd;b4c487878b9c;QzpcVXNlcnNcamltbXk=\u0007\n\u001b[8m<ATHE:b4c487878b9c:0>\r\u001b]777;ath;cwd;h15;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h16;49;22;26200\u0007\u001b[28m\n\u001b[8m<ATHE:h15:0><ATHS:h16>\u001b[28m\u001b[K\r\nPS C:\\User",
-      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录"
+      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录",
+      "set": "basic"
     },
     {
       "name": "win11 (build 26200), full screen: exact-width and wrapped lines",
@@ -167,7 +180,8 @@
       "nonce": "cb9751c9b419",
       "command": "Write-Output ('b' * 200); Write-Output 'c-after'; Write-Output ('d' * 450); Write-Output ('e' * 199); Write-Output 'f-after'",
       "raw": "\u001b]777;ath;pos;cb9751c9b419;49;31;26200\u0007\u001b[8m<ATHE:h16:0><ATHS:cb9751c9b419>\r\u001b[28m\nPS C:\\Users\\userx>\u001b[1C\u001b[93mW\u001b[m\u001b[?25l\u001b[93m\bWrite-Output \u001b[37m(\u001b[36m'b' \u001b[90m* \u001b[97m200\u001b[37m); \u001b[93mWrite-Output \u001b[36m'c-after'\u001b[37m; \u001b[93mWrite-Output \u001b[37m(\u001b[36m'd' \u001b[90m* \u001b[97m450\u001b[37m); \u001b[93mWrite-Output \u001b[37m(\u001b[36m'e' \u001b[90m* \u001b[97m199\u001b[37m); \u001b[93mWrite-Output \u001b[36m'f-after'\u001b[?25h\u001b[m\r\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\u001b[50;1H\nc-after\r\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\r\n\u001b[49;200Hddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\r\n\u001b[49;200Hddddddddddddddddddddddddddddddddddddddddddddddddddd\r\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\u001b[50;1H\nf-after\r\u001b]777;ath;cwd;cb9751c9b419;QzpcVXNlcnNcamltbXk=\u0007\u001b]777;ath;pos;h17;49;31;26200\u0007\n\u001b[8m<ATHE:cb9751c9b419:0><ATHS:h17>\u001b[28m\u001b[K\r\nPS C:\\User",
-      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after"
+      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: native exit, no output",
@@ -179,7 +193,8 @@
       "nonce": "3e85ba523b41",
       "command": "cmd /c exit 3",
       "raw": "\u001b[8m<ATHE:h2:0><ATHS:3e85ba523b41>\u001b]777;ath;pos;3e85ba523b41;7;30;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx> \u001b[?25l\u001b[93mcmd\u001b[m /c exit \u001b[97m3\r\n\u001b[?25h\u001b[m\u001b]777;ath;cwd;3e85ba523b41;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h3;9;30;19045\u0007\u001b[8m<ATHE:3e85ba523b41:3><ATHS:h3>\u001b[28m\r\nPS C:\\Users\\B8",
-      "expect": ""
+      "expect": "",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: cmdlet error",
@@ -191,7 +206,8 @@
       "nonce": "7f607b965f8a",
       "command": "Get-Item C:\\no\\such\\ath-path",
       "raw": "\u001b[8m<ATHE:h3:0><ATHS:7f607b965f8a>\u001b]777;ath;pos;7f607b965f8a;11;30;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx> \u001b[?25l\u001b[93mGet-Item\u001b[m C:\\no\\such\\ath-path\r\n\u001b[?25h\u001b[91mGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b]777;ath;cwd;7f607b965f8a;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h4;20;30;19045\u0007\u001b[m\u001b[91m\r\nAt line:1 char:1\u001b[m\u001b[92X\u001b[91m\r\n+ Get-Item C:\\no\\such\\ath-path\u001b[m\u001b[78X\u001b[91m\r\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\u001b[78X\u001b[91m\r\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\r\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\u001b[21X\u001b[91m\r\n \u001b[m\u001b[107X\u001b[8m\r\n<ATHE:7f607b965f8a:1><ATHS:h4>\u001b[28m\u001b[78X\r\nPS C:\\Use",
-      "expect": "Get-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\nAt line:1 char:1\n+ Get-Item C:\\no\\such\\ath-path\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand"
+      "expect": "Get-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\nAt line:1 char:1\n+ Get-Item C:\\no\\such\\ath-path\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: table",
@@ -203,7 +219,8 @@
       "nonce": "72974fd033fb",
       "command": "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}",
       "raw": "\u001b]777;ath;pos;72974fd033fb;22;30;19045\u0007\u001b[8m<ATHE:h4:0><ATHS:72974fd033fb>\u001b[28m\r\nPS C:\\Users\\userxx> \u001b[?25l[pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'x'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'yy'\u001b[m}\u001b[90m,\u001b[m[pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'zzz'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'w'\u001b[m}\r\n\u001b[?25h\u001b[25l\u001b]777;ath;cwd;72974fd033fb;QzpcVXNlcnNcQjhVc2Vy\u0007\r\nA   B \r\n-   - \r\nx   yy\r\nzzz w \u001b[32;1H\u001b[?25h\u001b]777;ath;pos;h5;31;30;19045\u0007\u001b[8m<ATHE:72974fd033fb:0><ATHS:h5>\u001b[28m\r\nPS C:\\Users\\B8",
-      "expect": "A   B\n-   -\nx   yy\nzzz w"
+      "expect": "A   B\n-   -\nx   yy\nzzz w",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: multi-line, wrapped",
@@ -215,7 +232,8 @@
       "nonce": "34638fe520ba",
       "command": null,
       "raw": "\u001b]777;ath;pos;34638fe520ba;33;19;19045\u0007\u001b[8m<ATHS:34638fe520ba>\r\n\u001b]777;ath;cwd;34638fe520ba;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b[28ml1\r\nl2\r\n\u001b]777;ath;cwd;h5;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h6;37;20;19045\u0007\u001b[8m<ATHE:34638fe520ba:0>\r\n<ATHE:h5:0><ATHS:h6>\u001b[28m \r\nPS C:\\Users\\B",
-      "expect": "l1\nl2"
+      "expect": "l1\nl2",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: long ASCII line",
@@ -227,7 +245,8 @@
       "nonce": "33063cb41437",
       "command": "'a' * 450",
       "raw": "\u001b[8m<ATHE:h6:0><ATHS:33063cb41437>\u001b]777;ath;pos;33063cb41437;39;30;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx> \u001b[?25l\u001b]777;ath;cwd;33063cb41437;QzpcVXNlcnNcQjhVc2Vy\u0007\rPS C:\\Users\\userxx> \u001b[36m'a'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m\u001b[K\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u001b[K\r\n\u001b[?25h\u001b]777;ath;pos;h7;44;30;19045\u0007\u001b[8m<ATHE:33063cb41437:0><ATHS:h7>\u001b[28m\r\nPS C:\\Users\\B8",
-      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: wide CJK line",
@@ -239,7 +258,8 @@
       "nonce": "bccc253b251a",
       "command": null,
       "raw": "\u001b]777;ath;pos;bccc253b251a;46;19;19045\u0007\u001b[8m<ATHS:bccc253b251a>\u001b[28m\u001b[K\r\nC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深\r\n层目录深层目录深层目录深层目录深层目录深层目录\u001b[K\r\n\u001b]777;ath;cwd;bccc253b251a;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b[8m<ATHE:bccc253b251a:0>\r\u001b]777;ath;cwd;h7;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b[28m\n\u001b[8m<ATHE:h7:0><ATHS:h8>\u001b[28m\u001b[K\u001b]777;ath;pos",
-      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录"
+      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), fresh screen: exact-width and wrapped lines",
@@ -251,7 +271,8 @@
       "nonce": "1aac8c100014",
       "command": "Write-Output ('b' * 200); Write-Output 'c-after'; Write-Output ('d' * 450); Write-Output ('e' * 199); Write-Output 'f-after'",
       "raw": "\u001b]777;ath;pos;1aac8c100014;49;30;19045\u0007\u001b[8m<ATHE:h8:0><ATHS:1aac8c100014>\u001b[28m\r\nPS C:\\Users\\userxx> \u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'b'\u001b[m \u001b[90m*\u001b[m \u001b[97m200\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'c-after'\u001b[m; \u001b[93mWrite-Output\u001b[m (\u001b[36m'd'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m); \u001b[93mWrite-Output\u001b[m (\u001b[36m'e'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'f-after\u001b[?25h\u001b[25l\u001b[m\u001b[8m\u001b[H<ATHE:5424a875fed7:0><ATHS:h2>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 3e85ba523b41 vvv\u001b[K\u001b[8m\r\n<ATHE:h2:0><ATHS:3e85ba523b41>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mcmd\u001b[m /c exit \u001b[97m3\u001b[m\u001b[K\u001b[8m\r\n<ATHE:3e85ba523b41:3><ATHS:h3>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 7f607b965f8a vvv\u001b[K\u001b[8m\r\n<ATHE:h3:0><ATHS:7f607b965f8a>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mGet-Item\u001b[m C:\\no\\such\\ath-path\u001b[K\u001b[91m\r\nGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b[m\u001b[K\u001b[91m\r\nAt line:1 char:1\u001b[m\u001b[K\u001b[91m\r\n+ Get-Item C:\\no\\such\\ath-path\u001b[m\u001b[K\u001b[91m\r\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\u001b[K\u001b[91m\r\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\u001b[m\u001b[K\u001b[91m\r\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\u001b[K\u001b[91m\r\n \u001b[m\u001b[K\u001b[8m\r\n<ATHE:7f607b965f8a:1><ATHS:h4>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 72974fd033fb vvv\u001b[K\u001b[8m\r\n<ATHE:h4:0><ATHS:72974fd033fb>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> [pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'x'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'yy'\u001b[m}\u001b[90m,\u001b[m[pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'zzz'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'w'\u001b[m}\u001b[K\r\n\u001b[K\r\nA   B \u001b[K\r\n-   - \u001b[K\r\nx   yy\u001b[K\r\nzzz w \u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[8m\r\n<ATHE:72974fd033fb:0><ATHS:h5>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> . \u001b[93m__ath\u001b[m 34638fe520ba V3JpdGUtT3V0cHV0IGwxCldyaXRlLU91dHB1dCBsMg==\u001b[K\u001b[8m\r\n<ATHS:34638fe520ba>\u001b[28m\u001b[K\r\nl1\u001b[K\r\nl2\u001b[K\u001b[8m\r\n<ATHE:34638fe520ba:0>\u001b[28m\u001b[K\u001b[8m\r\n<ATHE:h5:0><ATHS:h6>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 33063cb41437 vvv\u001b[K\u001b[8m\r\n<ATHE:h6:0><ATHS:33063cb41437>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[36m'a'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m\u001b[K\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u001b[K\u001b[8m\r\n<ATHE:33063cb41437:0><ATHS:h7>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> . \u001b[93m__ath\u001b[m bccc253b251a J0M6XHhcJyArICgn5rex5bGC55uu5b2VJyAqIDMwKQ==\u001b[K\u001b[8m\r\n<ATHS:bccc253b251a>\u001b[28m\u001b[K\r\nC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 \r\n层目录深层目录深层目录深层目录深层目录深层目录\u001b[K\u001b[8m\r\n<ATHE:bccc253b251a:0>\u001b[28m\u001b[K\u001b[8m\r\n<ATHE:h7:0><ATHS:h8>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 1aac8c100014 vvv\u001b[K\u001b[8m\r\n<ATHE:h8:0><ATHS:1aac8c100014>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mWrite-Output\u001b[m (\u001b[36m'b'\u001b[m \u001b[90m*\u001b[m \u001b[97m200\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'c-after'\u001b[m; \u001b[93mWrite-Output\u001b[m (\u001b[36m'd'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m); \u001b[93mWrite-Output\u001b[m (\u001b[36m'e'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'f-after'\u001b[m\u001b[K\r\n\u001b[K\u001b[?25hbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\r\nc-after\r\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\b\r\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\b\r\ndddddddddddddddddddddddddddddddddddddddddddddddddd\r\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \r\nf-after\r\u001b]777;ath;cwd;1aac8c100014;QzpcVXNlcnNcQjhVc2Vy\u0007\n\u001b[8m<ATHE:1aac8c100014:0><ATHS:h9>\u001b[28m\u001b[K\u001b]777;ath;pos",
-      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after"
+      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: native exit, no output",
@@ -263,7 +284,8 @@
       "nonce": "629b1e886f35",
       "command": "cmd /c exit 3",
       "raw": "\u001b[8m<ATHE:h10:0><ATHS:629b1e886f35>\u001b]777;ath;pos;629b1e886f35;49;31;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx>\u001b[1C\u001b[?25l\u001b[Hfiller 36\u001b[K\r\nfiller 37\u001b[K\r\nfiller 38\u001b[K\r\nfiller 39\u001b[K\r\nfiller 40\u001b[K\r\nfiller 41\u001b[K\r\nfiller 42\u001b[K\r\nfiller 43\u001b[K\r\nfiller 44\u001b[K\r\nfiller 45\u001b[K\r\nfiller 46\u001b[K\r\nfiller 47\u001b[K\r\nfiller 48\u001b[K\r\nfiller 49\u001b[K\r\nfiller 50\u001b[K\r\nfiller 51\u001b[K\r\nfiller 52\u001b[K\r\nfiller 53\u001b[K\r\nfiller 54\u001b[K\r\nfiller 55\u001b[K\r\nfiller 56\u001b[K\r\nfiller 57\u001b[K\r\nfiller 58\u001b[K\r\nfiller 59\u001b[K\r\nfiller 60\u001b[K\r\nfiller 61\u001b[K\r\nfiller 62\u001b[K\r\nfiller 63\u001b[K\r\nfiller 64\u001b[K\r\nfiller 65\u001b[K\r\nfiller 66\u001b[K\r\nfiller 67\u001b[K\r\nfiller 68\u001b[K\r\nfiller 69\u001b[K\r\nfiller 70\u001b[K\r\nfiller 71\u001b[K\r\nfiller 72\u001b[K\r\nfiller 73\u001b[K\r\nfiller 74\u001b[K\r\nfiller 75\u001b[K\r\nfiller 76\u001b[K\r\nfiller 77\u001b[K\r\nfiller 78\u001b[K\r\nfiller 79\u001b[K\r\nfiller 80\u001b[K\u001b[8m\r\n<ATHE:5dc87c919da9:0><ATHS:h10>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 629b1e886f35 vvv\u001b[K\u001b[8m\r\n<ATHE:h10:0><ATHS:629b1e886f35>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mcmd\u001b[m /c exit \u001b[97m3\u001b[m\u001b[K\r\n\u001b[K\u001b[?25h\u001b]777;ath;cwd;629b1e886f35;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h11;49;31;19045\u0007\u001b[8m<ATHE:629b1e886f35:3><ATHS:h11>\u001b[28m\r\nPS C:\\Users\\B",
-      "expect": ""
+      "expect": "",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: cmdlet error",
@@ -275,7 +297,8 @@
       "nonce": "15520422e92c",
       "command": "Get-Item C:\\no\\such\\ath-path",
       "raw": "\u001b[8m<ATHE:h11:0><ATHS:15520422e92c>\u001b]777;ath;pos;15520422e92c;49;31;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx>\u001b[1C\u001b[?25l\u001b[Hfiller 40\u001b[K\r\nfiller 41\u001b[K\r\nfiller 42\u001b[K\r\nfiller 43\u001b[K\r\nfiller 44\u001b[K\r\nfiller 45\u001b[K\r\nfiller 46\u001b[K\r\nfiller 47\u001b[K\r\nfiller 48\u001b[K\r\nfiller 49\u001b[K\r\nfiller 50\u001b[K\r\nfiller 51\u001b[K\r\nfiller 52\u001b[K\r\nfiller 53\u001b[K\r\nfiller 54\u001b[K\r\nfiller 55\u001b[K\r\nfiller 56\u001b[K\r\nfiller 57\u001b[K\r\nfiller 58\u001b[K\r\nfiller 59\u001b[K\r\nfiller 60\u001b[K\r\nfiller 61\u001b[K\r\nfiller 62\u001b[K\r\nfiller 63\u001b[K\r\nfiller 64\u001b[K\r\nfiller 65\u001b[K\r\nfiller 66\u001b[K\r\nfiller 67\u001b[K\r\nfiller 68\u001b[K\r\nfiller 69\u001b[K\r\nfiller 70\u001b[K\r\nfiller 71\u001b[K\r\nfiller 72\u001b[K\r\nfiller 73\u001b[K\r\nfiller 74\u001b[K\r\nfiller 75\u001b[K\r\nfiller 76\u001b[K\r\nfiller 77\u001b[K\r\nfiller 78\u001b[K\r\nfiller 79\u001b[K\r\nfiller 80\u001b[K\u001b[8m\r\n<ATHE:5dc87c919da9:0><ATHS:h10>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 629b1e886f35 vvv\u001b[K\u001b[8m\r\n<ATHE:h10:0><ATHS:629b1e886f35>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mcmd\u001b[m /c exit \u001b[97m3\u001b[m\u001b[K\u001b[8m\r\n<ATHE:629b1e886f35:3><ATHS:h11>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 15520422e92c vvv\u001b[K\u001b[8m\r\n<ATHE:h11:0><ATHS:15520422e92c>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mGet-Item\u001b[m C:\\no\\such\\ath-path\u001b[K\r\n\u001b[K\u001b[?25h\u001b[91mGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b[m\r\n\u001b[91mAt line:1 char:1\u001b[m\u001b[K\r\n\u001b[91m+ Get-Item C:\\no\\such\\ath-path\u001b[m\u001b[K\r\n\u001b[91m+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\u001b[K\r\n\u001b[91m    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\u001b[m\u001b[K\r\n\u001b[91m    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\u001b[K\r\n\u001b[91m \u001b[m\u001b[K\u001b]777;ath;cwd;15520422e92c;QzpcVXNlcnNcQjhVc2Vy\u0007\r\n\u001b[8m<ATHE:15520422e92c:1><ATHS:h12>\u001b[28m\u001b[K\u001b]777;ath;po",
-      "expect": "Get-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\nAt line:1 char:1\n+ Get-Item C:\\no\\such\\ath-path\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand"
+      "expect": "Get-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\nAt line:1 char:1\n+ Get-Item C:\\no\\such\\ath-path\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: table",
@@ -287,7 +310,8 @@
       "nonce": "6fcfa48c18a7",
       "command": "[pscustomobject]@{A='x';B='yy'},[pscustomobject]@{A='zzz';B='w'}",
       "raw": "\u001b[8m<ATHE:h12:0><ATHS:6fcfa48c18a7>\u001b]777;ath;pos;6fcfa48c18a7;49;31;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx>\u001b[1C\u001b[?25l\u001b[Hfiller 51\u001b[K\r\nfiller 52\u001b[K\r\nfiller 53\u001b[K\r\nfiller 54\u001b[K\r\nfiller 55\u001b[K\r\nfiller 56\u001b[K\r\nfiller 57\u001b[K\r\nfiller 58\u001b[K\r\nfiller 59\u001b[K\r\nfiller 60\u001b[K\r\nfiller 61\u001b[K\r\nfiller 62\u001b[K\r\nfiller 63\u001b[K\r\nfiller 64\u001b[K\r\nfiller 65\u001b[K\r\nfiller 66\u001b[K\r\nfiller 67\u001b[K\r\nfiller 68\u001b[K\r\nfiller 69\u001b[K\r\nfiller 70\u001b[K\r\nfiller 71\u001b[K\r\nfiller 72\u001b[K\r\nfiller 73\u001b[K\r\nfiller 74\u001b[K\r\nfiller 75\u001b[K\r\nfiller 76\u001b[K\r\nfiller 77\u001b[K\r\nfiller 78\u001b[K\r\nfiller 79\u001b[K\r\nfiller 80\u001b[K\u001b[8m\r\n<ATHE:5dc87c919da9:0><ATHS:h10>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 629b1e886f35 vvv\u001b[K\u001b[8m\r\n<ATHE:h10:0><ATHS:629b1e886f35>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mcmd\u001b[m /c exit \u001b[97m3\u001b[m\u001b[K\u001b[8m\r\n<ATHE:629b1e886f35:3><ATHS:h11>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 15520422e92c vvv\u001b[K\u001b[8m\r\n<ATHE:h11:0><ATHS:15520422e92c>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mGet-Item\u001b[m C:\\no\\such\\ath-path\u001b[K\u001b[91m\r\nGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b[m\u001b[K\u001b[91m\r\nAt line:1 char:1\u001b[m\u001b[K\u001b[91m\r\n+ Get-Item C:\\no\\such\\ath-path\u001b[m\u001b[K\u001b[91m\r\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\u001b[K\u001b[91m\r\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\u001b[m\u001b[K\u001b[91m\r\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\u001b[K\u001b[91m\r\n \u001b[m\u001b[K\u001b[8m\r\n<ATHE:15520422e92c:1><ATHS:h12>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 6fcfa48c18a7 vvv\u001b[K\u001b[8m\r\n<ATHE:h12:0><ATHS:6fcfa48c18a7>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> [pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'x'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'yy'\u001b[m}\u001b[90m,\u001b[m[pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'zzz'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'w'\u001b[m}\u001b[K\r\n\u001b[K\u001b[?25h\nA   B \r\n-   -\r\nx   yy\r\nzzz w\r\n\n\u001b]777;ath;cwd;6fcfa48c18a7;QzpcVXNlcnNcQjhVc2Vy\u0007\n\u001b]777;ath;pos;h13;49;31;19045\u0007\u001b[8m<ATHE:6fcfa48c18a7:0><ATHS:h13>\u001b[28m\r\nPS C:\\Users\\B",
-      "expect": "A   B\n-   -\nx   yy\nzzz w"
+      "expect": "A   B\n-   -\nx   yy\nzzz w",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: multi-line, wrapped",
@@ -299,7 +323,8 @@
       "nonce": "f6d8104c6d95",
       "command": null,
       "raw": "\u001b]777;ath;pos;f6d8104c6d95;49;19;19045\u0007\u001b[8m<ATHS:f6d8104c6d95>\u001b[28m\r\nl1\r\nl2\r\u001b]777;ath;cwd;f6d8104c6d95;QzpcVXNlcnNcQjhVc2Vy\u0007\n\u001b[8m<ATHE:f6d8104c6d95:0>\u001b[28m\u001b[K\r\n\u001b]777;ath;cwd;h13;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h14;49;22;19045\u0007\u001b[8m<ATHE:h13:0><ATHS:h14>\u001b[28m\r\nPS C:\\Users\\B",
-      "expect": "l1\nl2"
+      "expect": "l1\nl2",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: long ASCII line",
@@ -311,7 +336,8 @@
       "nonce": "f16f68eaec28",
       "command": "'a' * 450",
       "raw": "\u001b[8m<ATHE:h14:0><ATHS:f16f68eaec28>\u001b]777;ath;pos;f16f68eaec28;49;31;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx>\u001b[1C\u001b[?25l\u001b[Hfiller 68\u001b[K\r\nfiller 69\u001b[K\r\nfiller 70\u001b[K\r\nfiller 71\u001b[K\r\nfiller 72\u001b[K\r\nfiller 73\u001b[K\r\nfiller 74\u001b[K\r\nfiller 75\u001b[K\r\nfiller 76\u001b[K\r\nfiller 77\u001b[K\r\nfiller 78\u001b[K\r\nfiller 79\u001b[K\r\nfiller 80\u001b[K\u001b[8m\r\n<ATHE:5dc87c919da9:0><ATHS:h10>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 629b1e886f35 vvv\u001b[K\u001b[8m\r\n<ATHE:h10:0><ATHS:629b1e886f35>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mcmd\u001b[m /c exit \u001b[97m3\u001b[m\u001b[K\u001b[8m\r\n<ATHE:629b1e886f35:3><ATHS:h11>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 15520422e92c vvv\u001b[K\u001b[8m\r\n<ATHE:h11:0><ATHS:15520422e92c>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mGet-Item\u001b[m C:\\no\\such\\ath-path\u001b[K\u001b[91m\r\nGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b[m\u001b[K\u001b[91m\r\nAt line:1 char:1\u001b[m\u001b[K\u001b[91m\r\n+ Get-Item C:\\no\\such\\ath-path\u001b[m\u001b[K\u001b[91m\r\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\u001b[K\u001b[91m\r\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\u001b[m\u001b[K\u001b[91m\r\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\u001b[K\u001b[91m\r\n \u001b[m\u001b[K\u001b[8m\r\n<ATHE:15520422e92c:1><ATHS:h12>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 6fcfa48c18a7 vvv\u001b[K\u001b[8m\r\n<ATHE:h12:0><ATHS:6fcfa48c18a7>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> [pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'x'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'yy'\u001b[m}\u001b[90m,\u001b[m[pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'zzz'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'w'\u001b[m}\u001b[K\r\n\u001b[K\r\nA   B\u001b[K\r\n-   -\u001b[K\r\nx   yy\u001b[K\r\nzzz w\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[8m\r\n<ATHE:6fcfa48c18a7:0><ATHS:h13>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> . \u001b[93m__ath\u001b[m f6d8104c6d95 V3JpdGUtT3V0cHV0IGwxCldyaXRlLU91dHB1dCBsMg==\u001b[K\u001b[8m\r\n<ATHS:f6d8104c6d95>\u001b[28m\u001b[K\r\nl1\u001b[K\r\nl2\u001b[K\u001b[8m\r\n<ATHE:f6d8104c6d95:0>\u001b[28m\u001b[K\u001b[8m\r\n<ATHE:h13:0><ATHS:h14>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: f16f68eaec28 vvv\u001b[K\u001b[8m\r\n<ATHE:h14:0><ATHS:f16f68eaec28>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[36m'a'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m\u001b[K\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\b\u001b[?25h\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\b\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\u001b]777;ath;cwd;f16f68eaec28;QzpcVXNlcnNcQjhVc2Vy\u0007\n\u001b]777;ath;pos;h15;49;31;19045\u0007\u001b[8m<ATHE:f16f68eaec28:0><ATHS:h15>\u001b[28m\r\nPS C:\\Users\\B",
-      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: wide CJK line",
@@ -323,7 +349,8 @@
       "nonce": "b46c90ad964d",
       "command": null,
       "raw": "\u001b]777;ath;pos;b46c90ad964d;49;19;19045\u0007\u001b[8m<ATHS:b46c90ad964d>\u001b[28m\r\nC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 \b\r\n层目录深层目录深层目录深层目录深层目录深层目录\r\u001b]777;ath;cwd;b46c90ad964d;QzpcVXNlcnNcQjhVc2Vy\u0007\n\u001b[8m<ATHE:b46c90ad964d:0>\u001b[28m\u001b[K\r\n\u001b]777;ath;cwd;h15;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h16;49;22;19045\u0007\u001b[8m<ATHE:h15:0><ATHS:h16>\u001b[28m\r\nPS C:\\Users\\B",
-      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录"
+      "expect": "C:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), full screen: exact-width and wrapped lines",
@@ -335,7 +362,8 @@
       "nonce": "01842cf7fce0",
       "command": "Write-Output ('b' * 200); Write-Output 'c-after'; Write-Output ('d' * 450); Write-Output ('e' * 199); Write-Output 'f-after'",
       "raw": "\u001b]777;ath;pos;01842cf7fce0;49;31;19045\u0007\u001b[8m<ATHE:h16:0><ATHS:01842cf7fce0>\u001b[28m\r\nPS C:\\Users\\userxx> \u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'b'\u001b[m \u001b[90m*\u001b[m \u001b[97m200\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'c-after'\u001b[m; \u001b[93mWrite-Output\u001b[m (\u001b[36m'd'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m); \u001b[93mWrite-Output\u001b[m (\u001b[36m'e'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'f-after'\u001b[?25h\u001b[25l\u001b[m\u001b[8m\u001b[H<ATHE:5dc87c919da9:0><ATHS:h10>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 629b1e886f35 vvv\u001b[K\u001b[8m\r\n<ATHE:h10:0><ATHS:629b1e886f35>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mcmd\u001b[m /c exit \u001b[97m3\u001b[m\u001b[K\u001b[8m\r\n<ATHE:629b1e886f35:3><ATHS:h11>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 15520422e92c vvv\u001b[K\u001b[8m\r\n<ATHE:h11:0><ATHS:15520422e92c>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mGet-Item\u001b[m C:\\no\\such\\ath-path\u001b[K\u001b[91m\r\nGet-Item : Cannot find path 'C:\\no\\such\\ath-path' because it does not exist.\u001b[m\u001b[K\u001b[91m\r\nAt line:1 char:1\u001b[m\u001b[K\u001b[91m\r\n+ Get-Item C:\\no\\such\\ath-path\u001b[m\u001b[K\u001b[91m\r\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[m\u001b[K\u001b[91m\r\n    + CategoryInfo          : ObjectNotFound: (C:\\no\\such\\ath-path:String) [Get-Item], ItemNotFoundException\u001b[m\u001b[K\u001b[91m\r\n    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetItemCommand\u001b[m\u001b[K\u001b[91m\r\n \u001b[m\u001b[K\u001b[8m\r\n<ATHE:15520422e92c:1><ATHS:h12>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 6fcfa48c18a7 vvv\u001b[K\u001b[8m\r\n<ATHE:h12:0><ATHS:6fcfa48c18a7>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> [pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'x'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'yy'\u001b[m}\u001b[90m,\u001b[m[pscustomobject]@{\u001b[97mA\u001b[90m=\u001b[36m'zzz'\u001b[m;\u001b[97mB\u001b[90m=\u001b[36m'w'\u001b[m}\u001b[K\r\n\u001b[K\r\nA   B\u001b[K\r\n-   -\u001b[K\r\nx   yy\u001b[K\r\nzzz w\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[8m\r\n<ATHE:6fcfa48c18a7:0><ATHS:h13>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> . \u001b[93m__ath\u001b[m f6d8104c6d95 V3JpdGUtT3V0cHV0IGwxCldyaXRlLU91dHB1dCBsMg==\u001b[K\u001b[8m\r\n<ATHS:f6d8104c6d95>\u001b[28m\u001b[K\r\nl1\u001b[K\r\nl2\u001b[K\u001b[8m\r\n<ATHE:f6d8104c6d95:0>\u001b[28m\u001b[K\u001b[8m\r\n<ATHE:h13:0><ATHS:h14>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: f16f68eaec28 vvv\u001b[K\u001b[8m\r\n<ATHE:h14:0><ATHS:f16f68eaec28>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[36m'a'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m\u001b[K\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u001b[K\u001b[8m\r\n<ATHE:f16f68eaec28:0><ATHS:h15>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> . \u001b[93m__ath\u001b[m b46c90ad964d J0M6XHhcJyArICgn5rex5bGC55uu5b2VJyAqIDMwKQ==\u001b[K\u001b[8m\r\n<ATHS:b46c90ad964d>\u001b[28m\u001b[K\r\nC:\\x\\深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 \r\n层目录深层目录深层目录深层目录深层目录深层目录\u001b[K\u001b[8m\r\n<ATHE:b46c90ad964d:0>\u001b[28m\u001b[K\u001b[8m\r\n<ATHE:h15:0><ATHS:h16>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mvvv\u001b[m AGENT INPUT ID: 01842cf7fce0 vvv\u001b[K\u001b[8m\r\n<ATHE:h16:0><ATHS:01842cf7fce0>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx> \u001b[93mWrite-Output\u001b[m (\u001b[36m'b'\u001b[m \u001b[90m*\u001b[m \u001b[97m200\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'c-after'\u001b[m; \u001b[93mWrite-Output\u001b[m (\u001b[36m'd'\u001b[m \u001b[90m*\u001b[m \u001b[97m450\u001b[m); \u001b[93mWrite-Output\u001b[m (\u001b[36m'e'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'f-after'\u001b[m\u001b[K\r\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\r\u001b[?25h\nc-after\r\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\b\r\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\b\r\ndddddddddddddddddddddddddddddddddddddddddddddddddd\r\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \r\nf-after\r\n\u001b]777;ath;cwd;01842cf7fce0;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h17;49;31;19045\u0007\u001b[8m<ATHE:01842cf7fce0:0><ATHS:h17>\u001b[28m\r\nPS C:\\Users\\B",
-      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after"
+      "expect": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nc-after\ndddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\neeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nf-after",
+      "set": "basic"
     },
     {
       "name": "win10 (build 19045), ConPTY slips a conceal at a line break: silent cmdlet 1",
@@ -347,7 +375,8 @@
       "nonce": "60b7cdfae4d8",
       "command": "Get-Date | Out-Null",
       "raw": "\u001b]777;ath;pos;60b7cdfae4d8;14;30;19045\u0007\u001b[8m<ATHE:h4:0><ATHS:60b7cdfae4d8>\u001b[28m\r\nPS C:\\Users\\userxx>\u001b[11X\u001b[1C\u001b[?25l\u001b]777;ath;cwd;60b7cdfae4d8;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h5;16;30;19045\u0007\rPS C:\\Users\\userxx> \u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[8m\u001b[m\r\n<ATHE:60b7cdfae4d8:0><ATHS:h5>\u001b[28m\u001b[9X\r\nPS C:\\User",
-      "expect": ""
+      "expect": "",
+      "set": "slip"
     },
     {
       "name": "win10 (build 19045), ConPTY slips a conceal at a line break: silent cmdlet 2",
@@ -359,6 +388,507 @@
       "nonce": "433b18b2ca00",
       "command": "Get-Date | Out-Null",
       "raw": "\u001b]777;ath;pos;433b18b2ca00;22;30;19045\u0007\u001b[8m<ATHE:h6:0><ATHS:433b18b2ca00>\u001b[28m\r\nPS C:\\Users\\userxx>\u001b[11X\u001b[1C\u001b[?25l\u001b]777;ath;cwd;433b18b2ca00;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h7;24;30;19045\u0007\rPS C:\\Users\\userxx> \u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[8m\u001b[m\r\n<ATHE:433b18b2ca00:0><ATHS:h7>\u001b[28m\u001b[9X\r\nPS C:\\User",
+      "expect": "",
+      "set": "slip"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 198-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "b3760990a083",
+      "command": "Write-Output ('x' * 198); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;b3760990a083;12;30;19045\u0007\u001b[8m<ATHE:h3:0><ATHS:b3760990a083>\u001b[28m\r\nPS C:\\Users\\B8User>\u001b[11X\u001b[1C\u001b[?25l\rPS C:\\Users\\B8User> \u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m198\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[m\u001b[133X\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nnext\u001b[194X\r\n\u001b[?25h\u001b]777;ath;cwd;b3760990a083;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h4;16;30;19045\u0007\u001b[8m<ATHE:b3760990a083:0><ATHS:h4>\u001b[28m\r\nPS C:\\Users\\B8",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 199-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "3e04fd7117e2",
+      "command": "Write-Output ('x' * 199); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;3e04fd7117e2;18;30;19045\u0007\u001b[8m<ATHE:h4:0><ATHS:3e04fd7117e2>\u001b[28m\r\nPS C:\\Users\\B8User>\u001b[11X\u001b[1C\u001b[?25l\rPS C:\\Users\\B8User> \u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[m\u001b[K\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nnext\u001b[K\r\n\u001b[?25h\u001b]777;ath;cwd;3e04fd7117e2;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h5;22;30;19045\u0007\u001b[8m<ATHE:3e04fd7117e2:0><ATHS:h5>\u001b[28m\r\nPS C:\\Users\\B8",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 200-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "747c06c5f32a",
+      "command": "Write-Output ('x' * 200); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;747c06c5f32a;24;30;19045\u0007\rPS C:\\Users\\B8User> \u001b[93mvvv\u001b[m AGENT INPUT ID: 747c06c5f32a vvv\u001b[8m\r\n<ATHE:h5:0><ATHS:747c06c5f32a>\u001b[28m\u001b[26X\u001b[?25h\r\nPS C:\\Users\\B8User> \u001b[?25l\u001b]777;ath;cwd;747c06c5f32a;QzpcVXNlcnNcQjhVc2Vy;0\u0007\rPS C:\\Users\\B8User> \u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m200\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[m\u001b[K\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nnext\u001b[K\r\n\u001b[?25h\u001b]777;ath;pos;h6;28;30;19045\u0007\u001b[8m<ATHE:747c06c5f32a:0><ATHS:h6>\u001b[28m\r\nPS C:\\Users\\B8",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext",
+      "reads": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxnext",
+      "knownLimit": "Windows 10, above the bottom row: a line exactly as wide as the pane, then a bare CRLF, is byte-identical to a wrapped row, and is read as one (the commoner case)."
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 201-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "130fbffb3da5",
+      "command": "Write-Output ('x' * 201); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;130fbffb3da5;30;30;19045\u0007\u001b[8m<ATHE:h6:0><ATHS:130fbffb3da5>\u001b[28m\r\nPS C:\\Users\\B8User>\u001b[11X\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m201\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\r\n\u001b[?25h\u001b]777;ath;cwd;130fbffb3da5;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h7;35;30;19045\u0007\u001b[mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nx\u001b[K\r\nnext\u001b[K\u001b[8m\r\n<ATHE:130fbffb3da5:0><ATHS:h7>\u001b[28m\u001b[K\r\nPS C:\\Users",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 399-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "c0079840c27d",
+      "command": "Write-Output ('x' * 399); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;c0079840c27d;37;30;19045\u0007\u001b[8m<ATHE:h7:0><ATHS:c0079840c27d>\u001b[28m\r\nPS C:\\Users\\B8User>\u001b[11X\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m399\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\r\n\u001b[?25h\u001b]777;ath;cwd;c0079840c27d;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h8;42;30;19045\u0007\u001b[mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \r\nnext\u001b[K\u001b[8m\r\n<ATHE:c0079840c27d:0><ATHS:h8>\u001b[28m\u001b[K\r\nPS C:\\Users",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext",
+      "reads": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx next",
+      "knownLimit": "Windows 10 pads the last row of a WRAPPED line with a space when it ends one cell short (the first row it does not), which is byte-identical to a real space at the last column with the line going on; read as a wrap at a space, the far commoner case in text."
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 400-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "e7c5282ca653",
+      "command": "Write-Output ('x' * 400); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;e7c5282ca653;44;30;19045\u0007\u001b[8m<ATHE:h8:0><ATHS:e7c5282ca653>\u001b[28m\r\nPS C:\\Users\\B8User>\u001b[11X\u001b[1C\u001b[?25l\rPS C:\\Users\\B8User> \u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m400\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[m\u001b[K\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nnext\u001b[K\r\n\u001b[?25h\u001b]777;ath;cwd;e7c5282ca653;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h9;49;30;19045\u0007\u001b[8m<ATHE:e7c5282ca653:0><ATHS:h9>\r\u001b[28m\nPS C:\\Users\\B8",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext",
+      "reads": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxnext",
+      "knownLimit": "The same ambiguity on the second row of a wrapped line: a full row, then a bare CRLF, above the bottom row."
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 401-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "5f55094bc3da",
+      "command": "Write-Output ('x' * 401); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;5f55094bc3da;49;30;19045\u0007\u001b[8m<ATHE:h9:0><ATHS:5f55094bc3da>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m401\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nx\r\nnext\r\u001b]777;ath;cwd;5f55094bc3da;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b]777;ath;pos;h10;49;31;19045\u0007\u001b[8m<ATHE:5f55094bc3da:0><ATHS:h10>\r\u001b[28m\nPS C:\\Users\\B",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: Chinese after 195 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "e237bb810036",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;e237bb810036;49;19;19045\u0007\u001b[8m<ATHS:e237bb810036>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文\r\n尾\r\u001b]777;ath;cwd;e237bb810036;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:e237bb810036:0>\r\u001b]777;ath;cwd;h10;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h11;49;22;19045\u0007\u001b[28m\n\u001b[8m<ATHE:h10:0><ATHS:h11>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: Chinese after 196 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "998c86f00760",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;998c86f00760;49;19;19045\u0007\u001b[8m<ATHS:998c86f00760>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文\b\r\n尾\r\n\u001b]777;ath;cwd;998c86f00760;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b[8m<ATHE:998c86f00760:0>\r\u001b]777;ath;cwd;h11;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h12;49;22;19045\u0007\u001b[28m\n\u001b[8m<ATHE:h11:0><ATHS:h12>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: Chinese after 197 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "aa3702230894",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;aa3702230894;49;19;19045\u0007\u001b[8m<ATHS:aa3702230894>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中 \b\r\n文尾\r\n\u001b]777;ath;cwd;aa3702230894;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b[8m<ATHE:aa3702230894:0>\r\u001b]777;ath;cwd;h12;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h13;49;22;19045\u0007\u001b[28m\n\u001b[8m<ATHE:h12:0><ATHS:h13>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: Chinese after 198 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "e9a788522b46",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;e9a788522b46;49;19;19045\u0007\u001b[8m<ATHS:e9a788522b46>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中\b\r\n文尾\r\n\u001b]777;ath;cwd;e9a788522b46;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b[8m<ATHE:e9a788522b46:0>\r\u001b]777;ath;cwd;h13;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h14;49;22;19045\u0007\u001b[28m\n\u001b[8m<ATHE:h13:0><ATHS:h14>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: Chinese after 199 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "47a3f08830f6",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;47a3f08830f6;49;19;19045\u0007\u001b[8m<ATHS:47a3f08830f6>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \b\r\n中文尾\r\u001b]777;ath;cwd;47a3f08830f6;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:47a3f08830f6:0>\r\u001b]777;ath;cwd;h14;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h15;49;22;19045\u0007\u001b[28m\n\u001b[8m<ATHE:h14:0><ATHS:h15>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: Chinese after 200 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "e07dddd2fca7",
+      "command": null,
+      "raw": "\u001b[8m<ATHS:e07dddd2fca7>\u001b[28m\u001b[K\u001b]777;ath;pos;e07dddd2fca7;49;19;19045\u0007\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\b\r\n中文尾\r\u001b]777;ath;cwd;e07dddd2fca7;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:e07dddd2fca7:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h15;QzpcVXNlcnNcQjhVc2Vy\u0007\n\u001b]777;ath;pos;h16;49;22;19045\u0007\u001b[8m<ATHE:h15:0><ATHS:h16>\r\u001b[28m\nPS C:\\Users\\B",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 100 Chinese characters (200 columns)",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "b5ce4129d186",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;b5ce4129d186;49;19;19045\u0007\u001b[8m<ATHS:b5ce4129d186>\r\u001b[28m\n中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中\r\u001b]777;ath;cwd;b5ce4129d186;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:b5ce4129d186:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h16;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h17;49;22;19045\u0007\n\u001b[8m<ATHE:h16:0><ATHS:h17>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: 101 Chinese characters (202 columns)",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "c5ccc906f7c5",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;c5ccc906f7c5;49;19;19045\u0007\u001b[8m<ATHS:c5ccc906f7c5>\r\u001b[28m\n中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中\b\r\n中\r\u001b]777;ath;cwd;c5ccc906f7c5;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:c5ccc906f7c5:0>\r\u001b]777;ath;cwd;h17;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h18;49;22;19045\u0007\u001b[28m\n\u001b[8m<ATHE:h17:0><ATHS:h18>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: a space at the last column",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "fe9f11598cb4",
+      "command": "Write-Output (('y' * 199) + ' z')",
+      "raw": "\u001b]777;ath;pos;fe9f11598cb4;49;31;19045\u0007\u001b[8m<ATHE:h18:0><ATHS:fe9f11598cb4>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m ((\u001b[36m'y'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m) \u001b[90m+\u001b[m \u001b[36m' z'\u001b[m)\u001b[?25h\r\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy \b\r\nz\r\u001b]777;ath;cwd;fe9f11598cb4;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b]777;ath;pos;h19;49;31;19045\u0007\u001b[8m<ATHE:fe9f11598cb4:0><ATHS:h19>\r\u001b[28m\nPS C:\\Users\\B",
+      "expect": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy z"
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: silent command 1",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "f9f4471e8fda",
+      "command": "Get-Date | Out-Null",
+      "raw": "\u001b]777;ath;pos;f9f4471e8fda;49;31;19045\u0007\u001b[8m<ATHE:h19:0><ATHS:f9f4471e8fda>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b]777;ath;cwd;f9f4471e8fda;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h20;49;31;19045\u0007\u001b[m\r\n\u001b[8m<ATHE:f9f4471e8fda:0><ATHS:h20>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": ""
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: silent command 2",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "f5da8b78bfed",
+      "command": "Get-Date | Out-Null",
+      "raw": "\u001b]777;ath;pos;f5da8b78bfed;49;31;19045\u0007\u001b[8m<ATHE:h20:0><ATHS:f5da8b78bfed>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b]777;ath;cwd;f5da8b78bfed;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h21;49;31;19045\u0007\u001b[m\r\n\u001b[8m<ATHE:f5da8b78bfed:0><ATHS:h21>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": ""
+    },
+    {
+      "name": "win10 (build 19045), fresh screen: silent command 3",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "32b028342105",
+      "command": "Get-Date | Out-Null",
+      "raw": "\u001b[8m<ATHE:h21:0><ATHS:32b028342105>\u001b[28m\u001b[K\u001b]777;ath;pos;32b028342105;49;31;19045\u0007\r\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b[m\u001b]777;ath;cwd;32b028342105;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h22;49;31;19045\u0007\r\n\u001b[8m<ATHE:32b028342105:0><ATHS:h22>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": ""
+    },
+    {
+      "name": "win10 (build 19045), full screen: 198-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "e80db19bc4fc",
+      "command": "Write-Output ('x' * 198); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;e80db19bc4fc;49;31;19045\u0007\u001b[8m<ATHE:h23:0><ATHS:e80db19bc4fc>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m198\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  \r\nnext\r\u001b]777;ath;cwd;e80db19bc4fc;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h24;49;31;19045\u0007\n\u001b[8m<ATHE:e80db19bc4fc:0><ATHS:h24>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 199-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "d9a345028636",
+      "command": "Write-Output ('x' * 199); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;d9a345028636;49;31;19045\u0007\u001b[8m<ATHE:h24:0><ATHS:d9a345028636>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \r\nnext\r\u001b]777;ath;cwd;d9a345028636;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h25;49;31;19045\u0007\n\u001b[8m<ATHE:d9a345028636:0><ATHS:h25>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 200-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "939c8de53af0",
+      "command": "Write-Output ('x' * 200); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;939c8de53af0;49;31;19045\u0007\u001b[8m<ATHE:h25:0><ATHS:939c8de53af0>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m200\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nnext\r\u001b]777;ath;cwd;939c8de53af0;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h26;49;31;19045\u0007\n\u001b[8m<ATHE:939c8de53af0:0><ATHS:h26>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 201-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "59a75634f003",
+      "command": "Write-Output ('x' * 201); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;59a75634f003;49;31;19045\u0007\u001b[8m<ATHE:h26:0><ATHS:59a75634f003>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m201\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nx\r\nnext\r\u001b]777;ath;cwd;59a75634f003;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h27;49;31;19045\u0007\n\u001b[8m<ATHE:59a75634f003:0><ATHS:h27>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 399-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "39ca18eb264a",
+      "command": "Write-Output ('x' * 399); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;39ca18eb264a;49;31;19045\u0007\u001b[8m<ATHE:h27:0><ATHS:39ca18eb264a>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m399\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \r\nnext\r\u001b]777;ath;cwd;39ca18eb264a;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h28;49;31;19045\u0007\n\u001b[8m<ATHE:39ca18eb264a:0><ATHS:h28>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 400-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "39781895f14a",
+      "command": "Write-Output ('x' * 400); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;39781895f14a;49;31;19045\u0007\r\n\u001b[8m<ATHE:h28:0><ATHS:39781895f14a>\u001b[28m\u001b[K\r\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m400\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nnext\r\u001b]777;ath;cwd;39781895f14a;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h29;49;31;19045\u0007\n\u001b[8m<ATHE:39781895f14a:0><ATHS:h29>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 401-column line, then a short one",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "364498082e06",
+      "command": "Write-Output ('x' * 401); Write-Output 'next'",
+      "raw": "\u001b]777;ath;pos;364498082e06;49;31;19045\u0007\u001b[8m<ATHE:h29:0><ATHS:364498082e06>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m (\u001b[36m'x'\u001b[m \u001b[90m*\u001b[m \u001b[97m401\u001b[m); \u001b[93mWrite-Output\u001b[m \u001b[36m'next'\u001b[?25h\u001b[m\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\b\r\nx\r\nnext\r\u001b]777;ath;cwd;364498082e06;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h30;49;31;19045\u0007\n\u001b[8m<ATHE:364498082e06:0><ATHS:h30>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nnext"
+    },
+    {
+      "name": "win10 (build 19045), full screen: Chinese after 195 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "7f0b673f4c81",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;7f0b673f4c81;49;19;19045\u0007\u001b[8m<ATHS:7f0b673f4c81>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文 \b\r\n尾\r\u001b]777;ath;cwd;7f0b673f4c81;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:7f0b673f4c81:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h30;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h31;49;22;19045\u0007\n\u001b[8m<ATHE:h30:0><ATHS:h31>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), full screen: Chinese after 196 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "eb144c039ae8",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;eb144c039ae8;49;19;19045\u0007\u001b[8m<ATHS:eb144c039ae8>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文\b\r\n尾\r\u001b]777;ath;cwd;eb144c039ae8;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:eb144c039ae8:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h31;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h32;49;22;19045\u0007\n\u001b[8m<ATHE:h31:0><ATHS:h32>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), full screen: Chinese after 197 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "3bbba8f9353d",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;3bbba8f9353d;49;19;19045\u0007\u001b[8m<ATHS:3bbba8f9353d>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中 \b\r\n文尾\r\u001b]777;ath;cwd;3bbba8f9353d;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:3bbba8f9353d:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h32;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h33;49;22;19045\u0007\n\u001b[8m<ATHE:h32:0><ATHS:h33>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), full screen: Chinese after 198 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "5eef12726325",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;5eef12726325;49;19;19045\u0007\u001b[8m<ATHS:5eef12726325>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中\b\r\n文尾\r\u001b]777;ath;cwd;5eef12726325;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:5eef12726325:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h33;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h34;49;22;19045\u0007\n\u001b[8m<ATHE:h33:0><ATHS:h34>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), full screen: Chinese after 199 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "a9f3193b2353",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;a9f3193b2353;49;19;19045\u0007\u001b[8m<ATHS:a9f3193b2353>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \b\r\n中文尾\r\u001b]777;ath;cwd;a9f3193b2353;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:a9f3193b2353:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h34;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h35;49;22;19045\u0007\n\u001b[8m<ATHE:h34:0><ATHS:h35>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), full screen: Chinese after 200 columns",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "85539bfb5df2",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;85539bfb5df2;49;19;19045\u0007\u001b[8m<ATHS:85539bfb5df2>\r\u001b[28m\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\b\r\n中文尾\r\u001b]777;ath;cwd;85539bfb5df2;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:85539bfb5df2:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h35;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h36;49;22;19045\u0007\n\u001b[8m<ATHE:h35:0><ATHS:h36>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa中文尾"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 100 Chinese characters (200 columns)",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "1570b1d643ea",
+      "command": null,
+      "raw": "\u001b]777;ath;pos;1570b1d643ea;49;19;19045\u0007\u001b[8m<ATHS:1570b1d643ea>\r\u001b[28m\n中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中\r\u001b]777;ath;cwd;1570b1d643ea;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:1570b1d643ea:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h36;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h37;49;22;19045\u0007\n\u001b[8m<ATHE:h36:0><ATHS:h37>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中"
+    },
+    {
+      "name": "win10 (build 19045), full screen: 101 Chinese characters (202 columns)",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "08cf366bd295",
+      "command": null,
+      "raw": "\u001b[8m<ATHS:08cf366bd295>\u001b[28m\u001b[K\u001b]777;ath;pos;08cf366bd295;49;19;19045\u0007\r\n中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中\b\r\n中\r\u001b]777;ath;cwd;08cf366bd295;QzpcVXNlcnNcQjhVc2Vy;0\u0007\n\u001b[8m<ATHE:08cf366bd295:0>\u001b[28m\u001b[K\r\u001b]777;ath;cwd;h37;QzpcVXNlcnNcQjhVc2Vy\u0007\u001b]777;ath;pos;h38;49;22;19045\u0007\n\u001b[8m<ATHE:h37:0><ATHS:h38>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中"
+    },
+    {
+      "name": "win10 (build 19045), full screen: a space at the last column",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "f869dc7e8ad5",
+      "command": "Write-Output (('y' * 199) + ' z')",
+      "raw": "\u001b]777;ath;pos;f869dc7e8ad5;49;31;19045\u0007\u001b[8m<ATHE:h38:0><ATHS:f869dc7e8ad5>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mWrite-Output\u001b[m ((\u001b[36m'y'\u001b[m \u001b[90m*\u001b[m \u001b[97m199\u001b[m) \u001b[90m+\u001b[m \u001b[36m' z'\u001b[m)\u001b[?25h\r\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy \b\r\nz\r\u001b]777;ath;cwd;f869dc7e8ad5;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h39;49;31;19045\u0007\n\u001b[8m<ATHE:f869dc7e8ad5:0><ATHS:h39>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy z"
+    },
+    {
+      "name": "win10 (build 19045), full screen: silent command 1",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "5bafca0b7839",
+      "command": "Get-Date | Out-Null",
+      "raw": "\u001b]777;ath;pos;5bafca0b7839;49;31;19045\u0007\u001b[8m<ATHE:h39:0><ATHS:5bafca0b7839>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b]777;ath;cwd;5bafca0b7839;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h40;49;31;19045\u0007\u001b[m\r\n\u001b[8m<ATHE:5bafca0b7839:0><ATHS:h40>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": ""
+    },
+    {
+      "name": "win10 (build 19045), full screen: silent command 2",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "dfc441f13897",
+      "command": "Get-Date | Out-Null",
+      "raw": "\u001b]777;ath;pos;dfc441f13897;49;31;19045\u0007\u001b[8m<ATHE:h40:0><ATHS:dfc441f13897>\r\u001b[28m\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b]777;ath;cwd;dfc441f13897;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h41;49;31;19045\u0007\u001b[m\r\n\u001b[8m<ATHE:dfc441f13897:0><ATHS:h41>\u001b[28m\u001b[K\r\nPS C:\\User",
+      "expect": ""
+    },
+    {
+      "name": "win10 (build 19045), full screen: silent command 3",
+      "host": "win10",
+      "set": "edges",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "1577562907e5",
+      "command": "Get-Date | Out-Null",
+      "raw": "\u001b]777;ath;pos;1577562907e5;49;31;19045\u0007\r\n\u001b[8m<ATHE:h41:0><ATHS:1577562907e5>\u001b[28m\u001b[K\r\nPS C:\\Users\\B8User>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b]777;ath;cwd;1577562907e5;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h42;49;31;19045\u0007\u001b[m\r\n\u001b[8m<ATHE:1577562907e5:0><ATHS:h42>\u001b[28m\u001b[K\r\nPS C:\\User",
       "expect": ""
     }
   ]

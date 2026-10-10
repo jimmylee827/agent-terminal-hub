@@ -128,9 +128,11 @@ its byte stream repeats markers and output by design (measured: 16 of 20 rounds
 framed in bytes, 20 of 20 on the screen). Its wraps leave no mark on the screen
 it draws, so two Windows 10 cases are ambiguous in the bytes themselves and are
 read as one line: a line exactly as wide as the pane, ending above the bottom
-row, followed by any line; and a line one cell short followed by one starting
-with a wide character. Both were measured byte-identical to a wrapped line,
-which is far the commoner. A resize replays the whole screen; any result it
+row, followed by any line; a line one cell short followed by one starting with
+a wide character; and a wrapped line whose last row ends one cell short, which
+Windows 10 pads with a space, exactly as it draws a real space at the edge
+mid-sentence. All three were measured byte-identical to the commoner case
+(scripts/fixtures, `knownLimit`). A resize replays the whole screen; any result it
 touches is flagged `capture_incomplete` rather than returned with lines twice.
 Windows 10 announces no resize in-band, so there the hub's own record of the
 pane's widths decides.
