@@ -9,6 +9,11 @@
 #   verify.sh --all                        local and every reachable host
 #   verify.sh --session NAME [LABEL]       an existing session, as it stands
 #   verify.sh --remote-windows HOST        ConPTY probes against a Windows host
+#   verify.sh --remote-windows HOST --windows-light   the same, without stress or burst
+#
+# Every run records what it tested in .verify/runs/ (git-ignored): the exact
+# tree, whether the build was fresh, whether the tree changed mid-run, and each
+# section's verdict. scripts/done-check.js reads those records.
 #
 # `--session` is the one that cannot be automated away: testing a NESTED shell
 # or a container means putting a session into that state first, which only you
@@ -119,7 +124,7 @@ if [ "${ATH_VERIFY_LOCK:-}" = "" ]; then
 fi
 
 ATH_BIN="${ATH_BIN:-ath}"
-DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0; FAST=0; WINHOST=""
+DO_LOCAL=0; ALL_REMOTE=0; HOSTS=""; SESSION=""; SLABEL=""; EXPLICIT=0; SKIP_NESTING=0; FAST=0; WINHOST=""; WINLIGHT=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -138,6 +143,7 @@ while [ $# -gt 0 ]; do
     --battery)    INTERNAL_BATTERY=1; S="${2:-}"; LABEL="${3:-$2}"; shift 3 ;;
     --gate-selftest) GATE_SELFTEST=1; EXPLICIT=1; shift ;;
     --gate-sleepcheck) GATE_SLEEPCHECK="${2:-120}"; EXPLICIT=1; shift 2 ;;
+    --windows-light) WINLIGHT=1; shift ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -4197,6 +4203,16 @@ for w in okSeen failSeen rerunValid sleepInvalid hostInvalid failWins invalidExi
   chk "gate judging: $w" "yes" "$(printf '%s' "$GSELF" | grep -qw "$w" && echo yes || echo no)"
 done
 
+# ---- "done" is decided from evidence ------------------------------------------
+#
+# scripts/done-check.js refuses "done" unless every target in test-matrix.json
+# has a gate record for exactly the committed tree, built fresh, unchanged
+# during the run, each section VALID and green. Proven on fake records.
+DSELF="$(node "$RP/scripts/done-check.js" --selftest 2>&1)"
+for w in allVerifiedIsDone windows10GapDeclared liveCheckFillsGap invalidIsNotGreen staleBuildIgnored changedTreeIgnored otherTreeIgnored uncommittedIsNotDone noteCannotReplaceGate; do
+  chk "done-check: $w" "yes" "$(printf '%s' "$DSELF" | grep -qw "$w" && echo yes || echo no)"
+done
+
 printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"
@@ -5690,7 +5706,29 @@ fi
 #
 # An INVALID section is run once more, automatically. If it is still invalid it
 # is reported as such, never as passed or failed, and the gate exits 3.
-GATE_SUMMARY=(); GATE_FAILED=0; GATE_INVALID=0
+GATE_SUMMARY=(); GATE_FAILED=0; GATE_INVALID=0; GATE_RECORD=()
+
+# The tree being tested, committed or not: what a record is keyed by, so it can
+# only ever vouch for exactly the code that ran.
+gate_tree() {
+  local idx; idx=$(mktemp) || return 1
+  cp "$(git -C "$1" rev-parse --git-dir)/index" "$idx" 2>/dev/null
+  GIT_INDEX_FILE="$idx" git -C "$1" add -A >/dev/null 2>&1
+  GIT_INDEX_FILE="$idx" git -C "$1" write-tree 2>/dev/null
+  rm -f "$idx"
+}
+
+# Built from what is on disk? A source file newer than its package's output
+# means the tests ran an older build than the tree they will be credited to.
+gate_build_fresh() {
+  local root="$1" pkg out
+  for pkg in core cli mcp; do
+    out="$root/packages/$pkg/dist/index.js"
+    [ -f "$out" ] || { echo no; return; }
+    [ -n "$(find "$root/packages/$pkg/src" -newer "$out" -type f 2>/dev/null | head -1)" ] && { echo no; return; }
+  done
+  echo yes
+}
 
 clock_now() { # "<wall seconds> <seconds the machine was awake>", or "0 -1"
   python3 -c 'import time; raw = time.clock_gettime(time.CLOCK_UPTIME_RAW) if hasattr(time, "CLOCK_UPTIME_RAW") else time.clock_gettime(time.CLOCK_MONOTONIC); print("%.3f %.3f" % (time.time(), raw))' 2>/dev/null || echo "0 -1"
@@ -5738,19 +5776,40 @@ guarded() { # label host-or-dash command...
   done
   if [ -n "$why" ]; then
     printf '  \033[33mINVALID\033[0m %s: %s, again. Not counted as passed or failed.\n' "$label" "$why"
-    GATE_INVALID=1; GATE_SUMMARY+=("$label: INVALID ($why)")
+    GATE_INVALID=1; GATE_SUMMARY+=("$label: INVALID ($why)"); GATE_RECORD+=("$label	$host	INVALID")
   elif [ "$r" -ne 0 ]; then
-    GATE_FAILED=1; GATE_SUMMARY+=("$label: FAIL")
+    GATE_FAILED=1; GATE_SUMMARY+=("$label: FAIL"); GATE_RECORD+=("$label	$host	FAIL")
   else
+    GATE_RECORD+=("$label	$host	ok")
     GATE_SUMMARY+=("$label: ok${attempt:+$([ "$attempt" -gt 1 ] && echo ' (valid on the re-run)')}")
   fi
   return 0
+}
+
+gate_record() { # .verify/runs/<tree>-<time>.tsv, read by done-check.js
+  [ -n "${GATE_ROOT:-}" ] && [ -n "${GATE_TREE0:-}" ] || return 0
+  local dir="$GATE_ROOT/.verify/runs" tree1 file s
+  mkdir -p "$dir" 2>/dev/null || return 0
+  tree1=$(gate_tree "$GATE_ROOT")
+  file="$dir/$GATE_TREE0-$(date +%Y%m%d-%H%M%S).tsv"
+  {
+    printf 'tree\t%s\n' "$GATE_TREE0"
+    printf 'commit\t%s\n' "$(git -C "$GATE_ROOT" rev-parse HEAD 2>/dev/null)"
+    printf 'build_fresh\t%s\n' "$GATE_BUILD_FRESH"
+    printf 'tree_unchanged\t%s\n' "$([ "$tree1" = "$GATE_TREE0" ] && echo yes || echo no)"
+    printf 'started\t%s\nended\t%s\n' "$GATE_STARTED" "$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    for s in "${GATE_RECORD[@]}"; do printf 'section\t%s\n' "$s"; done
+  } > "$file"
+  echo "  record: ${file#$GATE_ROOT/}"
+  [ "$tree1" = "$GATE_TREE0" ] || echo "  note: the tree changed during the run, so this record vouches for nothing"
+  [ "$GATE_BUILD_FRESH" = "yes" ] || echo "  note: the build was older than the sources, so this record vouches for nothing: build, then rerun"
 }
 
 gate_result() { # the verdict, and the exit code that goes with it
   echo "═══ RESULT ═══"
   local s
   for s in "${GATE_SUMMARY[@]}"; do echo "  $s"; done
+  gate_record
   if [ "$GATE_FAILED" = "1" ]; then echo "  RESULT: FAIL"; return 1; fi
   if [ "$GATE_INVALID" = "1" ]; then
     echo "  RESULT: INVALID. Nothing failed, but not everything could be judged: run those sections again, awake and with their hosts up."
@@ -5819,6 +5878,12 @@ fi
 if pmset -g batt 2>/dev/null | grep -q "Battery Power"; then
   printf '  \033[33mnote\033[0m on battery: closing the lid sleeps the Mac and voids the sections it sleeps through.\n'
 fi
+
+GATE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+GATE_TREE0=$(gate_tree "$GATE_ROOT")
+GATE_BUILD_FRESH=$(gate_build_fresh "$GATE_ROOT")
+GATE_STARTED=$(date '+%Y-%m-%dT%H:%M:%S%z')
+[ "$GATE_BUILD_FRESH" = "yes" ] || printf '  \033[33mnote\033[0m the build is older than the sources: this run will not count toward done-check. Build first.\n'
 
 # Nesting always runs unless explicitly skipped.
 #
@@ -5913,7 +5978,11 @@ unset IFS
 # See scripts/conpty-probe.js.
 if [ -n "$WINHOST" ]; then
   echo "═══ WINDOWS $WINHOST ═══"
-  guarded "WINDOWS $WINHOST" "$WINHOST" node "$(dirname "$0")/conpty-probe.js" "$WINHOST"
+  if [ "$WINLIGHT" = "1" ]; then
+    guarded "WINDOWS $WINHOST (light)" "$WINHOST" node "$(dirname "$0")/conpty-probe.js" "$WINHOST" --only baseline,order,repaint,input,matrix,hub
+  else
+    guarded "WINDOWS $WINHOST" "$WINHOST" node "$(dirname "$0")/conpty-probe.js" "$WINHOST"
+  fi
 fi
 
 gate_result
