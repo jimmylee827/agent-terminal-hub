@@ -20,6 +20,12 @@
 # Sessions this script creates are named `_t<pid>-*` and are destroyed
 # afterwards; your own sessions are never touched. Honours ATH_SOCKET/ATH_HOME.
 #
+# Exit 0 = every section VALID and green; 1 = something failed; 3 = nothing
+# failed, but a section could not be judged (the Mac slept through it, or its
+# host stopped answering) even after one automatic re-run. INVALID is never
+# counted as passed or failed: run those sections again, awake and with the
+# hosts up.
+#
 # NOTE: the two test bodies below are deliberately NOT indented. The battery
 # contains here-documents whose terminator must sit in column 0 — indenting
 # them for tidiness silently breaks those cases while the rest still passes.
@@ -130,6 +136,8 @@ while [ $# -gt 0 ]; do
     --no-nesting) SKIP_NESTING=1; shift ;;
     --fast)       FAST=1; DO_LOCAL=1; EXPLICIT=1; shift ;;
     --battery)    INTERNAL_BATTERY=1; S="${2:-}"; LABEL="${3:-$2}"; shift 3 ;;
+    --gate-selftest) GATE_SELFTEST=1; EXPLICIT=1; shift ;;
+    --gate-sleepcheck) GATE_SLEEPCHECK="${2:-120}"; EXPLICIT=1; shift 2 ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -4179,6 +4187,16 @@ chk "skill triggers on long/hanging work" "yes" \
 
 $ATH_BIN kill "${C}d" --force >/dev/null 2>&1 || true
 $ATH_BIN kill "$C" --force >/dev/null 2>&1 || true
+# ---- the gate judges its own sections ----------------------------------------
+#
+# A section the Mac slept through, or whose host went away, is INVALID: re-run
+# once, never counted as passed or failed, and the gate exits 3 if nothing else
+# failed. Proven here with fake sleeps and an unresolvable host (see guarded).
+GSELF="$(bash "$0" --gate-selftest 2>&1)"
+for w in okSeen failSeen rerunValid sleepInvalid hostInvalid failWins invalidExits3 awakeIsZero sleepMeasured; do
+  chk "gate judging: $w" "yes" "$(printf '%s' "$GSELF" | grep -qw "$w" && echo yes || echo no)"
+done
+
 printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"
@@ -5654,6 +5672,131 @@ printf 'passed %d, failed %d\n' "$pass" "$fail"
 exit $?
 fi
 
+# ---- a run the Mac slept through, or that lost its host, proves nothing -----
+#
+# Two gates in one evening (2026-10-10) ran for hours instead of forty minutes:
+# the lid closed, the Mac slept, the ssh links dropped. They reported dozens of
+# FAILs, every one a timing check or "no end marker" from a host that had gone,
+# and none a defect. Reading them as results cost hours. So each section is
+# judged as well as run:
+#
+# - SLEEP. Wall time minus CLOCK_UPTIME_RAW time over the section. That clock
+#   stops while the Mac sleeps (measured: 15.2 days of it against 39.7 since
+#   boot); Node's monotonic clock and kern.waketime do not serve (the first
+#   keeps counting through sleep, the second missed a DarkWake to FullWake).
+#   On Linux CLOCK_MONOTONIC stops across suspend the same way.
+# - HOST. A remote section whose host does not answer before it starts, or that
+#   fails and whose host does not answer after, says nothing about the code.
+#
+# An INVALID section is run once more, automatically. If it is still invalid it
+# is reported as such, never as passed or failed, and the gate exits 3.
+GATE_SUMMARY=(); GATE_FAILED=0; GATE_INVALID=0
+
+clock_now() { # "<wall seconds> <seconds the machine was awake>", or "0 -1"
+  python3 -c 'import time; raw = time.clock_gettime(time.CLOCK_UPTIME_RAW) if hasattr(time, "CLOCK_UPTIME_RAW") else time.clock_gettime(time.CLOCK_MONOTONIC); print("%.3f %.3f" % (time.time(), raw))' 2>/dev/null || echo "0 -1"
+}
+
+# Whole seconds slept between two clock_now samples. ATH_GATE_FAKE_SLEEP
+# ("<label>:<seconds>:<attempts>") adds sleep to a section's first <attempts>
+# runs, so the self-test can prove the whole path without closing a lid.
+slept_seconds() { # c0 c1 label attempt
+  local fake=0 spec
+  local all="${ATH_GATE_FAKE_SLEEP:-}"
+  for spec in ${all//,/ }; do
+    [ "${spec%%:*}" = "$3" ] || continue
+    local rest="${spec#*:}"
+    [ "$4" -le "${rest#*:}" ] && fake="${rest%%:*}"
+  done
+  awk -v a="$1" -v b="$2" -v f="$fake" 'BEGIN { split(a, x, " "); split(b, y, " ");
+    if (x[2] < 0 || y[2] < 0) { print f; exit }
+    s = (y[1] - x[1]) - (y[2] - x[2]); if (s < 0) s = 0; printf "%d\n", s + f }'
+}
+
+host_up() { # does the host answer at all, whatever its login shell
+  ssh -o BatchMode=yes -o ConnectTimeout=10 -o RemoteCommand=none -o RequestTTY=no "$1" 'exit 0' >/dev/null 2>&1
+}
+
+guarded() { # label host-or-dash command...
+  local label="$1" host="$2" attempt=1 why r=0 c0 c1 slept
+  shift 2
+  while :; do
+    why=""
+    if [ "$host" != "-" ] && ! host_up "$host"; then
+      why="$host did not answer before it started"; r=0
+    else
+      c0=$(clock_now)
+      "$@"; r=$?
+      c1=$(clock_now)
+      slept=$(slept_seconds "$c0" "$c1" "$label" "$attempt")
+      if [ "${slept:-0}" -gt 5 ]; then why="the Mac slept ${slept}s during it"
+      elif [ "$r" -ne 0 ] && [ "$host" != "-" ] && ! host_up "$host"; then why="$host stopped answering during it"
+      fi
+    fi
+    [ -z "$why" ] || [ "$attempt" -ge 2 ] && break
+    printf '  \033[33mINVALID\033[0m %s: %s. Running it once more.\n' "$label" "$why"
+    attempt=2
+  done
+  if [ -n "$why" ]; then
+    printf '  \033[33mINVALID\033[0m %s: %s, again. Not counted as passed or failed.\n' "$label" "$why"
+    GATE_INVALID=1; GATE_SUMMARY+=("$label: INVALID ($why)")
+  elif [ "$r" -ne 0 ]; then
+    GATE_FAILED=1; GATE_SUMMARY+=("$label: FAIL")
+  else
+    GATE_SUMMARY+=("$label: ok${attempt:+$([ "$attempt" -gt 1 ] && echo ' (valid on the re-run)')}")
+  fi
+  return 0
+}
+
+gate_result() { # the verdict, and the exit code that goes with it
+  echo "═══ RESULT ═══"
+  local s
+  for s in "${GATE_SUMMARY[@]}"; do echo "  $s"; done
+  if [ "$GATE_FAILED" = "1" ]; then echo "  RESULT: FAIL"; return 1; fi
+  if [ "$GATE_INVALID" = "1" ]; then
+    echo "  RESULT: INVALID. Nothing failed, but not everything could be judged: run those sections again, awake and with their hosts up."
+    return 3
+  fi
+  echo "  RESULT: VALID, all green"; return 0
+}
+
+# The one thing the self-test cannot prove: that a REAL sleep is seen. Waits
+# <seconds> under the same judging as every section; close the lid partway
+# through and it must come back INVALID, with the sleep measured.
+#   verify.sh --gate-sleepcheck 120
+if [ -n "${GATE_SLEEPCHECK:-}" ]; then
+  echo "  waiting ${GATE_SLEEPCHECK}s, twice at most: close the lid for a minute during the first wait, then open it."
+  guarded "sleep check" - sleep "$GATE_SLEEPCHECK"
+  gate_result
+  exit $?
+fi
+
+# The judging itself, proven without a lid or a dead host: each verdict, the
+# re-run, and the exit code. Run by the contract suite.
+if [ "${GATE_SELFTEST:-0}" = "1" ]; then
+  out=$(
+    ATH_GATE_FAKE_SLEEP="slept-once:120:1,slept-always:120:9"
+    guarded "plain" - true
+    guarded "broken" - false
+    guarded "slept-once" - true
+    guarded "slept-always" - true
+    guarded "host-gone" "ath-selftest.invalid" true
+    gate_result; echo "exit=$?"
+  )
+  only_invalid=$(GATE_SUMMARY=(); GATE_FAILED=0; GATE_INVALID=0; ATH_GATE_FAKE_SLEEP="s:60:9"; guarded "s" - true >/dev/null; gate_result >/dev/null; echo $?)
+  verdicts=""
+  printf '%s\n' "$out" | grep -qx '  plain: ok'                                   && verdicts+="okSeen "
+  printf '%s\n' "$out" | grep -qx '  broken: FAIL'                                && verdicts+="failSeen "
+  printf '%s\n' "$out" | grep -qx '  slept-once: ok (valid on the re-run)'        && verdicts+="rerunValid "
+  printf '%s\n' "$out" | grep -q  '  slept-always: INVALID (the Mac slept 120s'   && verdicts+="sleepInvalid "
+  printf '%s\n' "$out" | grep -q  '  host-gone: INVALID (ath-selftest.invalid did not answer' && verdicts+="hostInvalid "
+  printf '%s\n' "$out" | grep -qx 'exit=1'                                        && verdicts+="failWins "
+  [ "$only_invalid" = "3" ]                                                        && verdicts+="invalidExits3 "
+  [ "$(slept_seconds "100 50" "160 110" x 1)" = "0" ]                             && verdicts+="awakeIsZero "
+  [ "$(slept_seconds "100 50" "400 60" x 1)" = "290" ]                            && verdicts+="sleepMeasured "
+  echo "$verdicts"
+  exit 0
+fi
+
 # ---- orchestrator ----------------------------------------------------------
 [ "$EXPLICIT" = "0" ] && [ -z "$SESSION" ] && DO_LOCAL=1
 
@@ -5671,7 +5814,11 @@ if [ "$ALL_REMOTE" = "1" ]; then
   done
 fi
 
-rc=0
+# On battery a closed lid sleeps the Mac whatever caffeinate says, and every
+# section it sleeps through comes back INVALID. Said once, up front.
+if pmset -g batt 2>/dev/null | grep -q "Battery Power"; then
+  printf '  \033[33mnote\033[0m on battery: closing the lid sleeps the Mac and voids the sections it sleeps through.\n'
+fi
 
 # Nesting always runs unless explicitly skipped.
 #
@@ -5680,24 +5827,24 @@ rc=0
 # it, because no test ever went two levels down and back. Making it opt-out
 # rather than opt-in is the whole reason it is now known to work.
 if [ "$SKIP_NESTING" = "0" ]; then
-  bash "$0" --nesting || rc=1
+  guarded "NESTING" - bash "$0" --nesting
 fi
 
 # Always. The surfaces an agent READS are the ones that shipped seven defects
 # past a suite that only ran commands.
-bash "$0" --contract || rc=1
+guarded "CONTRACT" - bash "$0" --contract
 
-run() {  # label -> re-invoke ourselves for one target, keep going on failure
-  bash "$0" --battery "$1" "$2" || rc=1
+run() {  # session label -> re-invoke ourselves for one target
+  bash "$0" --battery "$1" "$2"
 }
 
 if [ -n "$SESSION" ]; then
-  run "$SESSION" "${SLABEL:-$SESSION}"
+  guarded "${SLABEL:-$SESSION}" - run "$SESSION" "${SLABEL:-$SESSION}"
 fi
 
 if [ "$DO_LOCAL" = "1" ]; then
   echo "═══ REGRESSION SUITE ═══"
-  bash "$0" --suite-only || rc=1
+  guarded "REGRESSION" - bash "$0" --suite-only
   # The edge-case BATTERY is the expensive tail and the one part `--fast` drops.
   #
   # Measured, rather than guessed: NESTING 18s, CONTRACT 102s, REGRESSION 161s
@@ -5711,48 +5858,53 @@ if [ "$DO_LOCAL" = "1" ]; then
   # and whenever CLI output, run/poll plumbing or the framing protocol changes
   # — that is where the battery earns its five minutes.
   if [ "$FAST" = "0" ]; then
-    s="_t$$-local"
-    $ATH_BIN new "$s" --cwd "$HOME" >/dev/null 2>&1
-    for _ in 1 2 3 4 5 6 7 8; do
-      $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle" && break
+    local_battery() {
+      local s="_t$$-local" r
+      $ATH_BIN new "$s" --cwd "$HOME" >/dev/null 2>&1
+      for _ in 1 2 3 4 5 6 7 8; do
+        $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle" && break
+        sleep 1
+      done
       sleep 1
-    done
-    sleep 1
-    run "$s" "LOCAL"
-    $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+      run "$s" "LOCAL"; r=$?
+      $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+      return $r
+    }
+    guarded "LOCAL" - local_battery
   else
     echo "  ── battery skipped (--fast). Run the full suite before a cold-agent test."
   fi
 fi
 
-IFS=','
-for h in $HOSTS; do
-  [ -z "$h" ] && continue
-  s="_t$$-$h"
+remote_battery() { # host
+  local h="$1" s="_t$$-$1" ready=0 r
   if ! $ATH_BIN new "$s" --remote "$h" >/dev/null 2>&1; then
-    printf '  \033[31mFAIL\033[0m could not create a session on %s\n' "$h"; rc=1; continue
+    printf '  \033[31mFAIL\033[0m could not create a session on %s\n' "$h"; return 1
   fi
   # Wait for the session to be genuinely ready, not for a guessed number of
-  # seconds. A battery that starts too early makes the first command self-heal,
-  # which types the fallback wrapper into the pane — and the wrapper's own text
-  # contains "<ATHE:", so the console-hygiene check then reports a leak that is
-  # really just this script being impatient.
-  # Poll the session's STATE. Do not probe by running a command: a probe sent
-  # before the far side is integrated self-heals, which types the fallback
-  # wrapper into the pane — and the wrapper's text contains "<ATHE:", so the
-  # console-hygiene check then reports a leak caused by the probe itself.
-  ready=0
+  # seconds. Poll the session's STATE. Do not probe by running a command: a
+  # probe sent before the far side is integrated self-heals, which types the
+  # fallback wrapper into the pane — and the wrapper's text contains "<ATHE:",
+  # so the console-hygiene check then reports a leak caused by the probe itself.
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     if $ATH_BIN ls 2>/dev/null | grep -q "^$s .*idle"; then ready=1; break; fi
     sleep 2
   done
   sleep 1
   if [ "$ready" = "0" ]; then
-    printf '  \033[31mFAIL\033[0m %s never became ready\n' "$h"; rc=1
-    $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true; continue
+    printf '  \033[31mFAIL\033[0m %s never became ready\n' "$h"
+    $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true; return 1
   fi
-  run "$s" "REMOTE $h"
+  run "$s" "REMOTE $h"; r=$?
   $ATH_BIN kill "$s" --force >/dev/null 2>&1 || true
+  return $r
+}
+IFS=','
+for h in $HOSTS; do
+  [ -z "$h" ] && continue
+  unset IFS
+  guarded "REMOTE $h" "$h" remote_battery "$h"
+  IFS=','
 done
 unset IFS
 
@@ -5761,7 +5913,8 @@ unset IFS
 # See scripts/conpty-probe.js.
 if [ -n "$WINHOST" ]; then
   echo "═══ WINDOWS $WINHOST ═══"
-  node "$(dirname "$0")/conpty-probe.js" "$WINHOST" || rc=1
+  guarded "WINDOWS $WINHOST" "$WINHOST" node "$(dirname "$0")/conpty-probe.js" "$WINHOST"
 fi
 
-exit $rc
+gate_result
+exit $?
