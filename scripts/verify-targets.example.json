@@ -1,0 +1,6 @@
+{
+  "note": "Copy to .verify/targets.json (git-ignored) and name YOUR hosts. Each host's gate sections then count toward that target in scripts/done-check.js.",
+  "my-linux-box": "linux-remote",
+  "my-win11-test-pc": "windows-11",
+  "my-win10-server": "windows-10"
+}

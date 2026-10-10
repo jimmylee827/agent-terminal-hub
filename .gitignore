@@ -11,3 +11,6 @@ testing/
 # Local-only scratch: backups, notes, anything you want beside the repo but
 # never in it. Nothing here is ever committed or pushed.
 _unsynced/
+
+# Gate records (scripts/verify.sh) and host-to-target map: local machine facts, never pushed.
+.verify/
