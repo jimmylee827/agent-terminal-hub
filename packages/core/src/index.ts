@@ -100,6 +100,7 @@ export {
   tailIsAllFurniture,
   EMPTY_TAIL_ADVICE,
   REPAINT_ADVICE,
+  PARKED_ADVICE,
   inheritedContextNote,
   logNearTrimNote,
   trimProspect,
