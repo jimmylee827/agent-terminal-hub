@@ -36,6 +36,7 @@ import {
   sessionOfElectionFile,
 } from './notify';
 import { StatusBar } from './status';
+import { watchStaleServers } from './stale';
 import { attachTerminal, disposeAll, forgetTerminal } from './terminal';
 import { SessionTreeProvider, type Node } from './tree';
 
@@ -60,6 +61,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(view, status);
 
   applyPromptPatterns();
+
+  // A window whose Claude tools run an older hub build is offered a reload.
+  watchStaleServers(context);
 
   // ---- polling watcher -------------------------------------------------
 

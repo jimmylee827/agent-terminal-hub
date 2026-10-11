@@ -4261,6 +4261,31 @@ chk "and never the hub's own socket"                 "yes" "$(TMUX_TMPDIR="$CTT"
 chk "and names no host"                               "0" "$(grep -cE "$(printf '%s|' $(node -e 'try{const h=require(process.argv[1]);delete h.note;console.log(Object.keys(h).join(" "))}catch{console.log("none-configured")}' "$RP/.verify/targets.json") | sed 's/|$//')" "$RP/scripts/clean-test-leftovers.sh")"
 TMUX_TMPDIR="$CTT" tmux -L ath kill-server 2>/dev/null; rm -rf "$CT"
 
+# ---- a window is offered a reload for ITS stale MCP servers --------------------
+#
+# A server reads the hub once, at start; a rebuild reaches it only when the
+# window that launched it reloads. The extension offers that reload for the
+# servers below its own extension host (server -> claude -> host, measured),
+# never another window's. Proven on a fake process table and a fake build.
+SV="$(mktemp -d)"; mkdir -p "$SV/packages/mcp/dist" "$SV/packages/core/dist"
+touch "$SV/packages/mcp/dist/index.js" "$SV/packages/core/dist/index.js"
+echo 'module.exports={window:{},commands:{}};' > "$SV/vscode.js"
+"$RP/packages/vscode/node_modules/.bin/esbuild" "$RP/packages/vscode/src/stale.ts" --bundle --platform=node --format=cjs --alias:vscode="$SV/vscode.js" --outfile="$SV/stale.js" --log-level=error 2>/dev/null
+STALE="$(node -e '
+const s=require(process.argv[1]), dir=process.argv[2], fs=require("fs");
+const built=fs.statSync(dir+"/packages/core/dist/index.js").mtimeMs, mcp=dir+"/packages/mcp/dist/index.js";
+const p=(pid,ppid,startedMs,args)=>({pid,ppid,startedMs,args});
+const procs=[p(100,1,0,"Code"), p(200,100,0,"claude"), p(300,200,built-60000,"node "+mcp),
+  p(110,1,0,"Code"), p(210,110,0,"claude"), p(310,210,built-60000,"node "+mcp), p(311,210,built+60000,"node "+mcp)];
+(async()=>{ const mine=await s.staleInThisWindow(100,procs), other=await s.staleInThisWindow(110,procs);
+  console.log([mine.length===1&&mine[0].pid===300?"mineFound":"MINEMISSED", other.length===1&&other[0].pid===310?"othersOwn":"OTHERWRONG",
+    !other.some(x=>x.pid===311)?"currentNotStale":"CURRENTFLAGGED", !mine.some(x=>x.pid===310)?"notAnotherWindows":"CROSSWINDOW"].join(" ")); })();
+' "$SV/stale.js" "$SV" 2>&1)"
+for w in mineFound othersOwn currentNotStale notAnotherWindows; do
+  chk "reload offer: $w" "yes" "$(printf '%s' "$STALE" | grep -qw "$w" && echo yes || echo no)"
+done
+rm -rf "$SV"
+
 printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"
