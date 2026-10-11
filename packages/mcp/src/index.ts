@@ -32,6 +32,7 @@ import {
   readTail,
   EMPTY_TAIL_ADVICE,
   REPAINT_ADVICE,
+  PARKED_ADVICE,
   inheritedContextNote,
   buildStaleness,
   staleBuildNote,
@@ -657,12 +658,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
 
       if (result.needsInput) {
         payload.needs_input = true;
-        payload.what_to_do =
-          'This command is waiting for a human. Do not answer it and do not send any credential. ' +
-          'A request HAS ALREADY BEEN FILED for you — you do not need to create one. Tell the ' +
-          'user which session is waiting and what for, then stop. Call request_human only to ' +
-          'additionally raise a notification in their editor. After they respond, use `read` ' +
-          'to see the result.';
+        payload.what_to_do = `This command is waiting for a human. ${PARKED_ADVICE}`;
       }
       if (result.timedOut && !result.needsInput) {
         payload.timed_out = true;
@@ -1054,11 +1050,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (result.done) payload.exit_code = result.exitCode;
       if (result.needsInput) {
         payload.needs_input = true;
-        payload.what_to_do =
-          'Waiting for a human. Do not answer it and do not send any credential. A request ' +
-          'HAS ALREADY BEEN FILED — do not create another. Tell the user which session is ' +
-          'waiting and what for, then stop. Call request_human only to additionally raise a ' +
-          'notification in their editor.';
+        payload.what_to_do = `Waiting for a human. ${PARKED_ADVICE}`;
       }
       // Output as its own block, same as `run` — it was folded into the JSON
       // here, so a long job's output came back escaped while the identical

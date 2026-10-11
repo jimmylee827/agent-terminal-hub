@@ -391,7 +391,7 @@ async function main(): Promise<number> {
           c.yellow(
             `\n[ath] "${name}" is waiting for input. Attach and answer it:\n` +
               `      ath attach ${name}` +
-              (result.handle ? `\n      then: ath poll ${name} --handle ${result.handle}` : ''),
+              (result.handle ? `\n      to know when they have: ath wait ${name} --handle ${result.handle}` : ''),
           ),
         );
         return EXIT_NEEDS_INPUT;

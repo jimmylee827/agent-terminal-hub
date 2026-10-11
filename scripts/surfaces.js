@@ -33,6 +33,12 @@ const USER_FACING = /^(?:[a-z][A-Za-z]*Note|[A-Z_]*ADVICE|[A-Z_]*NOTICE_BYTES|lo
 // One-sided on purpose. Each needs a reason, and the reason is the point.
 const EXCUSED = new Map([
   [
+    'PARKED_ADVICE',
+    'MCP only: it names the MCP tool `await_human`. The CLI gives the same fact ' +
+      'in its own parked notice, as the command a terminal user runs: ' +
+      '`ath wait <name> --handle <h>`.',
+  ],
+  [
     'logNearTrimNote',
     'MCP only: the CLI reports a near-trim through its own inline omission ' +
       'marker in the output stream, which is the same fact in the place a ' +

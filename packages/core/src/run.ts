@@ -4474,6 +4474,18 @@ export function inheritedContextNote(
 }
 
 /** What a repainted capture means, and what to do about it. Shared wording. */
+/**
+ * What an agent does when its command is parked at a prompt only a person can
+ * answer. It said "then stop", and later "use read": with nothing to say WHEN,
+ * an agent stopped and never noticed the answer (a person typed Y into a parked
+ * prompt and had to point it out). `await_human` returns when they have.
+ */
+export const PARKED_ADVICE =
+  'Do not answer it and do not send any credential. A request HAS ALREADY BEEN FILED — ' +
+  'do not create another. Tell the user which session is waiting and what for, then call ' +
+  '`await_human` with this handle: it returns when they have answered. request_human only ' +
+  'adds an editor notification.';
+
 export const REPAINT_ADVICE =
   'The screen was resized while this ran — a person attaching, or a `width` call — and ' +
   'PowerShell on Windows replays the whole screen into the transcript when that happens, ' +

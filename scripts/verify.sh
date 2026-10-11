@@ -4223,6 +4223,26 @@ for w in allVerifiedIsDone windows10GapDeclared liveCheckFillsGap invalidIsNotGr
   chk "done-check: $w" "yes" "$(printf '%s' "$DSELF" | grep -qw "$w" && echo yes || echo no)"
 done
 
+# ---- test leftovers are cleared without naming a host ------------------------
+#
+# Clearing interrupted runs by hand meant loops typed beside a remote host's
+# name, which a production guard reads as a production change. The script
+# touches only test-shaped sockets (ath + letters + a pid), never the hub's
+# own, and stands down while a gate holds its lock. Proven in a private tmux
+# directory, with a socket of each kind and a fake held lock.
+CT="$(mktemp -d)"; CTT="$CT/tmux"; mkdir -p "$CTT"
+TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 new-session -d -s x sleep 300 2>/dev/null
+TMUX_TMPDIR="$CTT" tmux -L ath new-session -d -s keep sleep 300 2>/dev/null
+mkdir -p "$CT/held/ath-verify.lock"; echo $$ > "$CT/held/ath-verify.lock/pid"
+held=$(TMUX_TMPDIR="$CTT" TMPDIR="$CT/held" bash "$RP/scripts/clean-test-leftovers.sh" 2>&1)
+alive_held=$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && echo yes || echo no)
+TMUX_TMPDIR="$CTT" TMPDIR="$CT" bash "$RP/scripts/clean-test-leftovers.sh" >/dev/null 2>&1
+chk "leftover cleanup stands down while a gate runs" "yes" "$(printf '%s' "$held" | grep -q 'in progress' && [ "$alive_held" = yes ] && echo yes || echo no)"
+chk "leftover cleanup ends a test-shaped tmux server" "no" "$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && echo yes || echo no)"
+chk "and never the hub's own socket"                 "yes" "$(TMUX_TMPDIR="$CTT" tmux -L ath list-sessions >/dev/null 2>&1 && echo yes || echo no)"
+chk "and names no host"                               "0" "$(grep -cE "$(printf '%s|' $(node -e 'try{const h=require(process.argv[1]);delete h.note;console.log(Object.keys(h).join(" "))}catch{console.log("none-configured")}' "$RP/.verify/targets.json") | sed 's/|$//')" "$RP/scripts/clean-test-leftovers.sh")"
+TMUX_TMPDIR="$CTT" tmux -L ath kill-server 2>/dev/null; rm -rf "$CT"
+
 printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"
