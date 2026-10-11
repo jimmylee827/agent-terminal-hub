@@ -81,7 +81,7 @@ function targetOf(section, hosts, matrix) {
   return hosts[section.host];
 }
 
-/** Section kind as test-matrix.json names it: "REMOTE linuxpc" -> REMOTE, "WINDOWS x (light)" -> WINDOWS. */
+/** Section kind as test-matrix.json names it: "REMOTE linux-box" -> REMOTE, "WINDOWS x (light)" -> WINDOWS. */
 function kindOf(label) {
   return label.split(' ')[0];
 }
@@ -174,6 +174,22 @@ function check(root, { quiet = false } = {}) {
   const tree = workingTree(root);
   if (tree !== headTree) reasons.push('the working tree has uncommitted changes: commit them, then verify that commit');
   if (!fs.existsSync(hostsFile)) reasons.push('no .verify/targets.json: remote hosts cannot be credited to a target (see scripts/verify-targets.example.json)');
+  // The repository is public: no tracked file and no commit message may name
+  // one of your hosts. Host names reached GitHub once, through fixtures and
+  // commit messages, and history had to be rewritten.
+  const named = Object.keys(hosts).filter((h) => h.length >= 3);
+  if (named.length) {
+    let inFiles = '';
+    try {
+      inFiles = git(root, 'grep', '-l', '-w', '-F', ...named.flatMap((h) => ['-e', h]), 'HEAD', '--');
+    } catch {}
+    const message = git(root, 'log', '-1', '--format=%B');
+    // Whole words, as the file search: a host called `lin` is not in "linux".
+    const word = (h) => new RegExp(`(^|[^A-Za-z0-9_])${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^A-Za-z0-9_])`);
+    const inMessage = named.filter((h) => word(h).test(message));
+    if (inFiles) reasons.push(`a tracked file names one of your hosts: ${inFiles.split('\n').map((l) => l.replace(/^HEAD:/, '')).join(', ')}`);
+    if (inMessage.length) reasons.push(`the commit message names ${inMessage.length} of your hosts`);
+  }
   const { targets, skipped } = verdictFor(root, headTree, matrix, hosts);
   for (const [t, v] of Object.entries(targets)) {
     if (v.state === 'verified' || v.state === 'live-check') continue;
@@ -323,6 +339,15 @@ function selftest() {
     record([...local, 'REMOTE lin\tlin\tok', 'WINDOWS w11\tw11\tok'], { tree: git(dir, 'rev-parse', 'HEAD^{tree}') });
     fs.writeFileSync(path.join(dir, 'a.txt'), 'two\n');
     say(code() === 1, 'uncommittedIsNotDone');
+    sh('checkout', '--', 'a.txt');
+    commitFile('notes.txt', 'tested on lin today\n');
+    localNow();
+    say(/a tracked file names one of your hosts: notes\.txt/.test(check(dir, { quiet: true }).out), 'hostInFileRefused');
+    fs.rmSync(path.join(dir, 'notes.txt'));
+    sh('add', '-A');
+    sh('commit', '-qm', 'ran it on w11 again');
+    localNow();
+    say(/the commit message names 1 of your hosts/.test(check(dir, { quiet: true }).out), 'hostInMessageRefused');
     // Clean again, so a refusal below can only come from the rule it tests.
     sh('checkout', '--', 'a.txt');
     let refused = false;
