@@ -565,8 +565,40 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
   return get(name);
 }
 
+/**
+ * Whether the PowerShell the hub last launched is still starting: its ready
+ * record is in the log and nothing has ended since — not even the first
+ * prompt's frame. Not "no prompt marker yet": the marker lands before the
+ * prompt is drawn, and the pane reads busy in between (1 run in 6 was still
+ * refused when this checked for the marker).
+ *
+ * Such a session reads `busy` — there is no prompt on its screen — but nothing
+ * is running in it. `new` waits for the prompt only so long (a slow profile
+ * outlasts it), and the ready record is an OSC, which ConPTY sends AHEAD of
+ * the prompt written before it, so a `run` sent the moment `new` returned was
+ * refused as busy: 3 of 4 times when sent right after the ready record.
+ */
+export async function firstPromptPending(name: string): Promise<boolean> {
+  const token = await readMeta(name, 'rtok').catch(() => '');
+  if (!token) return false;
+  let raw = '';
+  const handle = await fs.open(logPath(name), 'r').catch(() => undefined);
+  if (!handle) return false;
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, 262144);
+    const buf = Buffer.alloc(length);
+    await handle.read(buf, 0, length, size - length);
+    raw = buf.toString('latin1');
+  } finally {
+    await handle.close();
+  }
+  const at = raw.lastIndexOf(`<ATHR:${token}:`);
+  return at >= 0 && !/<ATHE:/.test(raw.slice(at));
+}
+
 /** Until the first PowerShell prompt is drawn and the pane reads idle, or `timeoutMs`. */
-async function awaitFirstPrompt(name: string, timeoutMs: number): Promise<void> {
+export async function awaitFirstPrompt(name: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const raw = await fs.readFile(logPath(name), 'utf8').catch(() => '');

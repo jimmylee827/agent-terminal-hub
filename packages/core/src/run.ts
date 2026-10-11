@@ -40,6 +40,8 @@ import {
 } from './paths';
 import {
   assertNotCredentialPrompt,
+  awaitFirstPrompt,
+  firstPromptPending,
   capturePane,
   get,
   list,
@@ -1409,6 +1411,7 @@ async function runLocked(
   // A veto needs a signal that clears itself. The marker only settles the
   // question for a caller holding the HANDLE, which `run` never does for
   // someone else's command; `wait` and `poll`, which can be handed one, use it.
+  session = await settleWindowsStart(clean, session);
   if (session.state === 'busy') {
     if (!options.waitForIdle) {
       throw new SessionBusy(clean, busyDetail(session));
@@ -2689,6 +2692,7 @@ export async function start(name: string, command: string): Promise<StartResult>
           `"ath attach ${clean}" — or interrupt it with "ath send ${clean} -- C-c".`,
       );
     }
+    session = await settleWindowsStart(clean, session);
     if (session.state === 'busy') {
       throw new SessionBusy(clean, busyDetail(session));
     }
@@ -2949,6 +2953,18 @@ export async function latestHandle(name: string): Promise<string | undefined> {
  * a finished command's marker is by definition the last thing it emitted, so
  * it is in the tail; a running command has not written one anywhere.
  */
+/**
+ * A Windows session still drawing its first prompt is starting, not busy:
+ * wait for the prompt rather than refuse. Bounded, and only when the log shows
+ * the launch's ready record with no prompt after it (`firstPromptPending`).
+ */
+async function settleWindowsStart(clean: string, session: Session): Promise<Session> {
+  if (session.state !== 'busy' || session.remoteOs !== 'windows') return session;
+  if (!(await firstPromptPending(clean))) return session;
+  await awaitFirstPrompt(clean, 20_000);
+  return get(clean);
+}
+
 /** What `exit` in the session's own shell means. Shared wording. */
 export const SHELL_EXITED_ADVICE =
   'The command ended the session shell (it contained exit). The session survived and is ' +

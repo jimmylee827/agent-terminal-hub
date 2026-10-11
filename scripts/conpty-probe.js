@@ -551,6 +551,26 @@ async function probeHub(hasPwsh) {
       }
       gate('hub: a run sent the moment new returns is not refused (3 rounds)', refused.length === 0, refused.join('; '));
     }
+    // The same race made certain: a run sent the moment the ready record
+    // lands, while `new` is still waiting for the first prompt. That gap is
+    // always there; a slow profile only stretches it past `new`'s wait. It was
+    // refused as busy 3 times in 4: a session still starting is not busy.
+    {
+      const refused = [];
+      for (let i = 0; i < 4; i++) {
+        const name = `e2e-early${i}`;
+        const made = a.create({ name, remote: host }).catch((e) => ({ error: e.code || String(e) }));
+        for (let t = 0; t < 300; t++) {
+          await sleep(50);
+          if (fs.existsSync(a.logPath(name)) && /<ATHR:[0-9a-z]+:(pwsh|powershell)>/.test(fs.readFileSync(a.logPath(name), 'latin1'))) break;
+        }
+        const r = await a.run(name, 'Write-Output early', { timeoutMs: 30000 }).catch((e) => ({ error: e.code || String(e) }));
+        if (r.error || r.output !== 'early') refused.push(r.error || JSON.stringify(r.output));
+        await made;
+        await a.kill(name).catch(() => {});
+      }
+      gate('hub: a run sent while new still waits for the first prompt is not refused (4 rounds)', refused.length === 0, refused.join('; '));
+    }
     // run, through every path a command can take.
     const histBefore = historyLines();
     // Lines wider than the pane. ConPTY wraps them two ways: streamed, while the
