@@ -745,6 +745,27 @@ async function probeHub(hasPwsh) {
       gate(`hub: PowerShell prompts park as needs_input (${hasPwsh ? 6 : 5} kinds), and Ctrl-C leaves nothing`, parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
       if (!hasPwsh) info('hub: Get-Credential on Windows PowerShell 5.1', 'not run: it opens a GUI dialog an ssh session cannot show, and cannot be interrupted (platform limit, DESIGN.md)');
     }
+    // A hand-typed ssh into Windows from a LOCAL session (what an agent did by
+    // mistake): the next run takes it over, relaunches PowerShell with the hooks
+    // in the same directory, and runs the command with its exact exit code.
+    {
+      const name = 'e2e-handtyped';
+      let took = '';
+      try {
+        await a.create({ name });
+        for (let i = 0; i < 20 && (await a.get(name)).state !== 'idle'; i++) await sleep(300);
+        await a.start(name, `ssh -o RemoteCommand=none ${host}`);
+        for (let i = 0; i < 40 && !/[A-Za-z]:\\[^\n]*>\s*$/.test(await a.capturePane(name)); i++) await sleep(500);
+        await a.sendLine(name, 'cd C:\\Windows');
+        await sleep(1500);
+        const r = await a.run(name, "Write-Output (Get-Location).Path; cmd /c exit 4", { timeoutMs: 60000 }).catch((e) => ({ error: e.code || String(e) }));
+        const s = await a.get(name);
+        took = `exit ${r.exitCode} "${r.output}" remote=${s.remote} os=${s.remoteOs}${r.error ? ' ' + r.error : ''}`;
+        gate('hub: a hand-typed ssh into Windows is taken over, in the same directory, exit code exact', !r.error && r.exitCode === 4 && r.output === 'C:\\Windows' && s.remote === host && s.remoteOs === 'windows' && /took over/.test(r.warning || ''), took);
+      } finally {
+        await a.kill(name).catch(() => {});
+      }
+    }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
     // with nothing typed to get there, and still report exact exit codes.
