@@ -16,7 +16,11 @@
 #   every test tool names its socket that way; the hub's own is `ath`, and an
 #   ATH_SOCKET you chose yourself would have to copy that exact shape;
 # - an isolated hub home /tmp/athe2e-*, only once no tmux server and no
-#   process is using it, and it is over an hour old.
+#   process is using it, and it is over an hour old;
+# - on the hub's own socket, a session named after a suite's process number
+#   (`_tc12345` contract, `e2e12345` end-to-end, `oc-12345` order check) once
+#   that process is gone. Those suites use the real hub, so a stopped run left
+#   its session idle there, offered to agents beside their own (found in use).
 set -u
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
@@ -56,5 +60,21 @@ for home in /tmp/athe2e-*; do
   act rm -rf "$home"; homes=$((homes + 1))
 done
 
+leaked=0
+cli="$(cd "$(dirname "$0")/.." && pwd)/packages/cli/dist/index.js"
+# The hub names a session's tmux session `ath-<name>`.
+for t in $(tmux -L "${ATH_SOCKET:-ath}" list-sessions -F '#{session_name}' 2>/dev/null); do
+  [[ "$t" =~ ^ath-((_tc|e2e|oc-)([0-9]+))$ ]] || continue
+  s="${BASH_REMATCH[1]}"
+  # Its suite is still running (or the number was reused): leave it.
+  kill -0 "${BASH_REMATCH[3]}" 2>/dev/null && continue
+  if [ "$DRY" = "1" ]; then echo "  would: kill and purge session $s"
+  elif [ -f "$cli" ]; then
+    node "$cli" kill "$s" >/dev/null 2>&1 || continue
+    node "$cli" purge "$s" >/dev/null 2>&1
+  else continue; fi
+  leaked=$((leaked + 1))
+done
+
 verb=$([ "$DRY" = "1" ] && echo "would clear" || echo "cleared")
-echo "clean-test-leftovers: $verb $servers tmux server(s), $sockets socket(s), $homes hub home(s), ssh masters in $masters of them."
+echo "clean-test-leftovers: $verb $servers tmux server(s), $sockets socket(s), $homes hub home(s), ssh masters in $masters of them, $leaked leaked suite session(s)."

@@ -4261,13 +4261,19 @@ done
 CT="$(mktemp -d)"; CTT="$CT/tmux"; mkdir -p "$CTT"
 TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 new-session -d -s x sleep 300 2>/dev/null
 TMUX_TMPDIR="$CTT" tmux -L ath new-session -d -s keep sleep 300 2>/dev/null
+# Suite sessions on the hub's own socket: one whose process is gone, one whose
+# process is this gate (still running), made by the real CLI in a private home.
+CTD=99999; while kill -0 "$CTD" 2>/dev/null; do CTD=$((CTD - 1)); done
+for s in "_tc$CTD" "e2e$$"; do ATH_HOME="$CT/home" TMUX_TMPDIR="$CTT" $ATH_BIN new "$s" --cwd /tmp >/dev/null 2>&1; done
 mkdir -p "$CT/held/ath-verify.lock"; echo $$ > "$CT/held/ath-verify.lock/pid"
 held=$(TMUX_TMPDIR="$CTT" TMPDIR="$CT/held" bash "$RP/scripts/clean-test-leftovers.sh" 2>&1)
-alive_held=$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && echo yes || echo no)
-TMUX_TMPDIR="$CTT" TMPDIR="$CT" bash "$RP/scripts/clean-test-leftovers.sh" >/dev/null 2>&1
+alive_held=$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && TMUX_TMPDIR="$CTT" tmux -L ath has-session -t "=ath-_tc$CTD" 2>/dev/null && echo yes || echo no)
+ATH_HOME="$CT/home" TMUX_TMPDIR="$CTT" TMPDIR="$CT" bash "$RP/scripts/clean-test-leftovers.sh" >/dev/null 2>&1
 chk "leftover cleanup stands down while a gate runs" "yes" "$(printf '%s' "$held" | grep -q 'in progress' && [ "$alive_held" = yes ] && echo yes || echo no)"
 chk "leftover cleanup ends a test-shaped tmux server" "no" "$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && echo yes || echo no)"
-chk "and never the hub's own socket"                 "yes" "$(TMUX_TMPDIR="$CTT" tmux -L ath list-sessions >/dev/null 2>&1 && echo yes || echo no)"
+chk "and never the hub's own socket"                 "yes" "$(TMUX_TMPDIR="$CTT" tmux -L ath has-session -t =keep 2>/dev/null && echo yes || echo no)"
+chk "it clears a suite session whose run is gone"    "no:no" "$(TMUX_TMPDIR="$CTT" tmux -L ath has-session -t "=ath-_tc$CTD" 2>/dev/null && echo yes || echo no):$([ -s "$CT/home/log/_tc$CTD.log" ] && echo yes || echo no)"
+chk "but not one whose suite is still running"       "yes" "$(TMUX_TMPDIR="$CTT" tmux -L ath has-session -t "=ath-e2e$$" 2>/dev/null && echo yes || echo no)"
 chk "and names no host"                               "0" "$(grep -cE "$(printf '%s|' $(node -e 'try{const h=require(process.argv[1]);delete h.note;console.log(Object.keys(h).join(" "))}catch{console.log("none-configured")}' "$RP/.verify/targets.json") | sed 's/|$//')" "$RP/scripts/clean-test-leftovers.sh")"
 TMUX_TMPDIR="$CTT" tmux -L ath kill-server 2>/dev/null; rm -rf "$CT"
 
