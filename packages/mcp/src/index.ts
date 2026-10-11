@@ -33,6 +33,9 @@ import {
   EMPTY_TAIL_ADVICE,
   REPAINT_ADVICE,
   PARKED_ADVICE,
+  SHELL_EXITED_ADVICE,
+  REMOTE_EXITED_ADVICE,
+  REMOTE_DROPPED_ADVICE,
   inheritedContextNote,
   buildStaleness,
   staleBuildNote,
@@ -668,9 +671,11 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       }
       if (result.shellExited) {
         payload.shell_exited = true;
-        payload.what_to_do =
-          'The command ended the session shell (it contained exit). The session survived and is ' +
-          'respawned automatically on the next call, but its previous shell state is gone.';
+        payload.what_to_do = result.shellExitedNote ?? SHELL_EXITED_ADVICE;
+      }
+      if (result.remoteDisconnected) {
+        payload.remote_disconnected = true;
+        payload.what_to_do = REMOTE_DROPPED_ADVICE;
       }
       return jsonWithOutput(payload, result.output);
     }
@@ -975,12 +980,11 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       }
       if (result.remoteDisconnected) {
         payload.remote_disconnected = true;
-        payload.what_to_do =
-          'The ssh connection for this remote session dropped while the command was running, ' +
-          'so the command is gone and its outcome cannot be recovered — that is why exit_code ' +
-          'is null rather than a number. Do NOT keep polling; this handle can never complete. ' +
-          'Run any command on the session to reconnect it, then check on the host whether the ' +
-          'work actually finished before re-running it.';
+        payload.what_to_do = REMOTE_DROPPED_ADVICE;
+      }
+      if (result.shellExited) {
+        payload.shell_exited = true;
+        payload.what_to_do = result.shellExitedNote ?? SHELL_EXITED_ADVICE;
       }
       if (result.offsetBeyondEnd) {
         payload.offset_beyond_end = true;
@@ -1477,6 +1481,18 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         outcome = await commandOutcome(session, handle).catch(() => undefined);
         return outcome?.finished ? 'finished' : 'running';
       };
+      // How it ended when it wrote no end marker, said here rather than left
+      // for a `poll` to find: its shell exited (with the code ssh carried, on a
+      // remote session), or the link dropped.
+      const endedBy = (): Record<string, unknown> =>
+        outcome?.ended === 'remote-dropped'
+          ? { remote_disconnected: true, what_to_do: REMOTE_DROPPED_ADVICE }
+          : outcome?.ended
+            ? {
+                shell_exited: true,
+                what_to_do: outcome.ended === 'remote-exited' ? REMOTE_EXITED_ADVICE : SHELL_EXITED_ADVICE,
+              }
+            : {};
       for (;;) {
         const s = await get(session).catch(() => undefined);
         if (!s) return json({ session, outcome: 'session_gone' });
@@ -1493,10 +1509,13 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
         }
         // A dead pane runs nothing, whatever the markers say.
         if (s.paneDead) {
+          if (handle) await evidence();
           return json({
             session,
             outcome: 'idle',
             verified: true,
+            ...(outcome?.exitCode === undefined ? {} : { exit_code: outcome.exitCode }),
+            ...endedBy(),
             last_command: s.lastCommand,
             last_exit_code: s.lastExitCode,
             ...(s.lastCommand && compoundExitCaveat(s.lastCommand, s.remoteOs)
@@ -1513,6 +1532,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
               // From the handle's own marker when we have one, so the caller
               // does not need a second call to learn what it just waited for.
               ...(outcome?.exitCode === undefined ? {} : { exit_code: outcome.exitCode }),
+              ...endedBy(),
               // The same caveat `run` and `poll` carry, and for the same reason.
               //
               // `wait` presented `exit_code` with nothing qualifying it, so a

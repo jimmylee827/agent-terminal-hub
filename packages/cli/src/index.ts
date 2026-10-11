@@ -42,6 +42,7 @@ import {
   readTail,
   EMPTY_TAIL_ADVICE,
   REPAINT_ADVICE,
+  REMOTE_DROPPED_ADVICE,
   logDirBytes,
   buildStaleness,
   staleBuildNote,
@@ -301,14 +302,18 @@ async function main(): Promise<number> {
       if (result.reconnecting) {
         console.error(
           c.yellow(
-            `\n[ath] "${name}" reconnected after the link dropped.\n` +
+            `\n[ath] "${name}" reconnected: its ssh connection had closed.\n` +
               `      Working directory and exported variables were restored —` +
               ` including ones you\n      typed by hand. Not recoverable:` +
               ` background jobs and shell functions, which\n      lived only in the` +
-              ` process the dropped link took with it.`,
+              ` process that ended with it.`,
           ),
         );
       }
+      // How a command that wrote no end marker ended: its shell exited (on a
+      // remote session, with the code ssh carried home), or the link dropped.
+      if (result.shellExited && result.shellExitedNote) console.error(c.yellow(`[ath] ${result.shellExitedNote}`));
+      if (result.remoteDisconnected) console.error(c.red(`[ath] ${REMOTE_DROPPED_ADVICE}`));
 
       // The human usually cannot see this: a nested bash keeps the same prompt,
       // so the only visible change is that our command lines start looking
@@ -460,6 +465,7 @@ async function main(): Promise<number> {
           ),
         );
       }
+      if (result.shellExited && result.shellExitedNote) console.error(c.yellow(`[ath] ${result.shellExitedNote}`));
       if (flagBool(flags, 'json')) {
         console.log(JSON.stringify(toWire(result), null, 2));
         return 0;
@@ -634,6 +640,8 @@ async function main(): Promise<number> {
                 const bits = [`exit ${r.exitCode ?? 'unknown'}`];
                 if (r.elapsedSeconds !== undefined) bits.push(`${r.elapsedSeconds}s`);
                 console.error(c.dim(`[ath] ${bits.join(', ')} — this command, not the session's last.`));
+                if (r.shellExitedNote) console.error(c.yellow(`[ath] ${r.shellExitedNote}`));
+                if (r.remoteDisconnected) console.error(c.red(`[ath] ${REMOTE_DROPPED_ADVICE}`));
               }
             }
             if (seen === 'unknown') {

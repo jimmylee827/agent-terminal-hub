@@ -288,14 +288,12 @@ opposite of the truth. When a question is about a host, ask which host you are
 speaking *as*.
 
 **A dropped ssh link ends the command.** For a `--remote` session, losing the
-connection does not kill the pane — it falls back to the LOCAL shell — so the
-command is gone but nothing looks dead. `poll` reports `remote_disconnected`
-with `done: true` and a **null** exit code, because the command's outcome is
-genuinely unknowable. Do not keep polling that handle; it can never complete.
-Reconnect by running any command, then check on the host whether the work
-actually finished before re-running it. (This used to report `done: false`
-with the elapsed time climbing indefinitely — an agent watched it call a job
-that had died eight minutes earlier "running for 516 seconds".)
+connection does not kill the pane — it falls back to the LOCAL shell. `run`,
+`poll` and `wait` report `remote_disconnected` with a **null** exit code: the
+outcome is unknowable. Stop polling that handle. Reconnect by running any
+command, then check on the host whether the work finished before re-running
+it. A command that runs `exit` looks the same from the pane, but is reported
+as `shell_exited`, with the remote shell's own exit code.
 
 **`start` is non-blocking for YOU, not concurrent for the session.** The
 session is busy until that command finishes, and anything else you send there
@@ -497,7 +495,7 @@ Fields worth checking on the `--json` form:
 | `exit_code` | The real exit status. `null` if it did not finish. |
 | `needs_input` | Waiting on a human. Hand off; do not retry. |
 | `timed_out` | Still running. Output is partial; poll with `ath read`. |
-| `shell_exited` | Your command ended the shell (it contained `exit`). The session survives and respawns, but its previous state is gone — avoid bare `exit`. |
+| `shell_exited` | Your command ended its shell (it contained `exit`); `exit_code` is that shell's. A local session respawns with nothing kept; a remote one reconnects with only the recorded directory and exports — avoid bare `exit`. |
 | `exit_code_covers` / `exit_code_caveat` | The code is only the last part of a compound line, the last stage of a pipeline, or, on PowerShell, what ran outside a `{ }` block. The caveat is the long form, shown once per session; `exit_code_note` is the one-line form that rides every affected command. Read the output, not the number. |
 | `capture_incomplete` | Output in doubt: empty and unconfirmed, or (PowerShell) a resize replayed the screen into it; lines may repeat. Follow `what_to_do`. |
 | `command_gone` | On `poll`: this handle began and then died, or never framed at all. `exit_code` is `null` because what it did is unknowable. Stop polling — `read` the session, then re-run if you still need it. |

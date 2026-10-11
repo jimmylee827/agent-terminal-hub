@@ -33,8 +33,11 @@ export interface ShellDialect {
    * launch; POSIX ignores it and restores by typing, after connecting.
    */
   launchPayload(token: string, state?: { cwd?: string }): string;
-  /** The line typed to start that remote shell. Writes `bootFile`. */
-  launchLine(host: string, payload: string, bootFile: string): string;
+  /**
+   * The line typed to start that remote shell. Writes `bootFile`. With
+   * `exitToken`, the local shell reports ssh's exit status when it returns.
+   */
+  launchLine(host: string, payload: string, bootFile: string, exitToken?: string): string;
 }
 
 export interface PosixDialect extends ShellDialect {

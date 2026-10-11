@@ -97,14 +97,14 @@ export function sshCommandLine(host: string): string {
  * the bootstrap are backslash-escaped — which is what lets the whole thing sit
  * inside one single-quoted argument on the line we type locally.
  */
-export function sshLaunchLine(host: string, payload: string, bootFile: string): string {
+export function sshLaunchLine(host: string, payload: string, bootFile: string, exitToken?: string): string {
   const b64 = Buffer.from(payload, 'utf8').toString('base64');
   // Every metacharacter is backslash-escaped so the far-side shell stores this
   // as a literal string instead of running it at launch. The parentheses matter
   // as much as the `$`: `\$(` leaves an UNQUOTED `(`, which is a syntax error,
   // not a command substitution deferred to later.
   const boot = 'eval\\ \\"\\$\\(echo\\ \\$ATH_B\\|base64\\ -d\\)\\"';
-  return launchFromBootFile(host, `ATH_B=${b64} PROMPT_COMMAND=${boot} exec "$SHELL" -i`, bootFile);
+  return launchFromBootFile(host, `ATH_B=${b64} PROMPT_COMMAND=${boot} exec "$SHELL" -i`, bootFile, exitToken);
 }
 
 /**
@@ -113,7 +113,7 @@ export function sshLaunchLine(host: string, payload: string, bootFile: string): 
  * Shared by every dialect: what the far side runs differs, how it gets there
  * does not.
  */
-export function launchFromBootFile(host: string, remote: string, bootFile: string): string {
+export function launchFromBootFile(host: string, remote: string, bootFile: string, exitToken?: string): string {
   writeFileSync(bootFile, remote, { mode: 0o600 });
 
   // The remote command is read from a LOCAL file rather than typed.
@@ -141,8 +141,26 @@ export function launchFromBootFile(host: string, remote: string, bootFile: strin
   // it, because it includes the user's config FIRST and ssh keeps the first
   // value it obtains; only the command line outranks a user's host block. The
   // master and the `-O` control calls send no command, so they never trip it.
-  return `ssh -F ${shellQuote(configFile())} -o RemoteCommand=none -t ${host} "$(cat ${shellQuote(bootFile)})"`;
+  const ssh = `ssh -F ${shellQuote(configFile())} -o RemoteCommand=none -t ${host} "$(cat ${shellQuote(bootFile)})"`;
+  // How ssh ended, said by the LOCAL shell once it returns.
+  //
+  // A remote shell that runs `exit 4` writes no end marker, and the pane falls
+  // back to the local shell exactly as it does when the link drops. Both read
+  // as "connection dropped, outcome unknowable" — while ssh itself was holding
+  // the answer: it exits with the remote shell's status, or 255 for its own
+  // failure. The local shell is always POSIX (see `nonPosixShellFallback`).
+  return exitToken ? `${ssh}; printf '\\036<ATHX:${exitToken}:%s>\\036\\r\\033[K' "$?"` : ssh;
 }
+
+/** ssh's own exit status for the launch carrying `token`, from its last record in `log`. */
+export function sshExitIn(log: string, token: string): number | undefined {
+  let code: number | undefined;
+  for (const m of log.matchAll(new RegExp(`\\x1e<ATHX:${token}:(\\d+)>\\x1e`, 'g'))) code = Number(m[1]);
+  return code;
+}
+
+/** ssh's status for a failure of its own, not the remote shell's. */
+export const SSH_FAILED = 255;
 
 /**
  * Our ssh options as a config file, written next to the control sockets.

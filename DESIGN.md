@@ -176,7 +176,17 @@ Three different situations, none of which write an end marker:
 |---|---|
 | The pane's own shell exits | `pane_dead` — the pane really is gone |
 | A nested shell exits (`exit` in an ssh session) | the foreground command falls back from `ssh` to a shell |
+| The hub's own remote shell exits | the same fallback, told apart from a dropped link by ssh's status, which the local shell records as ssh returns (255 is ssh's own failure) |
 | A plain sub-shell exits (`exit` in a nested `bash`) | the count of shells on the pane's tty drops |
+
+A remote `exit` and a dropped link look identical from the pane, so without
+ssh's status both were reported as a lost link with the code gone. On Windows
+ssh's status cannot carry the code: sshd under a pty exits 0 whatever the
+shell did (measured). There the code comes from the Windows PowerShell that
+launched pwsh, which reports pwsh's code on its way out, from a `finally` —
+a Ctrl-C reaches every process on the console, and a plain `; exit` after
+pwsh was skipped, leaving the session at a bare 5.1 prompt. A host without
+PowerShell 7 has no launcher around its shell, so its code stays unknown.
 
 The last one needs the process count because the foreground command is a shell
 both before and after. "Output stopped moving" cannot distinguish it from a

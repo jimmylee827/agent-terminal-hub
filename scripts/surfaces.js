@@ -33,6 +33,16 @@ const USER_FACING = /^(?:[a-z][A-Za-z]*Note|[A-Z_]*ADVICE|[A-Z_]*NOTICE_BYTES|lo
 // One-sided on purpose. Each needs a reason, and the reason is the point.
 const EXCUSED = new Map([
   [
+    'SHELL_EXITED_ADVICE',
+    'Both surfaces: core puts it in `shellExitedNote` on run and poll results, ' +
+      'which the CLI prints. MCP names it as well, for `wait`, whose payload it builds.',
+  ],
+  [
+    'REMOTE_EXITED_ADVICE',
+    'Both surfaces: core puts it in `shellExitedNote` on run and poll results, ' +
+      'which the CLI prints. MCP names it as well, for `wait`, whose payload it builds.',
+  ],
+  [
     'PARKED_ADVICE',
     'MCP only: it names the MCP tool `await_human`. The CLI gives the same fact ' +
       'in its own parked notice, as the command a terminal user runs: ' +

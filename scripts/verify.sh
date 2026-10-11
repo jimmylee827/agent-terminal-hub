@@ -295,6 +295,47 @@ hyg "no leaked start markers"       '<ATHS:'
 hyg "no leaked end markers"         '<ATHE:'
 hyg "no leaked tag acks"            '<ATHT:'
 
+# ---- a remote shell that exits, and a link that drops ------------------------
+# Remote sessions only. `exit` there ends the REMOTE shell and the pane falls
+# back to the local one, exactly as when the link drops: no end marker, nothing
+# dead. Both read as "dropped, outcome unknowable", and `wait --handle` saw
+# neither, answering still_running until its deadline. ssh's own status, which
+# the local shell records, tells them apart. Here, after the hygiene capture:
+# each case reconnects, and a reconnect types a launch line.
+RHOST=$($ATH ls --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const s=JSON.parse(b).find(x=>x.name===process.argv[1]);process.stdout.write((s&&s.remote)||"")})' "$S")
+if [ -n "$RHOST" ]; then
+  field() { node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(b)[process.argv[1]]))}catch(e){process.stdout.write("unparsed")}})' "$1"; }
+  current() { $ATH ls --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const s=JSON.parse(b).find(x=>x.name===process.argv[1]);process.stdout.write((s&&s.current_command)||"")})' "$S"; }
+  chk "remote exit: run reports its own code"  "7"    "$(rc 'sleep 1; exit 7')"
+  chk "remote exit: the next call reconnects"  "back" "$($ATH run "$S" -- 'echo back' 2>/dev/null)"
+  h=$($ATH start "$S" --json -- 'sleep 1; exit 4' 2>/dev/null | field handle)
+  t0=$(date +%s); $ATH wait "$S" --handle "$h" --timeout 25 >/dev/null 2>&1; wrc=$?; secs=$(( $(date +%s) - t0 ))
+  chk "remote exit: wait --handle returns"     "0"      "$wrc"
+  chk "remote exit: and promptly"              "prompt" "$([ "$secs" -lt 12 ] && echo prompt || echo "${secs}s")"
+  pj=$($ATH poll "$S" --handle "$h" --json 2>/dev/null)
+  chk "remote exit: poll has its code"         "4"         "$(printf '%s' "$pj" | field exit_code)"
+  chk "remote exit: as a shell exit"           "true"      "$(printf '%s' "$pj" | field shell_exited)"
+  chk "remote exit: not as a dropped link"     "undefined" "$(printf '%s' "$pj" | field remote_disconnected)"
+  $ATH run "$S" -- 'echo reconnect' >/dev/null 2>&1
+  h=$($ATH start "$S" --json -- 'sleep 30' 2>/dev/null | field handle)
+  sleep 2
+  # Drop it for certain, as the Windows probe does: `-O exit` can fail.
+  for _ in 1 2 3; do
+    node -e 'const s=require(process.argv[1]+"/packages/core/dist/ssh.js");require("child_process").execFile("ssh",[...s.sshOptions(),"-O","exit",process.argv[2]],()=>{})' "$(cd "$(dirname "$0")/.." && pwd)" "$RHOST"
+    for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(current)" = "ssh" ] || break; sleep 1; done
+    [ "$(current)" = "ssh" ] || break
+  done
+  chk "dropped link: it really dropped"        "dropped" "$([ "$(current)" = "ssh" ] && echo still-ssh || echo dropped)"
+  t0=$(date +%s); $ATH wait "$S" --handle "$h" --timeout 25 >/dev/null 2>&1; wrc=$?; secs=$(( $(date +%s) - t0 ))
+  chk "dropped link: wait --handle returns"    "0"      "$wrc"
+  chk "dropped link: and promptly"             "prompt" "$([ "$secs" -lt 12 ] && echo prompt || echo "${secs}s")"
+  pj=$($ATH poll "$S" --handle "$h" --json 2>/dev/null)
+  chk "dropped link: reported as one"          "true"      "$(printf '%s' "$pj" | field remote_disconnected)"
+  chk "dropped link: not as a shell exit"      "undefined" "$(printf '%s' "$pj" | field shell_exited)"
+  chk "dropped link: no code invented"         "null"      "$(printf '%s' "$pj" | field exit_code)"
+  $ATH run "$S" -- 'echo reconnect' >/dev/null 2>&1
+fi
+
 echo "  ── $LABEL: passed $pass, failed $fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"

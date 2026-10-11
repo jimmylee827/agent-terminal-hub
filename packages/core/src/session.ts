@@ -528,7 +528,10 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
     const dialect = dialectFor(os === 'windows' ? 'windows' : undefined);
     const payload = dialect.launchPayload(ready);
     const bootFile = `${RC_DIR}/${name}.boot`;
-    await sendLine(name, dialect.launchLine(opts.remote, payload, bootFile));
+    const exitToken = randomToken();
+    await setMeta(name, 'xtok', exitToken);
+    await setMeta(name, 'rtok', ready);
+    await sendLine(name, dialect.launchLine(opts.remote, payload, bootFile, exitToken));
 
     // A marker means the far side is bash and the hooks took. Silence means a
     // shell that ignores PROMPT_COMMAND (zsh, fish), or ssh still sitting on a

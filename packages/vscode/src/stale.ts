@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as vscode from 'vscode';
 
@@ -54,14 +55,30 @@ function mtime(file: string): number {
 /**
  * When the build that server would load NOW was made: its own entry, and the
  * core it loads beside it (the workspace layout) or through node_modules.
+ *
+ * When the code last CHANGED, if core's build stamp still matches the files:
+ * a rebuild of the same tree rewrites every mtime, and this offered a reload
+ * for code that was byte-identical. The digest is core's (`writeBuildStamp`),
+ * computed the same way: core's built files, then the server's own.
  */
 function builtFor(script: string): number {
   const dist = dirname(script);
-  return Math.max(
-    mtime(script),
-    mtime(join(dist, '..', '..', 'core', 'dist', 'index.js')),
-    mtime(join(dist, '..', 'node_modules', '@ath', 'core', 'dist', 'index.js')),
+  const core = [join(dist, '..', '..', 'core', 'dist'), join(dist, '..', 'node_modules', '@ath', 'core', 'dist')].find(
+    (d) => mtime(join(d, 'paths.js')) > 0,
   );
+  const written = Math.max(mtime(script), core ? mtime(join(core, 'index.js')) : 0);
+  if (!core) return written;
+  try {
+    const stamp = JSON.parse(readFileSync(join(core, '.build-stamp.json'), 'utf8')) as { digest?: unknown; sinceMs?: unknown };
+    const h = createHash('sha256');
+    for (const d of [core, dist]) {
+      for (const f of readdirSync(d).filter((n) => n.endsWith('.js')).sort()) h.update(f).update(readFileSync(join(d, f)));
+    }
+    if (typeof stamp.sinceMs === 'number' && stamp.digest === h.digest('hex')) return stamp.sinceMs;
+  } catch {
+    /* no stamp, or the files moved under us: judge by mtime, which errs toward offering */
+  }
+  return written;
 }
 
 /** Whether `ancestor` is among `pid`'s parents. */

@@ -1,4 +1,5 @@
-import { promises as fs, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { promises as fs, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -259,6 +260,102 @@ const BUILD_LOADED_MS = ((): number => {
   }
 })();
 
+/**
+ * What the code IS, not when it was written.
+ *
+ * mtime alone said every server was stale after a rebuild of an unchanged
+ * tree: `tsc` rewrites every file, so "built 08:28" was newer than "loaded
+ * 07:50" for code that was byte-identical, and every call carried a paragraph
+ * telling the reader to restart for nothing. A warning that is usually wrong
+ * is one people learn to skip, including the time it is right. mtime stays
+ * the cheap first test; this decides when it fires.
+ *
+ * The files a hub MCP server runs: core's, and the server's own beside it.
+ */
+function builtFiles(): string[] {
+  const out: string[] = [];
+  for (const dir of [__dirname, path.join(__dirname, '..', '..', 'mcp', 'dist')]) {
+    try {
+      for (const f of readdirSync(dir).filter((n) => n.endsWith('.js')).sort()) out.push(path.join(dir, f));
+    } catch {
+      /* not this layout */
+    }
+  }
+  return out;
+}
+
+function digestOf(files: string[]): string | undefined {
+  try {
+    const h = createHash('sha256');
+    for (const f of files) h.update(path.basename(f)).update(readFileSync(f));
+    return h.digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+const BUILD_LOADED_DIGEST = digestOf(builtFiles());
+
+/** The digest of the files on disk now, recomputed only when one of them is rewritten. */
+let digestCache: { key: number; digest: string | undefined } | undefined;
+function digestOnDisk(): { digest: string | undefined; newestMs: number } {
+  const files = builtFiles();
+  let newestMs = 0;
+  for (const f of files) {
+    try {
+      newestMs = Math.max(newestMs, statSync(f).mtimeMs);
+    } catch {
+      /* gone mid-build; the digest below will differ, which is the truth */
+    }
+  }
+  if (digestCache?.key !== newestMs) digestCache = { key: newestMs, digest: digestOf(files) };
+  return { digest: digestCache.digest, newestMs };
+}
+
+/** Beside the build: its digest, and when code with that digest was first built. */
+const BUILD_STAMP = path.join(__dirname, '.build-stamp.json');
+
+function readBuildStamp(): { digest: string; sinceMs: number } | undefined {
+  try {
+    const s = JSON.parse(readFileSync(BUILD_STAMP, 'utf8')) as { digest?: unknown; sinceMs?: unknown };
+    return typeof s.digest === 'string' && typeof s.sinceMs === 'number'
+      ? { digest: s.digest, sinceMs: s.sinceMs }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Record when the built code last CHANGED. Run after each build (the root
+ * `build` script does); a rebuild of the same code keeps the earlier time.
+ * Other processes can only be judged by when they started, so this time is
+ * what they are judged against — see `codeChangedMs`.
+ */
+export function writeBuildStamp(): void {
+  const { digest, newestMs } = digestOnDisk();
+  if (!digest) return;
+  const prev = readBuildStamp();
+  const sinceMs = prev?.digest === digest ? prev.sinceMs : newestMs;
+  writeFileSync(BUILD_STAMP, `${JSON.stringify({ digest, sinceMs })}\n`);
+}
+
+/**
+ * When the code on disk last changed: the stamp's time while its digest still
+ * matches the files, else the files' own mtime — which errs toward calling a
+ * server stale, never toward hiding a change.
+ */
+function codeChangedMs(): number {
+  let built = 0;
+  try {
+    built = statSync(__filename).mtimeMs;
+  } catch {
+    return 0;
+  }
+  const stamp = readBuildStamp();
+  return stamp && stamp.digest === digestOnDisk().digest ? stamp.sinceMs : built;
+}
+
 export interface BuildStaleness {
   loadedMs: number;
   onDiskMs: number;
@@ -276,7 +373,9 @@ export function buildStaleness(): BuildStaleness | undefined {
   // A second of slack: some filesystems round mtimes, and a false alarm here
   // would send people restarting servers that are perfectly current.
   if (onDiskMs <= BUILD_LOADED_MS + 1000) return undefined;
-  return { loadedMs: BUILD_LOADED_MS, onDiskMs };
+  // Rewritten, but is it different? A rebuild of the same tree is not.
+  if (BUILD_LOADED_DIGEST !== undefined && digestOnDisk().digest === BUILD_LOADED_DIGEST) return undefined;
+  return { loadedMs: BUILD_LOADED_MS, onDiskMs: codeChangedMs() || onDiskMs };
 }
 
 /**
@@ -344,12 +443,10 @@ export interface StaleServer {
  */
 export async function staleServers(): Promise<StaleServer[]> {
   if (!BUILD_LOADED_MS) return [];
-  let built = 0;
-  try {
-    built = statSync(__filename).mtimeMs;
-  } catch {
-    return [];
-  }
+  // When the code last changed, not when it was last written: a rebuild of the
+  // same tree must not make every running server look stale.
+  const built = codeChangedMs();
+  if (!built) return [];
   const { execFile } = await import('node:child_process');
   const out = await new Promise<string>((resolve) => {
     execFile('ps', ['-eo', 'pid,lstart,args'], { maxBuffer: 8 << 20 }, (err, stdout) =>
@@ -456,12 +553,7 @@ export function thisServer(): {
   current: boolean;
 } {
   const iso = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-  let built = 0;
-  try {
-    built = statSync(__filename).mtimeMs;
-  } catch {
-    built = 0;
-  }
+  const built = codeChangedMs();
   // `started_utc` MEANT when this process started, and reported the build's
   // mtime instead.
   //
@@ -489,12 +581,7 @@ export function thisServer(): {
 
 export function staleServersNote(servers: StaleServer[]): string {
   const when = (ms: number): string => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-  let built = 0;
-  try {
-    built = statSync(__filename).mtimeMs;
-  } catch {
-    built = 0;
-  }
+  const built = codeChangedMs();
   // HOW FAR behind, not just "behind".
   //
   // A reviewer acted on this notice and still could not scope their own

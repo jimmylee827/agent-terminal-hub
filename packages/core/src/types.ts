@@ -204,8 +204,16 @@ export interface RunResult {
    * `cd` and `export` persist, which means `exit` really does exit. The pane is
    * held by `remain-on-exit` and respawned on the next call, so the session
    * survives — but this command's exit code comes from the shell, not `.rc`.
+   * In a remote session the shell is the remote one, and the code is ssh's.
    */
   shellExited?: boolean;
+  /** What that means for the next call — respawned locally, reconnected remotely. */
+  shellExitedNote?: string;
+  /**
+   * The remote session's ssh link dropped while this command ran (ssh exited
+   * 255), so `exitCode` is null: the command is gone and its outcome unknowable.
+   */
+  remoteDisconnected?: boolean;
   /**
    * The pane was resized since this session's previous command.
    *
@@ -383,6 +391,13 @@ export interface PollResult {
    * the local shell, so nothing looked dead and no end marker ever came.
    */
   remoteDisconnected?: boolean;
+  /**
+   * The command ended its shell — the pane's own, or the remote one, whose
+   * status ssh carried home as `exitCode`. Not a dropped link.
+   */
+  shellExited?: boolean;
+  /** What that means for the next call. */
+  shellExitedNote?: string;
   /**
    * The pane was resized while this command ran, or since the last observation.
    *

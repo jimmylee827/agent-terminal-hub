@@ -33,7 +33,12 @@ export const CMD_LINE_MAX = 8100;
  * - **Upgrade to PowerShell 7 when it is installed**, re-running THIS script
  *   there. The script is read back off the process's own command line rather
  *   than encoded twice, which would double a payload that has a hard ceiling.
- *   5.1 then waits, and exits when the human leaves pwsh.
+ *   5.1 then waits, and exits when the human leaves pwsh. In a `finally`: a
+ *   Ctrl-C reaches every process on the console, and 5.1 then skipped a plain
+ *   `; exit` and was left at its own prompt, without hooks, when pwsh exited
+ *   (measured on Windows 11). It reports pwsh's exit code on the way out,
+ *   because ssh cannot: Windows sshd with a pty exits 0 whatever the shell did
+ *   (measured: `exit 7` is 7 without `-t`, 0 with it).
  * - **Force UTF-8, input and output, on both versions.** The reference host
  *   defaults to GB2312 on 5.1 AND on 7: `✓` arrived as a literal `?`, which
  *   is data destroyed rather than mis-encoded. Input was already correct there
@@ -71,7 +76,7 @@ export function psHooksInstall(): string {
 export function psLaunchScript(token: string, state: { cwd?: string } = {}): string {
   const script = (cwd?: string): string => [
     "if ($PSVersionTable.PSVersion.Major -lt 7 -and (Get-Command pwsh -ErrorAction SilentlyContinue)) {",
-    "  & pwsh -NoLogo -NoExit -EncodedCommand ([Environment]::CommandLine -split '\\s+')[-1]; exit }",
+    `  try { & pwsh -NoLogo -NoExit -EncodedCommand ([Environment]::CommandLine -split '\\s+')[-1] } finally { Write-Host -NoNewline ([char]27 + ']777;ath;<ATHX:${token}:' + $LASTEXITCODE + '>' + [char]7); exit $LASTEXITCODE } }`,
     '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
     '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)',
     '$OutputEncoding = [Console]::OutputEncoding',
@@ -88,6 +93,13 @@ export function psLaunchScript(token: string, state: { cwd?: string } = {}): str
   // out instead, and comes back through the wrapper (see `psLaunchCarries`).
   const full = script(state.cwd);
   return state.cwd && remoteFor(full).length > CMD_LINE_MAX ? script() : full;
+}
+
+/** The exit code the launcher reported for the launch carrying `token`, if it did. */
+export function psLauncherExitIn(log: string, token: string): number | undefined {
+  let code: number | undefined;
+  for (const m of log.matchAll(new RegExp(`\\x1b\\]777;ath;<ATHX:${token}:(-?\\d+)>\\x07`, 'g'))) code = Number(m[1]);
+  return code;
 }
 
 /** Whether a launch with this token carries this cwd, or leaves it to the wrapper. */
@@ -125,8 +137,8 @@ export function psTagLine(nonce: string): string {
   return `vvv AGENT INPUT ID: ${nonce} vvv`;
 }
 
-export function psLaunchLine(host: string, script: string, bootFile: string): string {
-  return launchFromBootFile(host, psRemoteCommand(script), bootFile);
+export function psLaunchLine(host: string, script: string, bootFile: string, exitToken?: string): string {
+  return launchFromBootFile(host, psRemoteCommand(script), bootFile, exitToken);
 }
 
 /**

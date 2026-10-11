@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { AthError, SessionBusy, SessionGone } from './errors';
-import { dialectFor, posixDialect } from './dialect';
+import { dialectFor, posixDialect, type ShellDialect } from './dialect';
 import {
   conptyAnnounced,
   psTagLine,
@@ -16,6 +16,7 @@ import {
   psFindDur,
   psFindEnd,
   psLatestHandle,
+  psLauncherExitIn,
   psPollFrame,
   psReadFrame,
   psReadSince,
@@ -52,7 +53,7 @@ import {
   validateName,
   windowsShellByHand,
 } from './session';
-import { ensureControlDir } from './ssh';
+import { ensureControlDir, SSH_FAILED, sshExitIn } from './ssh';
 import { tmux } from './tmux';
 import { clearRequest, listRequests, requestHuman } from './requests';
 import {
@@ -1183,7 +1184,7 @@ function trimToCommandWindow(raw: string, nonce: string, command?: string): stri
 
 type Completion =
   | { kind: 'done'; exitCode: number; end?: CommandEnd }
-  | { kind: 'shell-exited'; status: number | null }
+  | { kind: 'shell-exited'; status: number | null; remote?: 'exited' | 'dropped' }
   | { kind: 'needs-input' }
   | { kind: 'lost' }
   | { kind: 'timeout' };
@@ -1254,7 +1255,9 @@ async function waitForCompletion(
       // never fires and the marker never arrives. Without this the caller
       // waits out its entire timeout on a command that ended immediately.
       if (sawMarker && isNesting(outerCommand) && isShell(snapshot.command)) {
-        return { kind: 'shell-exited', status: null };
+        const ssh = await remoteShellEnd(name, (await get(name).catch(() => undefined))?.remoteOs === 'windows');
+        if (ssh?.dropped) return { kind: 'shell-exited', status: null, remote: 'dropped' };
+        return { kind: 'shell-exited', status: ssh?.code ?? null, ...(ssh ? { remote: 'exited' as const } : {}) };
       }
 
       // The same thing one level down: `exit` inside a plain sub-shell. The
@@ -1471,7 +1474,7 @@ async function runLocked(
     const lastCwd = session.remoteCwd;
     await sendLine(
       clean,
-      dialect.launchLine(host, dialect.launchPayload(readyToken, { cwd: lastCwd }), bootFile),
+      await launchLineFor(clean, dialect, host, readyToken, dialect.launchPayload(readyToken, { cwd: lastCwd }), bootFile),
     );
     const reconnectDeadline = Date.now() + 20_000;
     for (;;) {
@@ -1777,6 +1780,7 @@ async function runLocked(
 
   if (completion.kind === 'shell-exited') {
     await recordLast(clean, command, completion.status);
+    const dropped = completion.remote === 'dropped';
     return {
       session: clean,
       command,
@@ -1788,7 +1792,12 @@ async function runLocked(
       state: 'dead',
       logOffset: discarded + offset,
       nextOffset: await nextOffsetNow(),
-      shellExited: true,
+      ...(dropped
+        ? { remoteDisconnected: true }
+        : {
+            shellExited: true,
+            shellExitedNote: completion.remote ? REMOTE_EXITED_ADVICE : SHELL_EXITED_ADVICE,
+          }),
     };
   }
 
@@ -2940,6 +2949,106 @@ export async function latestHandle(name: string): Promise<string | undefined> {
  * a finished command's marker is by definition the last thing it emitted, so
  * it is in the tail; a running command has not written one anywhere.
  */
+/** What `exit` in the session's own shell means. Shared wording. */
+export const SHELL_EXITED_ADVICE =
+  'The command ended the session shell (it contained exit). The session survived and is ' +
+  'respawned automatically on the next call, but its previous shell state is gone.';
+
+/** What `exit` in a remote shell means: ssh carried its code home. Shared wording. */
+export const REMOTE_EXITED_ADVICE =
+  'The command ended the remote shell (it contained exit); exit_code is that shell\'s own ' +
+  'status, as ssh reported it. The next call reconnects and restores the directory and ' +
+  'exported variables the hub recorded; anything else set in that shell is gone.';
+
+/** What a dropped link means for the command that was running. Shared wording. */
+export const REMOTE_DROPPED_ADVICE =
+  'The ssh connection for this remote session dropped while the command was running, ' +
+  'so the command is gone and its outcome cannot be recovered — that is why exit_code ' +
+  'is null rather than a number. Do NOT keep polling; this handle can never complete. ' +
+  'Run any command on the session to reconnect it, then check on the host whether the ' +
+  'work actually finished before re-running it.';
+
+/**
+ * The line that launches a remote shell. Records the tokens its exit records
+ * carry: a fresh one for ssh's status, said locally, and the ready token, which
+ * a Windows launcher reports its shell's code under.
+ */
+async function launchLineFor(
+  clean: string,
+  dialect: ShellDialect,
+  host: string,
+  readyToken: string,
+  payload: string,
+  bootFile: string,
+): Promise<string> {
+  const exitToken = randomNonce();
+  await setMeta(clean, 'xtok', exitToken).catch(() => undefined);
+  await setMeta(clean, 'rtok', readyToken).catch(() => undefined);
+  return dialect.launchLine(host, payload, bootFile, exitToken);
+}
+
+/**
+ * How the remote shell under the hub's ssh ended, once the pane is back at the
+ * local shell: its own exit status, or the link failing (ssh's 255). Undefined
+ * with no record — a session launched before records existed. The record lands
+ * just after ssh returns, so it is given a moment.
+ *
+ * On Windows ssh's status only tells the two apart: sshd with a pty exits 0
+ * whatever the shell did. The code there is the one the launcher reported
+ * (`psLaunchScript`), and null without one — a host with no PowerShell 7 has no
+ * launcher around its shell — rather than a 0 nobody measured.
+ */
+async function remoteShellEnd(
+  clean: string,
+  windows: boolean,
+  waitMs = 1000,
+): Promise<{ code: number | null; dropped: boolean } | undefined> {
+  const token = await readMeta(clean, 'xtok').catch(() => '');
+  if (!token) return undefined;
+  for (const deadline = Date.now() + waitMs; ; ) {
+    const log = await readLogTailBytes(logPath(clean), 65536);
+    const code = sshExitIn(log, token);
+    if (code === SSH_FAILED) return { code: null, dropped: true };
+    if (code !== undefined && !windows) return { code, dropped: false };
+    if (code !== undefined) {
+      const ready = await readMeta(clean, 'rtok').catch(() => '');
+      return { code: ready ? (psLauncherExitIn(log, ready) ?? null) : null, dropped: false };
+    }
+    if (Date.now() >= deadline) return undefined;
+    await sleep(100);
+  }
+}
+
+/**
+ * How a command ended when its end marker never came, from proof only.
+ *
+ * Two cases are conclusive: the pane's own shell died, or a remote session's
+ * pane is back at the local shell, because ssh is gone. One function, because
+ * `poll` knew both and `wait` knew neither: `wait --handle` read only the end
+ * marker, so `sleep 1; exit 4` on a remote session reported `still_running`
+ * until its deadline while `poll` on the same handle answered at once.
+ *
+ * A remote command whose ssh link dropped is NOT still running, either. A
+ * dropped connection does not kill the pane — it falls back to the LOCAL shell,
+ * which is very much alive — so no end marker ever arrives and nothing is dead.
+ * An agent watched `poll` report a corpse as running for 516 seconds, eight
+ * minutes after the job died. And a remote `exit 4` looks exactly the same from
+ * the pane, so it was reported as a dropped link with its code lost; ssh's own
+ * status, which the local shell now records, tells the two apart.
+ */
+async function endedWithoutMarker(
+  clean: string,
+): Promise<{ exitCode: number | null; how: 'pane-dead' | 'remote-exited' | 'remote-dropped' } | undefined> {
+  const pane = await paneStatus(clean).catch(() => undefined);
+  if (pane?.dead) return { exitCode: pane.status, how: 'pane-dead' };
+  const sess = await get(clean).catch(() => undefined);
+  if (!sess?.remote || isNesting(sess.currentCommand)) return undefined;
+  const ssh = await remoteShellEnd(clean, sess.remoteOs === 'windows');
+  return ssh && !ssh.dropped
+    ? { exitCode: ssh.code, how: 'remote-exited' }
+    : { exitCode: null, how: 'remote-dropped' };
+}
+
 export async function commandFinished(name: string, handle: string): Promise<boolean> {
   return (await commandOutcome(name, handle)).finished;
 }
@@ -2950,6 +3059,8 @@ export interface CommandOutcome {
   exitCode?: number;
   /** Seconds, as measured by the shell that ran it. */
   seconds?: number;
+  /** It wrote no end marker: its shell exited, or the remote link dropped. */
+  ended?: 'pane-dead' | 'remote-exited' | 'remote-dropped';
 }
 
 /**
@@ -2969,7 +3080,15 @@ export interface CommandOutcome {
 export async function commandOutcome(name: string, handle: string): Promise<CommandOutcome> {
   const clean = validateName(name);
   const end = await (await endReaderFor(clean))(logPath(clean), handle).catch(() => undefined);
-  if (end === undefined) return { finished: false };
+  if (end === undefined) {
+    const ended = await endedWithoutMarker(clean);
+    if (!ended) return { finished: false };
+    return {
+      finished: true,
+      ...(ended.exitCode === null ? {} : { exitCode: ended.exitCode }),
+      ended: ended.how,
+    };
+  }
   return {
     finished: true,
     ...(Number.isFinite(end.code) ? { exitCode: end.code } : {}),
@@ -3092,6 +3211,8 @@ export async function poll(
   let commandGone: 'killed' | 'never-framed' | false = false;
   /** The ssh link for a remote session dropped while this command was running. */
   let remoteLost = false;
+  /** The command ended its shell: the pane's own, or the remote one under ssh. */
+  let shellExited: 'pane-dead' | 'remote-exited' | false = false;
 
   // Use the FULL end marker, not just the code: it also carries the directory
   // the command finished in.
@@ -3111,38 +3232,12 @@ export async function poll(
     if (sess?.remote && win) await recordWindowsState(clean, end);
     else if (sess?.remote) await recordRemoteState(clean, end, undefined, sess).catch(() => undefined);
   } else {
-    const { dead, status } = await paneStatus(clean).catch(() => ({
-      dead: false,
-      status: null,
-      command: '',
-      width: 0,
-    }));
-    if (dead) {
+    const ended = await endedWithoutMarker(clean);
+    if (ended) {
       done = true;
-      exitCode = status;
-    } else {
-      // A remote command whose ssh link dropped is NOT still running.
-      //
-      // The only liveness check here was `paneDead`, and a dropped connection
-      // does not kill the pane — it falls back to the LOCAL shell, which is
-      // very much alive. So no end marker ever arrives, nothing is dead, and
-      // `done: false` is returned forever with `running_for_seconds` counting
-      // up. An agent watched that report a corpse as running for 516 seconds,
-      // eight minutes after the job died, and reasonably called the field
-      // unfalsifiable: absent a marker the hub simply assumed "still running".
-      //
-      // `assertRemoteConnected` has always known how to spot this — a remote
-      // session whose pane is no longer in a nested shell. Poll never asked.
-      //
-      // `done` with a null exit code is exactly the documented shape for "it
-      // ended without a recoverable status", which is the honest answer: the
-      // command is gone, and what it did is unknowable.
-      const sess = await get(clean).catch(() => undefined);
-      if (sess?.remote && !isNesting(sess.currentCommand)) {
-        done = true;
-        exitCode = null;
-        remoteLost = true;
-      }
+      exitCode = ended.exitCode;
+      if (ended.how === 'remote-dropped') remoteLost = true;
+      else shellExited = ended.how;
     }
   }
 
@@ -3264,6 +3359,12 @@ export async function poll(
     ...(at.lostBytes === undefined ? {} : { lostBytes: at.lostBytes }),
     ...(at.beyondEnd ? { offsetBeyondEnd: true } : {}),
     ...(remoteLost ? { remoteDisconnected: true } : {}),
+    ...(shellExited
+      ? {
+          shellExited: true,
+          shellExitedNote: shellExited === 'remote-exited' ? REMOTE_EXITED_ADVICE : SHELL_EXITED_ADVICE,
+        }
+      : {}),
     ...(commandGone
       ? {
           commandGone: true,
@@ -4231,7 +4332,7 @@ async function adoptHandTypedWindows(clean: string): Promise<string> {
   const dialect = dialectFor('windows');
   await sendLine(
     clean,
-    dialect.launchLine(where.dest, dialect.launchPayload(readyToken, { cwd }), `${RC_DIR}/${clean}.boot`),
+    await launchLineFor(clean, dialect, where.dest, readyToken, dialect.launchPayload(readyToken, { cwd }), `${RC_DIR}/${clean}.boot`),
   );
   for (const deadline = Date.now() + 30_000; ; ) {
     await sleep(300);

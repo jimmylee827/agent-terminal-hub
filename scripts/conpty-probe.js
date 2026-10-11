@@ -802,6 +802,31 @@ async function probeHub(hasPwsh) {
         await a.kill(name).catch(() => {});
       }
     }
+    // `exit` in the session's own shell, after a Ctrl-C. A Ctrl-C reaches every
+    // process on the console, including the Windows PowerShell that launched
+    // pwsh, which then skipped its `exit` and sat at its own prompt without
+    // hooks: the next command was refused, and the tag line it typed was saved
+    // to the user's history. And Windows sshd exits 0 under a pty whatever the
+    // shell did, so the code must come from the launcher.
+    if (hasPwsh) {
+      await a.start('e2e-probe', 'Start-Sleep -Seconds 30');
+      await sleep(4000);
+      await a.sendKeys('e2e-probe', ['C-c']);
+      await sleep(3000);
+      const ended = await run('e2e-probe', 'Start-Sleep 1; exit 5');
+      gate('hub: after a Ctrl-C, exit ends the session shell, with its own code', ended.exitCode === 5 && ended.shellExited === true && !ended.remoteDisconnected, said(ended));
+      const after = await run('e2e-probe', 'Write-Output back');
+      gate('hub: and the next command reconnects rather than being refused', after.output === 'back' && after.reconnecting === true, said(after));
+      const st = await a.start('e2e-probe', 'Start-Sleep 1; exit 4');
+      const t0 = Date.now();
+      let o = await a.commandOutcome('e2e-probe', st.handle);
+      while (!o.finished && Date.now() - t0 < 20000) {
+        await sleep(400);
+        o = await a.commandOutcome('e2e-probe', st.handle);
+      }
+      gate('hub: waiting on a command that exits its shell ends promptly, with the code', o.finished && o.exitCode === 4 && o.ended === 'remote-exited' && Date.now() - t0 < 12000, `${JSON.stringify(o)} after ${Date.now() - t0}ms`);
+      await run('e2e-probe', 'Set-Location C:\\Windows');
+    }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
     // with nothing typed to get there, and still report exact exit codes.
