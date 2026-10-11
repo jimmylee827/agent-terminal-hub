@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { execFile } from 'node:child_process';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
@@ -34,6 +35,7 @@ import {
   durationMarkerRe,
   rcPath,
   rotateIfNeeded,
+  tmuxName,
 } from './paths';
 import {
   assertNotCredentialPrompt,
@@ -51,6 +53,7 @@ import {
   windowsShellByHand,
 } from './session';
 import { ensureControlDir } from './ssh';
+import { tmux } from './tmux';
 import { clearRequest, listRequests, requestHuman } from './requests';
 import {
   INTERACTIVE_COMMANDS,
@@ -1430,6 +1433,13 @@ async function runLocked(
   // command meant for another machine on this one, silently and successfully.
   // Reconnect first, and refuse rather than run if that does not work.
   let reconnected = false;
+  // A Windows shell an ssh typed into this LOCAL session opened: taken over and
+  // relaunched with the hooks (see adoptHandTypedWindows), then run as usual.
+  let adopted: string | undefined;
+  if (!session.remote && (await windowsShellByHand(clean, session.currentCommand))) {
+    adopted = adoptedNote(clean, await adoptHandTypedWindows(clean));
+    session = await get(clean);
+  }
   if (session.remote && !isNesting(session.currentCommand)) {
     const host = session.remote;
     await ensureControlDir();
@@ -2101,7 +2111,9 @@ async function runLocked(
     // — while it was looking at the SUDO_CACHED=yes the command had printed.
     // The traversal warning gets no such reprieve: `du` exits 0 while
     // under-reporting, which is the entire hazard.
-    ...(!needsHuman && blindSpotWarning ? { warning: blindSpotWarning } : {}),
+    ...(!needsHuman && (blindSpotWarning || adopted)
+      ? { warning: [adopted, blindSpotWarning].filter(Boolean).join(' ') }
+      : {}),
     // Marked only when the number can actually MISLEAD, explained once.
     //
     // It used to mark every compound line. An agent that batches probes with
@@ -2683,6 +2695,10 @@ export async function start(name: string, command: string): Promise<StartResult>
     // exactly what a cold agent hit: its `sudo -v` prompt was "dismissed before
     // you could type".
     await assertNotCredentialPrompt(clean);
+    if (!session.remote && (await windowsShellByHand(clean, session.currentCommand))) {
+      await adoptHandTypedWindows(clean);
+      session = await get(clean);
+    }
     const win = session.remoteOs === 'windows';
     if (!win && (await windowsShellByHand(clean, session.currentCommand))) throw windowsShellByHandError(clean);
 
@@ -4098,15 +4114,170 @@ async function raiseHumanWall(
 const TTY_EATS_RE = /[\t\v\f\r\x00-\x08\x0e-\x1f]/;
 
 /** A PowerShell session whose hooks did not answer: there is no safe fallback to type. */
+/**
+ * Where a hand-typed ssh went, as a destination the hub's own launch can use.
+ *
+ * Only options that change WHICH machine is reached, or how, matter: user and
+ * port are carried (as `ssh://user@host:port`, which OpenSSH takes as a
+ * destination); forwarding, keepalives, timeouts and the like are dropped,
+ * harmlessly, and so is RemoteCommand, which the hub's launch sets itself. A jump host, an identity file, a config file or a proxy cannot
+ * be carried yet, and connecting without them could reach a different machine,
+ * so those are named instead.
+ */
+export function sshDestination(argv: string[]): { dest?: string; cannot?: string } {
+  const withValue = new Set('BbcDEeFIiJLlmOoPpQRSWw'.split(''));
+  const cannotFlag = new Set(['F', 'i', 'I', 'J', 'O', 'Q', 'W', 'N', 'f', 'G', 's', 'V']);
+  const droppable =
+    /^(ClearAllForwardings|ForwardAgent|ForwardX11\w*|ServerAlive\w+|TCPKeepAlive|ConnectTimeout|ConnectionAttempts|LogLevel|StrictHostKeyChecking|UserKnownHostsFile|RequestTTY|SendEnv|SetEnv|Compression|BatchMode|ControlMaster|ControlPath|ControlPersist|EscapeChar|VisualHostKey|HashKnownHosts|AddKeysToAgent|ExitOnForwardFailure|GatewayPorts|LocalForward|RemoteForward|DynamicForward|PermitLocalCommand|RemoteCommand)$/i;
+  let user: string | undefined;
+  let port: string | undefined;
+  let host: string | undefined;
+  const cannot: string[] = [];
+  for (let i = 1; i < argv.length && host === undefined; i++) {
+    const a = argv[i] ?? '';
+    if (a === '--') {
+      host = argv[i + 1];
+      break;
+    }
+    if (!a.startsWith('-') || a.length < 2) {
+      host = a;
+      break;
+    }
+    for (let j = 1; j < a.length; j++) {
+      const f = a[j] ?? '';
+      if (cannotFlag.has(f)) cannot.push(`-${f}`);
+      if (!withValue.has(f)) continue;
+      const val = a.slice(j + 1) || argv[++i] || '';
+      if (f === 'p') port = val;
+      else if (f === 'l') user = val;
+      else if (f === 'o') {
+        const [k = '', ...v] = val.split(/[= ]/);
+        if (/^port$/i.test(k)) port = v.join('=');
+        else if (/^user$/i.test(k)) user = v.join('=');
+        else if (!droppable.test(k)) cannot.push(`-o ${k}`);
+      }
+      break;
+    }
+  }
+  if (!host) return { cannot: 'no destination' };
+  if (cannot.length) return { cannot: [...new Set(cannot)].join(', ') };
+  if (host.startsWith('ssh://')) return { dest: host };
+  const who = user && !host.includes('@') ? `${user}@${host}` : host;
+  return { dest: port ? `ssh://${who}:${port}` : who };
+}
+
+/** The command line of the ssh the pane is running, from the process table. */
+async function paneSshArgv(clean: string): Promise<string[] | undefined> {
+  const pid = Number(
+    (await tmux(['display-message', '-p', '-t', tmuxName(clean), '#{pane_pid}'], { allowFail: true }).catch(() => undefined))
+      ?.stdout.trim() ?? '',
+  );
+  if (!pid) return undefined;
+  const table: string = await new Promise((resolve) =>
+    execFile('ps', ['-A', '-o', 'pid=,ppid=,args='], { maxBuffer: 8 * 1024 * 1024 }, (_e, out) => resolve(String(out ?? ''))),
+  );
+  const rows = table.split('\n').map((l) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m);
+  // Breadth-first from the pane's shell: the first ssh below it.
+  let frontier = [pid];
+  for (let depth = 0; depth < 6 && frontier.length; depth++) {
+    const next: number[] = [];
+    for (const m of rows) {
+      if (!frontier.includes(Number(m[2]))) continue;
+      const argv = (m[3] ?? '').trim().split(/\s+/);
+      if (/(^|\/)ssh$/.test(argv[0] ?? '')) return argv;
+      next.push(Number(m[1]));
+    }
+    frontier = next;
+  }
+  return undefined;
+}
+
+/**
+ * Take over a Windows shell that an ssh typed into the pane opened, and make
+ * the session a proper Windows one (the user's decision: refusing it was bad UX).
+ *
+ * That shell has none of the hub's hooks, so the hub leaves it (`exit`, which
+ * cmd and PowerShell both understand), marks the session remote and Windows for
+ * the same destination, and launches PowerShell with its hooks over its own ssh
+ * line, exactly as `ath new --remote` does, carrying the directory the prompt
+ * showed. What the agent set by hand in the old shell is gone, which the
+ * result says (`reconnecting`). Only for a LOCAL session: one already remote
+ * that hopped on to Windows would `exit` back to the remote host, not here.
+ */
+async function adoptHandTypedWindows(clean: string): Promise<string> {
+  const argv = await paneSshArgv(clean);
+  const where = argv ? sshDestination(argv) : { cannot: 'no ssh found in the pane' };
+  if (!where.dest) throw windowsShellByHandError(clean, where.cannot);
+  const prompt = (await capturePane(clean, 60).catch(() => ''))
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter(Boolean)
+    .pop() ?? '';
+  const cwd = /(?:^|\s)(?:PS )?([A-Za-z]:\\[^<>|"\n]*?)>$/.exec(prompt)?.[1];
+  await sendLine(clean, 'exit');
+  for (let i = 0; i < 50 && isNesting((await paneStatus(clean).catch(() => null))?.command ?? 'ssh'); i++) {
+    await sleep(200);
+  }
+  if (isNesting((await paneStatus(clean).catch(() => null))?.command ?? 'ssh')) {
+    throw windowsShellByHandError(clean, 'its shell did not exit');
+  }
+  await setMeta(clean, 'remote', where.dest);
+  await setMeta(clean, 'ros', 'windows');
+  await setMeta(clean, 'frame', '').catch(() => undefined);
+  await setMeta(clean, 'wrap', '').catch(() => undefined);
+  if (cwd) await setMeta(clean, 'rcwd', Buffer.from(cwd, 'utf8').toString('base64')).catch(() => undefined);
+  await ensureControlDir();
+  const readyToken = randomNonce();
+  const dialect = dialectFor('windows');
+  await sendLine(
+    clean,
+    dialect.launchLine(where.dest, dialect.launchPayload(readyToken, { cwd }), `${RC_DIR}/${clean}.boot`),
+  );
+  for (const deadline = Date.now() + 30_000; ; ) {
+    await sleep(300);
+    if ((await readLogTailBytes(logPath(clean), 8192)).includes(`<ATHR:${readyToken}:`)) break;
+    const now = await get(clean);
+    if (now.state === 'needs-input') {
+      throw new AthError(
+        'needs_human',
+        `The hub is taking over the Windows shell in "${clean}" and relaunching it with its ` +
+          `hooks, and that ssh connection is asking for something only a person can answer. ` +
+          `Answer it with "ath attach ${clean}", then run the command again.`,
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new AthError(
+        'remote_disconnected',
+        `The hub left the hand-typed Windows shell in "${clean}" to relaunch it with its hooks, ` +
+          `but the new connection to "${where.dest}" did not come up. Nothing was run. ` +
+          `Check it with "ath attach ${clean}".`,
+      );
+    }
+  }
+  const session = await get(clean);
+  await setMeta(clean, 'frame', session.currentCommand).catch(() => undefined);
+  await setMeta(clean, 'wrap', '1').catch(() => undefined);
+  if (cwd && !psLaunchCarries(readyToken, cwd)) await restoreWindowsState(clean, cwd);
+  return where.dest;
+}
+
+/** What a taken-over session reports, once: what changed and what did not survive. */
+function adoptedNote(name: string, dest: string): string {
+  return (
+    `The hub took over the Windows shell a hand-typed ssh had opened in "${name}" and ` +
+    `relaunched it with its hooks: "${name}" is now a remote session on ${dest}, in the same ` +
+    `directory. Anything set by hand in the old shell (variables, functions) is gone.`
+  );
+}
+
 /** A Windows shell reached by an ssh typed into the pane, not launched by the hub. */
-function windowsShellByHandError(name: string): AthError {
+function windowsShellByHandError(name: string, why = 'it was opened from a remote host'): AthError {
   return new AthError(
     'windows_shell_by_hand',
-    `"${name}" is at a Windows prompt that an ssh typed into the pane opened, not one ` +
-      `the hub launched, so it has none of the hub's hooks: nothing was typed or run. ` +
-      `Create the session with "ath new <name> --remote <host>" instead — the hub then ` +
-      `detects Windows and starts PowerShell with its hooks. Type "exit" in this pane ` +
-      `(ath attach ${name}) to leave that shell.`,
+    `"${name}" is at a Windows prompt that an ssh typed into the pane opened, and the hub ` +
+      `could not take it over (${why}), so nothing was typed or run. Create the session with ` +
+      `"ath new <name> --remote <host>" instead — the hub then starts PowerShell with its ` +
+      `hooks. Type "exit" in this pane (ath attach ${name}) to leave that shell.`,
   );
 }
 

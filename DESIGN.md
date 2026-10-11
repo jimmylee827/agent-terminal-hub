@@ -145,10 +145,12 @@ send that into the transcript. Their prompt, profile and line editing stay.
 The OS is detected, not configured: probed over the shared connection when key
 auth allows, otherwise recognised from ConPTY's greeting after a POSIX launch
 lands there, and relaunched as PowerShell. An ssh typed BY HAND into a local
-session is not adopted: the hub recognises the Windows prompt it reached, types
-no line-clearing keys there (cmd and PowerShell would type them as text), and
-refuses `run`/`start` (`windows_shell_by_hand`) rather than type POSIX plumbing
-into it; `--remote` is the way in. Limits that are the platform's, not
+session is taken over: the hub recognises the Windows prompt it reached (and
+types no line-clearing keys there, which cmd and PowerShell would type as text),
+and the next `run` or `start` leaves that shell, marks the session remote for
+the same destination, and launches PowerShell with its hooks in the directory
+the prompt showed. Only a jump host, identity file or proxy option, which the
+hub cannot carry yet, makes it decline instead, naming the option. Limits that are the platform's, not
 the hub's: a UAC prompt or anything else on the interactive desktop cannot be
 reached over ssh — Windows PowerShell 5.1's `Get-Credential` is one: it opens
 the credential dialog there, ignores typing and Ctrl-C, and never returns, so

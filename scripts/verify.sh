@@ -979,6 +979,15 @@ say([ps.windowsShellOnScreen("Microsoft Windows [Version 10.0.26200.1]\n\nC:\\Us
       ps.windowsShellOnScreen("C:\\Users\\t>",""),
       ps.windowsShellOnScreen("Microsoft Windows [Version 10.0.26200.1]\nC:\\Users\\t>dir\ncopying files",W11HELLO)].some(Boolean),
     "windowsByHandRecognised","BYHANDMISREAD");
+// A hand-typed ssh into Windows is taken over (the user decision): the hub
+// reads where that ssh went from its command line. User and port are carried,
+// harmless options dropped; a jump host, identity file or proxy is named, since
+// connecting without it could reach a different machine.
+const rr=require("'"$RP"'/packages/core/dist/run.js"), sd=(...a)=>rr.sshDestination(["ssh",...a]);
+say(sd("winbox").dest==="winbox" && sd("-o","ClearAllForwardings=yes","-o","RemoteCommand=none","h").dest==="h" &&
+    sd("-p","2222","-l","bob","h").dest==="ssh://bob@h:2222" && sd("-oPort=2200","u@h").dest==="ssh://u@h:2200" &&
+    sd("-t","h","powershell").dest==="h" && /-J/.test(sd("-J","jump","h").cannot||"") && /-i/.test(sd("-i","k","h").cannot||"") &&
+    /ProxyCommand/.test(sd("-o","ProxyCommand=x","h").cannot||"") && !!rr.sshDestination(["ssh"]).cannot,"handTypedSshRead","SSHDESTWRONG");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 // What a Windows host is left with, said as precisely as the POSIX case: the
 // hub keeps its own lines out of the history file, and a person\u2019s are saved.
@@ -1103,7 +1112,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself handTypedSshRead windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 
@@ -1303,6 +1312,8 @@ chk "the resize hook works on a fresh server" "yes" "$(printf '%s' "$WHOOK" | gr
 # `run` its POSIX probe and `__ath …`, which failed as command_lost. Driven here
 # with a fake: a copy of cat NAMED ssh, behind a Windows banner and prompt. And
 # the same fake behind a POSIX prompt must still get C-e/C-u: nothing changes there.
+# The fake names no destination, so it cannot be taken over and run declines
+# (one that can is taken over: the live gate in conpty-probe.js).
 WBYHAND="$(ATH_HOME="$(mktemp -d)" ATH_SOCKET="athwb$$" node -e '
 const a=require("'"$RP"'/packages/core/dist/index.js");
 const cp=require("child_process"), fs=require("fs"), os=require("os"), path=require("path");
@@ -1342,7 +1353,7 @@ const pane=async(name,banner,prompt)=>{
   }
 })();
 ' 2>/dev/null)"
-chk "a hand-typed ssh into Windows: run refuses"       "yes" "$(printf '%s' "$WBYHAND" | grep -qw refused       && echo yes || echo no)"
+chk "a hand-typed Windows shell it cannot take over: run declines" "yes" "$(printf '%s' "$WBYHAND" | grep -qw refused       && echo yes || echo no)"
 chk "and types nothing into it"                        "yes" "$(printf '%s' "$WBYHAND" | grep -qw nothingTyped  && echo yes || echo no)"
 chk "send types the line with no C-e/C-u"              "yes" "$(printf '%s' "$WBYHAND" | grep -qw sendClean     && echo yes || echo no)"
 chk "a POSIX prompt behind ssh still gets C-e/C-u"     "yes" "$(printf '%s' "$WBYHAND" | grep -qw posixKeysKept && echo yes || echo no)"
