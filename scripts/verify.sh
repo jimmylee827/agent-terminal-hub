@@ -988,6 +988,13 @@ say(sd("winbox").dest==="winbox" && sd("-o","ClearAllForwardings=yes","-o","Remo
     sd("-p","2222","-l","bob","h").dest==="ssh://bob@h:2222" && sd("-oPort=2200","u@h").dest==="ssh://u@h:2200" &&
     sd("-t","h","powershell").dest==="h" && /-J/.test(sd("-J","jump","h").cannot||"") && /-i/.test(sd("-i","k","h").cannot||"") &&
     /ProxyCommand/.test(sd("-o","ProxyCommand=x","h").cannot||"") && !!rr.sshDestination(["ssh"]).cannot,"handTypedSshRead","SSHDESTWRONG");
+// Windows 10 marks a wrap only on the bottom row, so an agent command starts
+// there (blank lines after a clear); its console cells cannot tell the two
+// apart, measured. Only below build 22000, and before BOTH start markers: the
+// prompt for a typed command and the wrapper.
+const hl=ps.psHooksScript();
+say(/function global:__ath_low \{ if \(\[Environment\]::OSVersion\.Version\.Build -lt 22000\)/.test(hl) &&
+    /if \(\$global:__ath_pending\) \{ __ath_low;/.test(hl) && /__ath_low; __ath_mark \(.<ATHS:. \+ \$__ath_id/.test(hl),"windows10StartsAtBottom","STARTSMIDSCREEN");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 // What a Windows host is left with, said as precisely as the POSIX case: the
 // hub keeps its own lines out of the history file, and a person\u2019s are saved.
@@ -1112,7 +1119,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself handTypedSshRead windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windows10StartsAtBottom handTypedSshRead windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 

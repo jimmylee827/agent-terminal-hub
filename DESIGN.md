@@ -132,7 +132,13 @@ row, followed by any line; a line one cell short followed by one starting with
 a wide character; and a wrapped line whose last row ends one cell short, which
 Windows 10 pads with a space, exactly as it draws a real space at the edge
 mid-sentence. All three were measured byte-identical to the commoner case
-(scripts/fixtures, `knownLimit`). A resize replays the whole screen; any result it
+(scripts/fixtures, `knownLimit`). The first two happen only above the bottom
+row, where Windows 10 does not mark its wraps; reading the console buffer
+cannot help, as its cells for the two cases are identical (measured). So an
+agent's command starts on the bottom row on Windows 10 (blank lines after a
+clear, nothing once the screen is full), and the hub's own output avoids
+both. The third is the same on the bottom row and remains; `read` of what a
+person ran above the bottom row can still meet the first two. A resize replays the whole screen; any result it
 touches is flagged `capture_incomplete` rather than returned with lines twice.
 Windows 10 announces no resize in-band, so there the hub's own record of the
 pane's widths decides.

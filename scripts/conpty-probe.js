@@ -745,6 +745,22 @@ async function probeHub(hasPwsh) {
       gate(`hub: PowerShell prompts park as needs_input (${hasPwsh ? 6 : 5} kinds), and Ctrl-C leaves nothing`, parked.length === 0 && left.output === 'False', parked.join('; ') || `left=${left.output}`);
       if (!hasPwsh) info('hub: Get-Credential on Windows PowerShell 5.1', 'not run: it opens a GUI dialog an ssh session cannot show, and cannot be interrupted (platform limit, DESIGN.md)');
     }
+    // On a cleared screen, a line exactly as wide as the pane and the lines
+    // around it read exactly. Windows 10 drew those with the same bytes as a
+    // wrapped line above the bottom row, so agent commands now start on it.
+    {
+      const w = (await a.get('e2e-probe')).paneWidth || 200;
+      const bad = [];
+      for (const via of ['typed', 'wrapped']) {
+        await run('e2e-probe', 'Clear-Host');
+        for (const n of [w, 2 * w - 1, 2 * w]) {
+          const cmd = via === 'typed' ? `Write-Output ('x' * ${n}); Write-Output 'next'` : `Write-Output ('x' * ${n})\nWrite-Output 'next'`;
+          const r = await run('e2e-probe', cmd);
+          if (r.output !== 'x'.repeat(n) + '\nnext') bad.push(`${via} ${n}: ${(r.output || r.error || '').length} chars`);
+        }
+      }
+      gate('hub: on a cleared screen, lines exactly one and two widths wide read exactly (typed and wrapped)', bad.length === 0, bad.join('; '));
+    }
     // A hand-typed ssh into Windows from a LOCAL session (what an agent did by
     // mistake): the next run takes it over, relaunches PowerShell with the hooks
     // in the same directory, and runs the command with its exact exit code.

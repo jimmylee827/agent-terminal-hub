@@ -245,6 +245,13 @@ export function psHooksScript(): string {
     // 0,0, buffer the pane's size), measured on Windows 10 and 11 alike.
     // The Windows build rides along: Windows 10's ConPTY draws a wrapped line
     // differently from Windows 11's, and the replay has to know which it is.
+    // Windows 10 draws a wrapped row and a row exactly as wide as the pane with
+    // the same bytes, but only ABOVE the bottom row: there it marks a wrap
+    // (`\b\r\n`). Reading the console instead cannot help: its cells for "200
+    // x, then next" and for one 204-character line are identical (measured).
+    // So an agent's command starts on the bottom row; on a full screen it is
+    // already there, so this prints blank lines only after a clear.
+    "function global:__ath_low { if ([Environment]::OSVersion.Version.Build -lt 22000) { try { $r = $Host.UI.RawUI; $n = $r.WindowSize.Height - ($r.CursorPosition.Y - $r.WindowPosition.Y) - 1; if ($n -gt 0) { [Console]::Write([string][char]10 * $n) } } catch {} } }",
     "function global:__ath_pos([string]$id) { try { $c = $Host.UI.RawUI.CursorPosition; $w = $Host.UI.RawUI.WindowPosition; __ath_osc ('pos;' + $id + ';' + ($c.Y - $w.Y) + ';' + $c.X + ';' + [Environment]::OSVersion.Version.Build) } catch {} }",
     // No read of a variable that may not exist: a profile with `Set-StrictMode
     // -Version Latest` makes that THROW, which left the hooks half-installed and
@@ -316,7 +323,7 @@ export function psHooksScript(): string {
     // here made happen in 1 case in 20.
     "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)) + $(if ($agent -and $hnew) { ';' + [int]($hl.EndExecutionTime - $hl.StartExecutionTime).TotalSeconds })); __ath_envreport $global:__ath_n }",
     "  $m = if ($global:__ath_n) { '<ATHE:' + $global:__ath_n + ':' + $rc + '>' } else { '' }",
-    '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
+    '  if ($global:__ath_pending) { __ath_low; $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
     "  __ath_mark ($m + '<ATHS:' + $global:__ath_n + '>'); __ath_pos $global:__ath_n; Write-Host ''",
     // The user's prompt sees the status of THEIR line, not of ours: `$?` cannot
@@ -331,7 +338,7 @@ export function psHooksScript(): string {
     // session's scope; its own variables carry a prefix for that reason.
     'function global:__ath([string]$__ath_id, [string]$__ath_b64) {',
     '  $global:LASTEXITCODE = 0; $global:__ath_ok = $true; $__ath_t0 = Get-Date',
-    "  __ath_mark ('<ATHS:' + $__ath_id + '>'); __ath_pos $__ath_id; Write-Host ''",
+    "  __ath_low; __ath_mark ('<ATHS:' + $__ath_id + '>'); __ath_pos $__ath_id; Write-Host ''",
     // Parsed alone first, so a syntax error is shown against the agent's own
     // lines, as a typed one would be. Left to `Create`, it surfaced as a failed
     // call on THIS function's source line, pointing into the status line below.
