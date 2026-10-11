@@ -249,8 +249,10 @@ export function psHooksScript(): string {
     // the same bytes, but only ABOVE the bottom row: there it marks a wrap
     // (`\b\r\n`). Reading the console instead cannot help: its cells for "200
     // x, then next" and for one 204-character line are identical (measured).
-    // So an agent's command starts on the bottom row; on a full screen it is
-    // already there, so this prints blank lines only after a clear.
+    // So every prompt starts on the bottom row, a person's as well as the
+    // agent's: `read` returns what a person ran too (it joined their exact-width
+    // lines). On a full screen it is already there, so this prints blank lines
+    // only after a clear, where the person's prompt now sits at the bottom.
     "function global:__ath_low { if ([Environment]::OSVersion.Version.Build -lt 22000) { try { $r = $Host.UI.RawUI; $n = $r.WindowSize.Height - ($r.CursorPosition.Y - $r.WindowPosition.Y) - 1; if ($n -gt 0) { [Console]::Write([string][char]10 * $n) } } catch {} } }",
     "function global:__ath_pos([string]$id) { try { $c = $Host.UI.RawUI.CursorPosition; $w = $Host.UI.RawUI.WindowPosition; __ath_osc ('pos;' + $id + ';' + ($c.Y - $w.Y) + ';' + $c.X + ';' + [Environment]::OSVersion.Version.Build) } catch {} }",
     // No read of a variable that may not exist: a profile with `Set-StrictMode
@@ -323,7 +325,8 @@ export function psHooksScript(): string {
     // here made happen in 1 case in 20.
     "  if ($global:__ath_n) { __ath_osc ('cwd;' + $global:__ath_n + ';' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Location).Path)) + $(if ($agent -and $hnew) { ';' + [int]($hl.EndExecutionTime - $hl.StartExecutionTime).TotalSeconds })); __ath_envreport $global:__ath_n }",
     "  $m = if ($global:__ath_n) { '<ATHE:' + $global:__ath_n + ':' + $rc + '>' } else { '' }",
-    '  if ($global:__ath_pending) { __ath_low; $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
+    '  __ath_low',
+    '  if ($global:__ath_pending) { $global:__ath_n = $global:__ath_pending; $global:__ath_pending = $null }',
     "  else { $global:__ath_h++; $global:__ath_n = 'h' + $global:__ath_h }",
     "  __ath_mark ($m + '<ATHS:' + $global:__ath_n + '>'); __ath_pos $global:__ath_n; Write-Host ''",
     // The user's prompt sees the status of THEIR line, not of ours: `$?` cannot

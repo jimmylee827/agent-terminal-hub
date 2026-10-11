@@ -998,13 +998,14 @@ say(sd("winbox").dest==="winbox" && sd("-o","ClearAllForwardings=yes","-o","Remo
     sd("-p","2222","-l","bob","h").dest==="ssh://bob@h:2222" && sd("-oPort=2200","u@h").dest==="ssh://u@h:2200" &&
     sd("-t","h","powershell").dest==="h" && /-J/.test(sd("-J","jump","h").cannot||"") && /-i/.test(sd("-i","k","h").cannot||"") &&
     /ProxyCommand/.test(sd("-o","ProxyCommand=x","h").cannot||"") && !!rr.sshDestination(["ssh"]).cannot,"handTypedSshRead","SSHDESTWRONG");
-// Windows 10 marks a wrap only on the bottom row, so an agent command starts
+// Windows 10 marks a wrap only on the bottom row, so every command starts
 // there (blank lines after a clear); its console cells cannot tell the two
 // apart, measured. Only below build 22000, and before BOTH start markers: the
-// prompt for a typed command and the wrapper.
+// prompt, for EVERY frame (a person typing too, not only a pending agent
+// line), and the wrapper.
 const hl=ps.psHooksScript();
 say(/function global:__ath_low \{ if \(\[Environment\]::OSVersion\.Version\.Build -lt 22000\)/.test(hl) &&
-    /if \(\$global:__ath_pending\) \{ __ath_low;/.test(hl) && /__ath_low; __ath_mark \(.<ATHS:. \+ \$__ath_id/.test(hl),"windows10StartsAtBottom","STARTSMIDSCREEN");
+    /\n  __ath_low\n  if \(\$global:__ath_pending\) \{ \$global:__ath_n = /.test(hl) && /__ath_low; __ath_mark \(.<ATHS:. \+ \$__ath_id/.test(hl),"windows10StartsAtBottom","STARTSMIDSCREEN");
 say(a.parseOsOption("windows")==="windows" && a.parseOsOption(undefined)===undefined,"osOptionOk","OSOPTION");
 // What a Windows host is left with, said as precisely as the POSIX case: the
 // hub keeps its own lines out of the history file, and a person\u2019s are saved.

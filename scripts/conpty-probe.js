@@ -29,7 +29,7 @@
 // scripts travel as -EncodedCommand and are never typed, so they do not reach
 // the shell's history either. The stress
 // probe keeps the host's CPU busy for up to two minutes.
-const { spawnSync } = require('node:child_process');
+const { spawnSync, execFile } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -747,7 +747,7 @@ async function probeHub(hasPwsh) {
     }
     // On a cleared screen, a line exactly as wide as the pane and the lines
     // around it read exactly. Windows 10 drew those with the same bytes as a
-    // wrapped line above the bottom row, so agent commands now start on it.
+    // wrapped line above the bottom row, so every command now starts on it.
     {
       const w = (await a.get('e2e-probe')).paneWidth || 200;
       const bad = [];
@@ -760,6 +760,26 @@ async function probeHub(hasPwsh) {
         }
       }
       gate('hub: on a cleared screen, lines exactly one and two widths wide read exactly (typed and wrapped)', bad.length === 0, bad.join('; '));
+      // The same lines typed by a PERSON (no tag: the hub frames it as theirs),
+      // read back with `read`. Before every prompt started on the bottom row,
+      // Windows 10 drew the first one with a wrap's bytes, and `read` returned
+      // it joined to `next`.
+      // A person's line is saved to their history file, so this session saves
+      // nothing first (the first version of this gate added two lines to it).
+      const byHand = [];
+      await run('e2e-probe', 'if (Get-Module PSReadLine) { Set-PSReadLineOption -HistorySaveStyle SaveNothing }; Clear-Host');
+      for (const n of [w, 2 * w]) {
+        const { nextOffset: at } = await a.readTail('e2e-probe', 1);
+        await a.sendLine('e2e-probe', `Write-Output ('x' * ${n}); Write-Output 'next'; Write-Output ('by' + 'hand-${n}')`);
+        let lines = [];
+        for (let i = 0; i < 40 && !lines.includes(`byhand-${n}`); i++) {
+          await sleep(250);
+          lines = (await a.readSince('e2e-probe', at)).output.split('\n');
+        }
+        const k = lines.indexOf('x'.repeat(n));
+        if (k < 0 || lines[k + 1] !== 'next') byHand.push(`${n}: ${lines.filter((l) => l.startsWith('x')).map((l) => l.length).join('+') || 'none'}`);
+      }
+      gate('hub: and typed by a person, read returns them exactly too', byHand.length === 0, byHand.join('; '));
     }
     // A hand-typed ssh into Windows from a LOCAL session (what an agent did by
     // mistake): the next run takes it over, relaunches PowerShell with the hooks
@@ -789,8 +809,19 @@ async function probeHub(hasPwsh) {
     // began, and append to PATH (a long value), all of which must come back.
     const envSet = await run('e2e-probe', "$env:ATH_PROBE_X = 'v1 \"q\" 中文'; Remove-Item env:PROCESSOR_LEVEL; $env:Path += ';C:\\ath-probe-dir'");
     gate('hub: environment changes are made', envSet.exitCode === 0, said(envSet));
-    await ssh.closeSharedConnection(host);
-    for (let i = 0; i < 20 && (await a.get('e2e-probe')).currentCommand === 'ssh'; i++) await sleep(500);
+    // Drop it for certain: `-O exit` can fail (the hub swallows that), and a
+    // gate then blamed `run` for not reconnecting a link that never dropped.
+    const dropLink = async () => {
+      let why = '';
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        why = await new Promise((res) => execFile('ssh', [...ssh.sshOptions(), '-O', 'exit', host], (e, _o, err) => res(e ? String(err).trim() || e.message : 'ok')));
+        for (let i = 0; i < 20 && (await a.get('e2e-probe')).currentCommand === 'ssh'; i++) await sleep(500);
+        if ((await a.get('e2e-probe')).currentCommand !== 'ssh') return attempt === 1 ? '' : `dropped on attempt ${attempt}`;
+      }
+      return `link never dropped (-O exit: ${why})`;
+    };
+    const drop1 = await dropLink();
+    if (drop1) info('hub: dropping the link', drop1);
     const back = await run('e2e-probe', '(Get-Location).Path; cmd /c exit 6');
     gate('hub: after the link drops, run reconnects and says so', back.reconnecting === true, said(back));
     gate('hub: and comes back in the same directory, exit codes intact', back.output === 'C:\\Windows' && back.exitCode === 6, said(back));
@@ -804,8 +835,8 @@ async function probeHub(hasPwsh) {
     const deepPath = deepDir.output;
     const carried = require(path.join(CORE, 'powershell.js')).psLaunchCarries('0123456789ab', deepPath || '');
     gate('hub: a deep, non-ASCII directory is too long to ride the relaunch', deepDir.exitCode === 0 && /深层目录/.test(deepPath) && !carried, `${(deepPath || '').length} chars, carried=${carried}`);
-    await ssh.closeSharedConnection(host);
-    for (let i = 0; i < 20 && (await a.get('e2e-probe')).currentCommand === 'ssh'; i++) await sleep(500);
+    const drop2 = await dropLink();
+    if (drop2) info('hub: dropping the link again', drop2);
     const deepBack = await run('e2e-probe', '(Get-Location).Path');
     gate('hub: and still comes back after a reconnect, through the wrapper', deepBack.reconnecting === true && deepBack.output === deepPath, said(deepBack));
     // The reconnect started a new shell, so `$d` is gone: name the path.
