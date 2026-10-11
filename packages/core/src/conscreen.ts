@@ -163,7 +163,7 @@ export async function renderFrom(
     const buf = term.buffer.active;
     // The start row's index in the buffer moves only if scrollback overflowed.
     const truncated = buf.length >= SCROLLBACK + term.rows;
-    return { lines: readAll ? readLines(term, 0, 0) : readLines(term, at.row, at.col), truncated };
+    return { lines: readAll ? readLines(term, 0, 0, legacy) : readLines(term, at.row, at.col, legacy), truncated };
   } finally {
     term.dispose();
   }
@@ -227,7 +227,7 @@ interface Cell {
 }
 
 /** The buffer from (row, col) on, as logical lines. */
-function readLines(term: Terminal, row: number, col: number): string[] {
+function readLines(term: Terminal, row: number, col: number, legacy = false): string[] {
   const buf = term.buffer.active;
   const cell = buf.getNullCell();
   const logical: Cell[][] = [];
@@ -276,6 +276,23 @@ function readLines(term: Terminal, row: number, col: number): string[] {
       // with the same bytes (measured, on and above the bottom row), and is
       // joined too: a CJK line meeting the edge is far the likelier.
       while (prev.length && !prev[prev.length - 1]!.written) prev.pop();
+      prev.push(...cells);
+    } else if (
+      legacy &&
+      prev &&
+      y > row &&
+      cells[0]?.wide &&
+      !cells[0].hidden &&
+      prevReach === term.cols - 1 &&
+      prev[prev.length - 1]?.ch === ' ' &&
+      !prev[prev.length - 1]?.hidden
+    ) {
+      // Windows 10's third form of the same case, seen on the bottom row right
+      // after a reconnect: the last cell drawn as a SPACE, then a bare CRLF (no
+      // \b), then the wide character. A line that really ends in a space at
+      // the edge, followed by one opening with a wide character, would read the
+      // same; that is far rarer than a CJK line meeting the edge.
+      prev.pop();
       prev.push(...cells);
     } else logical.push(cells);
     prevReach = reach;

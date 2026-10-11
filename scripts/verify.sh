@@ -886,12 +886,15 @@ const w10=(row,body,build)=>ps.psReadFrame(hid("<ATHS:"+N+">")+"\x1b]777;ath;pos
 const X30="x".repeat(30);
 sayA(Promise.all([w10(1,"\r\n"+X30+"\r\nyy\r\n",19045),w10(1,"\r\n"+X30+"\r\nyy\r\n",26200),w10(4,"\r\n"+X30+"\r\nyy\r\n",19045),w10(4,"\r\n"+X30+"\b\x1b[?25h\r\nyy\r\n",19045),w10(1,"\r\n"+X30.slice(1)+" \r\nyy\r\n",19045)]).then(([l1,l2,l3,l4,l5])=>l1===X30+"yy" && l2===X30+"\nyy" && l3===X30+"\nyy" && l4===X30+"yy" && l5===X30.slice(1)+" yy"),"windows10WrapRules","W10WRAP");
 // A wide character that misses the last column: Windows 10 leaves that cell
-// untouched and starts a new row; one cell short with nothing drawn there and
+// untouched and starts a new row (or, on the bottom row after a reconnect,
+// draws it as a space and sends a bare CRLF: joined too, the space dropped); one cell short with nothing drawn there and
 // a wide character next is one line. (So is a line truly one cell short followed
 // by one starting with a wide character: the bytes are identical, measured.)
 // One cell shorter still, or a narrow character next, is two lines.
 const Y29="y".repeat(29);
-sayA(Promise.all([w10(1,"\r\n"+Y29+"\r\n\u4e2d\u6587\r\n",19045),w10(1,"\r\n"+Y29+"\r\nab\r\n",19045),w10(1,"\r\n"+Y29.slice(1)+"\r\n\u4e2d\u6587\r\n",19045)]).then(([s1,s2,s3])=>s1===Y29+"\u4e2d\u6587" && s2===Y29+"\nab" && s3===Y29.slice(1)+"\n\u4e2d\u6587"),"wideWrapJoined","WIDEWRAPSPLIT");
+sayA(Promise.all([w10(1,"\r\n"+Y29+"\r\n\u4e2d\u6587\r\n",19045),w10(1,"\r\n"+Y29+"\r\nab\r\n",19045),w10(1,"\r\n"+Y29.slice(1)+"\r\n\u4e2d\u6587\r\n",19045),
+  w10(4,"\r\n"+Y29+" \r\n\u4e2d\u6587\r\n",19045),w10(4,"\r\n"+Y29+" \r\nab\r\n",19045)]).then(([s1,s2,s3,s4,s5])=>s1===Y29+"\u4e2d\u6587" && s2===Y29+"\nab" && s3===Y29.slice(1)+"\n\u4e2d\u6587" &&
+  s4===Y29+"\u4e2d\u6587" && s5===Y29+"\nab"),"wideWrapJoined","WIDEWRAPSPLIT");
 // Read from wherever the start marker FINALLY is: a repaint that redraws it
 // higher (scrolls the stream never carried) moves the frame with it.
 sayA(w10(5,"\r\nPS> cmd\x1b[?25l\x1b[H"+hid("<ATHE:h1:0><ATHS:"+N+">")+"\x1b[K\r\nPS> cmd\x1b[K\r\nresult\x1b[K\r\n",19045).then(o=>o==="PS> cmd\nresult"),"frameFollowsItsMarker","MARKERLEFTBEHIND");
