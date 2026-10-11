@@ -890,6 +890,19 @@
       "command": "Get-Date | Out-Null",
       "raw": "\u001b]777;ath;pos;1577562907e5;49;31;19045\u0007\r\n\u001b[8m<ATHE:h41:0><ATHS:1577562907e5>\u001b[28m\u001b[K\r\nPS C:\\Users\\userxx>\u001b[1C\u001b[?25l\u001b[93mGet-Date\u001b[m | \u001b[93mOut-Null\u001b[?25h\u001b]777;ath;cwd;1577562907e5;QzpcVXNlcnNcQjhVc2Vy;0\u0007\u001b]777;ath;pos;h42;49;31;19045\u0007\u001b[m\r\n\u001b[8m<ATHE:1577562907e5:0><ATHS:h42>\u001b[28m\u001b[K\r\nPS C:\\User",
       "expect": ""
+    },
+    {
+      "name": "win10 (build 19045), bottom row after a reconnect: a wide character misses the edge, drawn as a space then a bare CRLF",
+      "host": "win10",
+      "set": "reconnect",
+      "size": {
+        "cols": 200,
+        "rows": 50
+      },
+      "nonce": "a41df13c14f7",
+      "command": "(Get-Location).Path",
+      "raw": "\u001b[8m<ATHE:h5:0><ATHS:a41df13c14f7>\u001b]777;ath;pos;a41df13c14f7;49;30;19045\u0007\u001b[28m\r\nPS C:\\Users\\userxx\\AppData\\Local\\Temp\\ath-probe-深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录\b\r\n深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录>\u001b[1C\u001b[?25l(\u001b[93mGet-Location\u001b[m).Path\u001b[?25h\r\nC:\\Users\\userxx\\AppData\\Local\\Temp\\ath-probe-深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深 \r\n层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录\r\u001b]777;ath;cwd;a41df13c14f7;QzpcVXNlcnNcQjhVc2VyXEFwcERhdGFcTG9jYWxcVGVtcFxhdGgtcHJvYmUt5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V5rex5bGC55uu5b2V;0\u0007\n\u001b]777;ath;pos;h6;49;30;19045\u0007\u001b[8m<ATHE:a41df13c14f7:0><ATHS:h6>\r\u001b[28m\nPS C:\\Users\\us",
+      "expect": "C:\\Users\\userxx\\AppData\\Local\\Temp\\ath-probe-深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录深层目录"
     }
   ]
 }

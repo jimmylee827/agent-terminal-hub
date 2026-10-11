@@ -42,7 +42,22 @@ if (!targets.length) {
 }
 /** Same length as `name`, so nothing on the screen moves. */
 const placeholder = (name) => ('user' + 'x'.repeat(name.length)).slice(0, name.length);
-const scrub = (s, user) => (user ? s.split(user).join(placeholder(user)) : s);
+// Every identifying name, in any letter case: Windows spells the account
+// (`$env:USERNAME`) and its profile folder differently, and a case-sensitive
+// replace once left the folder name in 38 published frames.
+const scrub = (s, names) => names.filter(Boolean).reduce(
+  (acc, n) => acc.replace(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), placeholder(n)), s);
+const leaks = (s, names) => names.filter(Boolean).filter((n) => s.toLowerCase().includes(n.toLowerCase()));
+// A frame is cut a little past the next frame's start, which can end it in the
+// middle of a name (`PS C:\Users\ji`): a prefix the whole-name replace misses.
+const scrubTail = (s, names) => {
+  for (const n of names.filter(Boolean)) {
+    for (let k = n.length - 1; k > 0; k--) {
+      if (s.toLowerCase().endsWith(n.slice(0, k).toLowerCase())) return s.slice(0, s.length - k) + placeholder(n).slice(0, k);
+    }
+  }
+  return s;
+};
 const hubHome = fs.mkdtempSync('/tmp/athe2e-');
 process.env.ATH_HOME = hubHome;
 process.env.ATH_SOCKET = `athcap${process.pid}`;
@@ -100,7 +115,7 @@ const concealedAt = (raw, i) => {
       const s = await a.get(name);
       const size = { cols: s.paneWidth || 200, rows: s.paneHeight || 50 };
       const build = (await a.run(name, '[Environment]::OSVersion.Version.Build')).output.trim();
-      const user = (await a.run(name, '$env:USERNAME')).output.trim();
+      const who = (await a.run(name, '"$env:USERNAME|$(Split-Path $env:USERPROFILE -Leaf)|$env:COMPUTERNAME"')).output.trim().split('|');
       for (const phase of ['fresh screen', 'full screen']) {
         if (phase === 'full screen') await a.run(name, '1..80 | ForEach-Object { "filler $_" }', { timeoutMs: 60000 });
         for (const [label, command, expect] of SET === 'edges' ? edgeCases(size.cols) : BASIC) {
@@ -126,14 +141,17 @@ const concealedAt = (raw, i) => {
             size,
             nonce: r.handle,
             command: typed ? command : null,
-            raw: scrub(raw, user),
+            raw: scrubTail(scrub(raw, who), who),
             // `null`: an error view, whose wording is PowerShell's; recorded as returned, reviewed by eye.
-            expect: scrub(truth, user),
+            expect: scrub(truth, who),
             // What the reader made of it, when that was not the truth: kept for
             // review, never taken as expected. Only a documented ambiguity may
             // be marked `knownLimit`, by hand, after that review.
-            ...(r.output === truth ? {} : { reads: scrub(r.output, user) }),
+            ...(r.output === truth ? {} : { reads: scrub(r.output, who) }),
           });
+          const last = frames[frames.length - 1];
+          const left = leaks(JSON.stringify(last), who);
+          if (left.length) throw new Error(`refusing to keep a frame that still names ${left.length} identifier(s) of the host`);
           console.log(`${host} ${phase}: ${label} -> ${r.output === truth ? 'matches' : 'DIFFERS'}`);
         }
       }

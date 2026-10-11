@@ -958,6 +958,13 @@ sayA(Promise.all(slipped.map(f=>ps.psReadFrame(f.raw,f.nonce,f.size,f.command).t
 // truth would NOT (or it is no longer a limit, and the fixture says so wrongly).
 const edges=frames.filter(f=>f.set==="edges"), limits=frames.filter(f=>f.knownLimit);
 say(edges.length>=30 && limits.length>=3 && limits.every(f=>f.reads!==f.expect && f.knownLimit.length>40) && frames.every(f=>f.reads===undefined || f.knownLimit),"windows10EdgesRecorded","EDGESUNREVIEWED");
+// The fixtures are public: every Windows profile path in them must be a
+// placeholder (`user` + x), never a real account. A case-sensitive scrub once
+// left a real folder name in 38 published frames.
+const profiles=[...new Set(JSON.stringify(frames).match(/Users\\\\[A-Za-z0-9._-]+/g)||[])].map(p=>p.split(/\\+/).pop());
+// A placeholder, or the start of one where a frame is cut mid-name (`us`).
+const ph=(n)=>/^u(?:s(?:e(?:r(?:x*))?)?)?$/i.test(n);
+say(profiles.length>0 && profiles.every(ph),"fixturesNameNoAccount","FIXTURENAMESACCOUNT:"+profiles.filter(n=>!ph(n)).join(","));
 // poll, followed through every real frame at many points: the pieces join to
 // exactly the output, never the typed echo and never a line twice.
 sayA((async()=>{
@@ -1122,7 +1129,7 @@ for w in probeCmd probePwsh probePosix probeUnsure helloSeen helloBeforeLaunchIg
          handTypedSshIgnored noLaunchNoVerdict fitsCmdExe keepsProfile forcesUtf8 readyViaOsc \
          upgradesToPwsh hooksRideLaunch dialectFor readsMergedRun forgedEndIgnored sgrParsedRight repaintFlaggedFirstWins noEndNoGuess backspacesResolved linesAreRendered posixCaveatUnchanged caveatIsPowerShells promptSeesStatus wrapperParsesFirst rowJumpIsANewLine typedSyntaxErrorFails longCwdLeftToWrapper widthDropsPadding columnsNotCharacters resizeSetsWidth windows10WrapRules wideWrapJoined frameFollowsItsMarker pollWaitsAndReportsRedraws pollFlagsRepaint predictionsOff strictModeSafe \
          screensOnRealFrames cursorForwardKeptAsSpaces repaintAfterStartReadRight silentStaysEmpty pollJoinsExactly \
-         windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windows10StartsAtBottom handTypedSshRead windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
+         fixturesNameNoAccount windows10EdgesRecorded onlyResizeDuringFlags pollDropsLongEcho concealSlipRepaired windowsTimesItself windows10StartsAtBottom handTypedSshRead windowsByHandRecognised historyAndClearKey chainsByInvoke reportsCwd readsCwdByNonce relaunchRestoresCwd reportsEnvDiff latestEnvWins envRestoreRoundTrips footprintCoversWindows osOptionOk typoRefused metaRoundTrips localPaneGetsPosixKeys captureDropsMarkers readCleansLikePowerShell tailKeepsSpaces refusesWithoutHooks windowsTypesAscii noPosixSelfHeal blankMeansPosix; do
   chk "windows: $w" "yes" "$(printf '%s' "$WINCHK" | grep -qw "$w" && echo yes || echo no)"
 done
 
