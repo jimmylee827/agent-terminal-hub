@@ -264,11 +264,12 @@ esac
 # copy into the extensions directory means the install still completes.
 say ""
 say "==> installing the VS Code extension"
+# Packaged fresh every time. A .vsix left by an earlier install was reused, and
+# the extension bundles core, so an update re-installed the OLD extension: a
+# machine pulled a fix, re-ran this, and its editor kept the code the fix was for.
+rm -f "$REPO"/packages/vscode/*.vsix
+(cd "$REPO/packages/vscode" && npm run package >/dev/null 2>&1) || true
 VSIX="$(ls -t "$REPO"/packages/vscode/*.vsix 2>/dev/null | head -1 || true)"
-if [ -z "$VSIX" ]; then
-  (cd "$REPO/packages/vscode" && npm run package >/dev/null 2>&1) || true
-  VSIX="$(ls -t "$REPO"/packages/vscode/*.vsix 2>/dev/null | head -1 || true)"
-fi
 
 if [ -z "$VSIX" ]; then
   bad "could not build the .vsix. Build it by hand:"
