@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { promises as fs, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, promises as fs, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -270,7 +270,11 @@ const BUILD_LOADED_MS = ((): number => {
  * is one people learn to skip, including the time it is right. mtime stays
  * the cheap first test; this decides when it fires.
  *
- * The files a hub MCP server runs: core's, and the server's own beside it.
+ * The files a hub MCP server runs: core's, the server's own beside it, and
+ * npm's record of the installed packages it loads. Without that record a
+ * dependency upgrade was invisible: the MCP SDK moved to a release fixing an
+ * advisory, nothing the hub built changed, and every server still on the old
+ * SDK was reported current. The record covers indirect packages too.
  */
 function builtFiles(): string[] {
   const out: string[] = [];
@@ -281,6 +285,8 @@ function builtFiles(): string[] {
       /* not this layout */
     }
   }
+  const installed = path.join(__dirname, '..', '..', '..', 'node_modules', '.package-lock.json');
+  if (existsSync(installed)) out.push(installed);
   return out;
 }
 
@@ -342,18 +348,14 @@ export function writeBuildStamp(): void {
 
 /**
  * When the code on disk last changed: the stamp's time while its digest still
- * matches the files, else the files' own mtime — which errs toward calling a
- * server stale, never toward hiding a change.
+ * matches the files, else the newest of those files — which errs toward
+ * calling a server stale, never toward hiding a change. Newest of ALL of them:
+ * an `npm install` with no rebuild moves only the installed-package record.
  */
 function codeChangedMs(): number {
-  let built = 0;
-  try {
-    built = statSync(__filename).mtimeMs;
-  } catch {
-    return 0;
-  }
+  const { digest, newestMs } = digestOnDisk();
   const stamp = readBuildStamp();
-  return stamp && stamp.digest === digestOnDisk().digest ? stamp.sinceMs : built;
+  return stamp && stamp.digest === digest ? stamp.sinceMs : newestMs;
 }
 
 export interface BuildStaleness {
@@ -370,12 +372,17 @@ export function buildStaleness(): BuildStaleness | undefined {
   } catch {
     return undefined;
   }
+  // Judged by content when it could be read: a rebuild of the same tree is
+  // not a change, and a dependency upgrade is one even though nothing the hub
+  // builds was rewritten.
+  if (BUILD_LOADED_DIGEST !== undefined) {
+    if (digestOnDisk().digest === BUILD_LOADED_DIGEST) return undefined;
+    return { loadedMs: BUILD_LOADED_MS, onDiskMs: codeChangedMs() || onDiskMs };
+  }
   // A second of slack: some filesystems round mtimes, and a false alarm here
   // would send people restarting servers that are perfectly current.
   if (onDiskMs <= BUILD_LOADED_MS + 1000) return undefined;
-  // Rewritten, but is it different? A rebuild of the same tree is not.
-  if (BUILD_LOADED_DIGEST !== undefined && digestOnDisk().digest === BUILD_LOADED_DIGEST) return undefined;
-  return { loadedMs: BUILD_LOADED_MS, onDiskMs: codeChangedMs() || onDiskMs };
+  return { loadedMs: BUILD_LOADED_MS, onDiskMs };
 }
 
 /**

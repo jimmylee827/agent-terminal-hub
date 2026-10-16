@@ -4386,6 +4386,61 @@ for w in mineFound othersOwn currentNotStale notAnotherWindows; do
 done
 rm -rf "$SV"
 
+# ---- a dependency upgrade makes a running server stale -------------------------
+#
+# Staleness is judged by content: an identical rebuild is not a change. But the
+# content was only what the hub builds, so when the MCP SDK moved to a release
+# fixing an advisory, every server still running the old SDK was reported
+# current. npm records the installed packages, indirect ones included, and that
+# record is part of the fingerprint now. On a copy of the build, with a fake
+# record; the extension must compute the same fingerprint, or it and the hub
+# disagree about every server.
+DV="$(mktemp -d)"; mkdir -p "$DV/packages/core" "$DV/packages/mcp" "$DV/node_modules"
+cp -R "$RP/packages/core/dist" "$DV/packages/core/"; cp -R "$RP/packages/mcp/dist" "$DV/packages/mcp/"
+rm -f "$DV/packages/core/dist/.build-stamp.json"
+echo '{"packages":{"node_modules/sdk":{"version":"1.0.0"}}}' > "$DV/node_modules/.package-lock.json"
+echo 'module.exports={window:{},commands:{}};' > "$DV/vscode.js"
+"$RP/packages/vscode/node_modules/.bin/esbuild" "$RP/packages/vscode/src/stale.ts" --bundle --platform=node --format=cjs --alias:vscode="$DV/vscode.js" --outfile="$DV/stale.js" --log-level=error 2>/dev/null
+# Two processes, as two servers would be: the first sees a rebuild of the same
+# code, the second starts after it and sees only a dependency change. A bump
+# checked in the first would pass on the rebuild alone.
+DEPJS='
+const dir=process.argv[1], phase=process.argv[2], fs=require("fs");
+const nap=(ms)=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms);
+const p=require(dir+"/packages/core/dist/paths.js"), s=require(dir+"/stale.js");
+const stampFile=dir+"/packages/core/dist/.build-stamp.json", rec=dir+"/node_modules/.package-lock.json";
+const stamp=()=>JSON.parse(fs.readFileSync(stampFile,"utf8"));
+const mcp=dir+"/packages/mcp/dist/index.js";
+const ext=async(startedMs)=>(await s.staleInThisWindow(1,[{pid:2,ppid:1,startedMs,args:"node "+mcp}]));
+const rebuild=()=>{ for (const d of ["core","mcp"]) for (const f of fs.readdirSync(dir+"/packages/"+d+"/dist").filter(n=>n.endsWith(".js"))) {
+  const fp=dir+"/packages/"+d+"/dist/"+f; fs.writeFileSync(fp, fs.readFileSync(fp)); } };
+(async()=>{
+  const out=[];
+  if (phase==="one") {
+    p.writeBuildStamp();
+    out.push(p.buildStaleness()===undefined?"freshIsCurrent":"FRESHSTALE");
+    const first=stamp().sinceMs; nap(1200); rebuild(); p.writeBuildStamp();
+    out.push(p.buildStaleness()===undefined&&stamp().sinceMs===first?"rebuildIsCurrent":"REBUILDSTALE");
+  } else {
+    const between=Date.now(); nap(1200);
+    fs.writeFileSync(rec, JSON.stringify({packages:{"node_modules/sdk":{version:"1.1.0"}}}));
+    const st=p.buildStaleness();
+    out.push(st!==undefined?"depBumpIsStale":"DEPBUMPMISSED");
+    out.push(st&&st.onDiskMs>=fs.statSync(rec).mtimeMs-1?"depBumpDated":"DEPBUMPUNDATED");
+    out.push((await ext(between)).length===1?"extensionSeesBump":"EXTENSIONMISSED");
+    p.writeBuildStamp(); const since=stamp().sinceMs; nap(1200); rebuild(); p.writeBuildStamp();
+    const after=await ext(between);
+    out.push(stamp().sinceMs===since&&after.length===1&&after[0].builtMs===since?"extensionAgreesWithStamp":"EXTENSIONDISAGREES");
+  }
+  console.log(out.join(" "));
+})();
+'
+DEPS="$(node -e "$DEPJS" "$DV" one 2>&1) $(node -e "$DEPJS" "$DV" two 2>&1)"
+for w in freshIsCurrent rebuildIsCurrent depBumpIsStale depBumpDated extensionSeesBump extensionAgreesWithStamp; do
+  chk "dependency upgrade: $w" "yes" "$(printf '%s' "$DEPS" | grep -qw "$w" && echo yes || echo no)"
+done
+rm -rf "$DV"
+
 printf '  ── CONTRACT: passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || printf '  ── failing: %s\n' "${failed[*]}"
 exit "$fail"

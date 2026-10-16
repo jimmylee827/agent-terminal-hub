@@ -59,14 +59,16 @@ function mtime(file: string): number {
  * When the code last CHANGED, if core's build stamp still matches the files:
  * a rebuild of the same tree rewrites every mtime, and this offered a reload
  * for code that was byte-identical. The digest is core's (`writeBuildStamp`),
- * computed the same way: core's built files, then the server's own.
+ * computed the same way: core's built files, the server's own, then npm's
+ * record of the installed packages, so a dependency upgrade counts.
  */
 function builtFor(script: string): number {
   const dist = dirname(script);
   const core = [join(dist, '..', '..', 'core', 'dist'), join(dist, '..', 'node_modules', '@ath', 'core', 'dist')].find(
     (d) => mtime(join(d, 'paths.js')) > 0,
   );
-  const written = Math.max(mtime(script), core ? mtime(join(core, 'index.js')) : 0);
+  const installed = core ? join(core, '..', '..', '..', 'node_modules', '.package-lock.json') : '';
+  const written = Math.max(mtime(script), core ? mtime(join(core, 'index.js')) : 0, installed ? mtime(installed) : 0);
   if (!core) return written;
   try {
     const stamp = JSON.parse(readFileSync(join(core, '.build-stamp.json'), 'utf8')) as { digest?: unknown; sinceMs?: unknown };
@@ -74,6 +76,7 @@ function builtFor(script: string): number {
     for (const d of [core, dist]) {
       for (const f of readdirSync(d).filter((n) => n.endsWith('.js')).sort()) h.update(f).update(readFileSync(join(d, f)));
     }
+    if (mtime(installed) > 0) h.update('.package-lock.json').update(readFileSync(installed));
     if (typeof stamp.sinceMs === 'number' && stamp.digest === h.digest('hex')) return stamp.sinceMs;
   } catch {
     /* no stamp, or the files moved under us: judge by mtime, which errs toward offering */
