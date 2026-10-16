@@ -53,8 +53,27 @@ good "node $(node -v)"
 # ---------------------------------------------------------------------- build
 say ""
 say "==> building"
-(cd "$REPO" && npm install --silent >/dev/null 2>&1 || npm install >/dev/null)
-(cd "$REPO" && npm run build >/dev/null 2>&1)
+# The extension is not one of the root workspaces (it bundles core with
+# esbuild), so the root install never gave it esbuild, and its build failed on
+# every fresh clone. The log went to /dev/null and `set -e` ended the script
+# straight after "==> building", with nothing on screen to say why.
+BUILD_LOG="$(mktemp "${TMPDIR:-/tmp}/ath-install.XXXXXX")"
+build_step() { # what, command...
+  local what="$1"; shift
+  if ! (cd "$REPO" && "$@") >>"$BUILD_LOG" 2>&1; then
+    say ""
+    say "  $what failed. The end of its output:"
+    say ""
+    tail -25 "$BUILD_LOG" | sed 's/^/      /'
+    say ""
+    say "  Full log: $BUILD_LOG"
+    exit 1
+  fi
+}
+build_step "npm install" npm install
+build_step "npm install for the VS Code extension" npm install --prefix packages/vscode
+build_step "the build" npm run build
+rm -f "$BUILD_LOG"
 good "core, cli, mcp, extension"
 
 # ------------------------------------------------------------------------ CLI
@@ -84,7 +103,15 @@ good "$SKILL_DIR"
 # ------------------------------------------------------------------------ MCP
 say ""
 say "==> registering the MCP server"
-if command -v claude >/dev/null 2>&1; then
+# Claude Code's own installer puts `claude` in ~/.local/bin, which a
+# non-interactive shell often does not have on its PATH (it is added by
+# ~/.zshrc), so look there too before reporting it missing.
+CLAUDE="$(command -v claude 2>/dev/null || true)"
+for c in "$BIN_DIR/claude" "$HOME/.local/bin/claude" "$HOME/.claude/local/claude"; do
+  [ -z "$CLAUDE" ] && [ -x "$c" ] && CLAUDE="$c"
+done
+claude() { "$CLAUDE" "$@"; }
+if [ -n "$CLAUDE" ]; then
   # --scope user, or the server exists only in the directory you installed from.
   #
   # `claude mcp add` defaults to LOCAL scope, which is stored per project path in
@@ -246,8 +273,13 @@ fi
 if [ -z "$VSIX" ]; then
   bad "could not build the .vsix. Build it by hand:"
   say "        cd $REPO/packages/vscode && npm run package"
-elif command -v code >/dev/null 2>&1; then
-  if code --install-extension "$VSIX" --force >/dev/null 2>&1; then
+elif CODE="$(command -v code 2>/dev/null || true)"; \
+     [ -z "$CODE" ] && [ -x "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" ] \
+       && CODE="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"; \
+     [ -n "$CODE" ]; then
+  # The app bundle carries `code` whether or not "Install 'code' command in
+  # PATH" was ever run, which most people never do.
+  if "$CODE" --install-extension "$VSIX" --force >/dev/null 2>&1; then
     good "installed into VS Code ($(basename "$VSIX"))"
   else
     bad "code --install-extension failed. Install $VSIX by hand."

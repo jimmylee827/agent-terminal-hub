@@ -36,6 +36,11 @@
 # them for tidiness silently breaks those cases while the rest still passes.
 set -uo pipefail
 
+# Every tmux this script reads from is asked for UTF-8, as the hub's own calls
+# are: with no locale set, tmux prints non-ASCII and control characters as `_`,
+# and a check reading a prompt for the depth arrow then sees `_` instead.
+tmux() { command tmux -u "$@"; }
+
 # ---- REFUSE TO RUN TWICE AT ONCE --------------------------------------------
 #
 # Two concurrent runs share ~/.ath, the tmux server and the session namespace,
@@ -4293,6 +4298,27 @@ for w in allVerifiedIsDone windows10GapDeclared liveCheckFillsGap invalidIsNotGr
   chk "done-check: $w" "yes" "$(printf '%s' "$DSELF" | grep -qw "$w" && echo yes || echo no)"
 done
 
+# ---- a hub started with no locale --------------------------------------------
+#
+# An agent launched from a service can have no LANG, LC_ALL or LC_CTYPE. tmux
+# then prints control and non-ASCII characters as `_`, the field separator with
+# them: every listing parsed as one field, `new` named a session after the whole
+# row, and every `run` was refused as busy. And the session shell, inheriting
+# no locale, drew the tag line as byte escapes. Run here from a bare
+# environment, as a service launches one, on a private socket and home. What
+# the hub hands the shell is checked directly: recent macOS fills in LANG for a
+# login shell from /etc/zprofile, so the escapes do not show on every machine.
+NL="$(mktemp -d)"
+nl() { env -i PATH="$PATH" HOME="$HOME" USER="${USER:-}" ATH_SOCKET="athnl$$" ATH_HOME="$NL" "$@"; }
+nl $ATH_BIN new nlx --cwd /tmp >/dev/null 2>&1
+chk "no locale: the session is listed under its own name" "nlx" \
+    "$(nl $ATH_BIN ls --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{try{process.stdout.write(JSON.parse(b).map(s=>s.name).join(","))}catch(e){process.stdout.write("unparsed")}})')"
+chk "no locale: a command runs, with its exit code" "nl-ok:3" \
+    "$(o=$(nl $ATH_BIN run nlx -- 'echo nl-ok; (exit 3)' 2>/dev/null); echo "$o:$?")"
+chk "no locale: the session shell is given UTF-8" "yes" \
+    "$(nl $ATH_BIN run nlx -- 'echo "$LC_CTYPE"' 2>/dev/null | grep -qi 'utf-\{0,1\}8' && echo yes || echo no)"
+nl $ATH_BIN kill nlx --force >/dev/null 2>&1; tmux -L "athnl$$" kill-server 2>/dev/null; rm -rf "$NL"
+
 # ---- test leftovers are cleared without naming a host ------------------------
 #
 # Clearing interrupted runs by hand meant loops typed beside a remote host's
@@ -4305,12 +4331,14 @@ TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 new-session -d -s x sleep 300 2>/dev
 TMUX_TMPDIR="$CTT" tmux -L ath new-session -d -s keep sleep 300 2>/dev/null
 # Suite sessions on the hub's own socket: one whose process is gone, one whose
 # process is this gate (still running), made by the real CLI in a private home.
+# ATH_SOCKET is pinned to the hub default the checks below name: a gate run with
+# its own socket made these sessions there instead, and every check missed them.
 CTD=99999; while kill -0 "$CTD" 2>/dev/null; do CTD=$((CTD - 1)); done
-for s in "_tc$CTD" "e2e$$"; do ATH_HOME="$CT/home" TMUX_TMPDIR="$CTT" $ATH_BIN new "$s" --cwd /tmp >/dev/null 2>&1; done
+for s in "_tc$CTD" "e2e$$"; do ATH_SOCKET=ath ATH_HOME="$CT/home" TMUX_TMPDIR="$CTT" $ATH_BIN new "$s" --cwd /tmp >/dev/null 2>&1; done
 mkdir -p "$CT/held/ath-verify.lock"; echo $$ > "$CT/held/ath-verify.lock/pid"
-held=$(TMUX_TMPDIR="$CTT" TMPDIR="$CT/held" bash "$RP/scripts/clean-test-leftovers.sh" 2>&1)
+held=$(ATH_SOCKET=ath TMUX_TMPDIR="$CTT" TMPDIR="$CT/held" bash "$RP/scripts/clean-test-leftovers.sh" 2>&1)
 alive_held=$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && TMUX_TMPDIR="$CTT" tmux -L ath has-session -t "=ath-_tc$CTD" 2>/dev/null && echo yes || echo no)
-ATH_HOME="$CT/home" TMUX_TMPDIR="$CTT" TMPDIR="$CT" bash "$RP/scripts/clean-test-leftovers.sh" >/dev/null 2>&1
+ATH_SOCKET=ath ATH_HOME="$CT/home" TMUX_TMPDIR="$CTT" TMPDIR="$CT" bash "$RP/scripts/clean-test-leftovers.sh" >/dev/null 2>&1
 chk "leftover cleanup stands down while a gate runs" "yes" "$(printf '%s' "$held" | grep -q 'in progress' && [ "$alive_held" = yes ] && echo yes || echo no)"
 chk "leftover cleanup ends a test-shaped tmux server" "no" "$(TMUX_TMPDIR="$CTT" tmux -L athcleantest4242 list-sessions >/dev/null 2>&1 && echo yes || echo no)"
 chk "and never the hub's own socket"                 "yes" "$(TMUX_TMPDIR="$CTT" tmux -L ath has-session -t =keep 2>/dev/null && echo yes || echo no)"
@@ -4371,7 +4399,7 @@ sleep 1
 prompt() { tmux -L "${ATH_SOCKET:-ath}" capture-pane -p -t "ath-$N" 2>/dev/null | grep -v '^$' | tail -1; }
 
 $ATH_BIN run "$N" -- 'echo bare' >/dev/null 2>&1
-chk "depth 0: no marker"        "no"  "$(case "$(prompt)" in *↳*) echo yes ;; *) echo no ;; esac)"
+chk "depth 0: no marker"        "no"  "$(case "$(prompt)" in (*↳*) echo yes ;; (*) echo no ;; esac)"
 chk "depth 0: exit code"        "5"   "$($ATH_BIN run "$N" -- '(exit 5)' >/dev/null 2>&1; echo $?)"
 
 $ATH_BIN send "$N" --text -- bash >/dev/null 2>&1; sleep 2
@@ -4559,7 +4587,7 @@ $ATH send "$S" -- C-c >/dev/null; sleep 0.5
 
 echo
 echo "-- shared-terminal hazards (only occur with a human attached)"
-tm() { /opt/homebrew/bin/tmux -L "${ATH_SOCKET:-ath}" -f "${ATH_HOME:-$HOME/.ath}/tmux.conf" "$@"; }
+tm() { /opt/homebrew/bin/tmux -u -L "${ATH_SOCKET:-ath}" -f "${ATH_HOME:-$HOME/.ath}/tmux.conf" "$@"; }
 
 # A human scrolling up with the mouse puts the pane into copy mode, after which
 # every send-keys fails with "not in a mode" and the agent silently stops working.
@@ -4799,7 +4827,7 @@ $ATH new "$G" --cwd "$HOME" >/dev/null
 # meant this SAFETY canary silently targeted the wrong server whenever the
 # suite ran isolated, so the session was never marked remote and the check
 # "failed" by running locally — reporting a safety breach that had not happened.
-/opt/homebrew/bin/tmux -L "${ATH_SOCKET:-ath}" -f "${ATH_HOME:-$HOME/.ath}/tmux.conf" \
+/opt/homebrew/bin/tmux -u -L "${ATH_SOCKET:-ath}" -f "${ATH_HOME:-$HOME/.ath}/tmux.conf" \
   set-option -t "ath-$G" @ath_remote nonexistent.invalid >/dev/null 2>&1
 err=$($ATH run "$G" -- "touch $CANARY" 2>&1 >/dev/null || true)
 [ ! -e "$CANARY" ] && ok "the command did NOT execute on the local machine" \
@@ -5117,7 +5145,7 @@ echo "-- a multi-line command does not corrupt the session's metadata"
 $ATH new mlmeta >/dev/null 2>&1; sleep 1
 $ATH run mlmeta -- 'echo a
 echo b' >/dev/null 2>&1
-rows=$(/opt/homebrew/bin/tmux -L "${ATH_SOCKET:-ath}" display-message -p -t "ath-mlmeta" '#{@ath_last_cmd}' 2>/dev/null | wc -l | tr -d ' ')
+rows=$(/opt/homebrew/bin/tmux -u -L "${ATH_SOCKET:-ath}" display-message -p -t "ath-mlmeta" '#{@ath_last_cmd}' 2>/dev/null | wc -l | tr -d ' ')
 check "stored command stays on one row" "1" "$rows"
 $ATH kill mlmeta --force >/dev/null 2>&1
 

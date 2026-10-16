@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -342,6 +343,31 @@ function nonPosixShellFallback(): string | undefined {
 }
 
 /**
+ * A UTF-8 character locale for the session's shell, when the hub was started
+ * with no locale at all.
+ *
+ * An agent launched from a service (launchd, a bot harness) can have no LANG,
+ * LC_ALL or LC_CTYPE, and the session's shell inherits that. Its line editor
+ * then draws every non-ASCII byte as an escape: the hub's own tag line showed
+ * in the shared terminal as `�<0086><0093>…` instead of `↓↓↓`, and whatever a
+ * person typed in Chinese the same. Only the character type is set, only when
+ * nothing at all was chosen, and only to a locale this machine has; a locale
+ * someone did set, `C` included, is theirs. ssh forwards LC_* to hosts that
+ * accept it, exactly as it forwards a LANG set the usual way.
+ */
+function utf8LocaleFallback(): string[] {
+  if (process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG) return [];
+  let have: string[] = [];
+  try {
+    have = execFileSync('locale', ['-a'], { encoding: 'utf8', timeout: 3000 }).split('\n').map((l) => l.trim());
+  } catch {
+    return [];
+  }
+  const pick = ['C.UTF-8', 'C.utf8', 'en_US.UTF-8', 'en_US.utf8'].find((l) => have.includes(l));
+  return pick ? ['-e', `LC_CTYPE=${pick}`] : [];
+}
+
+/**
  * Read an `os` option as either surface received it.
  *
  * Here rather than in each surface so the two cannot disagree about what is
@@ -405,6 +431,7 @@ export async function create(opts: CreateOptions = {}): Promise<Session> {
     '-e', `ATH_RC_DIR=${RC_DIR}`,
     '-e', `ATH_SESSION=${name}`,
     '-e', 'ATH_INSIDE=1',
+    ...utf8LocaleFallback(),
     ...(fallbackShell ? [fallbackShell] : []),
   ]);
 

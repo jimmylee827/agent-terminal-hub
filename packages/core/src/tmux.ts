@@ -63,10 +63,18 @@ function isGone(message: string): boolean {
  *
  * `-f` pins our own config so the user's ~/.tmux.conf never applies here, and
  * a hub session never inherits surprising keybindings or hooks.
+ *
+ * `-u` because everything read back is parsed as UTF-8, whatever the caller's
+ * locale. A client with no locale (no LANG, LC_ALL or LC_CTYPE — an agent
+ * launched from a service, say) has tmux print every control and non-ASCII
+ * character in its output as `_`: the field separator below with it, so every
+ * listing came back as one field, `new` named a session after the whole row,
+ * and every later `run` was refused as busy. Measured on 3.6a and 3.7c alike;
+ * it is the locale, not the version.
  */
 export async function tmux(args: string[], opts: { allowFail?: boolean } = {}): Promise<TmuxResult> {
   const bin = tmuxBin();
-  const full = ['-L', SOCKET, '-f', TMUX_CONF, ...args];
+  const full = ['-u', '-L', SOCKET, '-f', TMUX_CONF, ...args];
   try {
     const { stdout, stderr } = await execFileAsync(bin, full, {
       encoding: 'utf8',

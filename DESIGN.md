@@ -32,6 +32,11 @@ Things that are load-bearing and non-obvious:
   never see, resize, or kill a session from your personal tmux.
 - **`window-size latest`**, so attaching from a small window does not shrink and
   wrap the pane the agent is working in.
+- **UTF-8 whatever the caller's locale.** Every tmux call passes `-u`: with no
+  locale, tmux prints control and non-ASCII characters as `_`, the field
+  separator included, and nothing it lists can be parsed. A session started
+  with no locale at all gets `LC_CTYPE` set to a UTF-8 locale the machine has,
+  or its shell draws non-ASCII input, the hub's tag line among it, as escapes.
 
 ### Hazards that only exist because a human shares the terminal
 
