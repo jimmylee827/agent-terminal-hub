@@ -4298,6 +4298,20 @@ for w in allVerifiedIsDone windows10GapDeclared liveCheckFillsGap invalidIsNotGr
   chk "done-check: $w" "yes" "$(printf '%s' "$DSELF" | grep -qw "$w" && echo yes || echo no)"
 done
 
+# ---- --help after a subcommand is help, not a run ----------------------------
+#
+# `ath watch --help` streamed until killed, blocking a caller for two minutes,
+# and `ath new --help` created a session. On a private socket and home.
+HL="$(mktemp -d)"
+hl() { ATH_SOCKET="athhl$$" ATH_HOME="$HL" "$@"; }
+hl $ATH_BIN watch --help >/dev/null 2>&1 & HLP=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$HLP" 2>/dev/null || break; sleep 0.5; done
+chk "watch --help returns rather than streaming" "returned" "$(kill -0 "$HLP" 2>/dev/null && { kill "$HLP"; echo still-running; } || echo returned)"
+chk "new --help prints usage" "yes" "$(hl $ATH_BIN new --help 2>/dev/null | grep -q 'ath new \[name\]' && echo yes || echo no)"
+chk "and creates no session" "0" "$(hl $ATH_BIN ls --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(b).length))}catch(e){process.stdout.write("unparsed")}})')"
+chk "run passes --help after -- to the shell" "x --help" "$(hl $ATH_BIN new hlr >/dev/null 2>&1; hl $ATH_BIN run hlr -- echo x --help 2>/dev/null)"
+hl $ATH_BIN kill hlr --force >/dev/null 2>&1; tmux -L "athhl$$" kill-server 2>/dev/null; rm -rf "$HL"
+
 # ---- a hub started with no locale --------------------------------------------
 #
 # An agent launched from a service can have no LANG, LC_ALL or LC_CTYPE. tmux

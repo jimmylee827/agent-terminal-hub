@@ -168,6 +168,18 @@ ${c.dim('password, attach and type it yourself — the agent never does.')}
 async function main(): Promise<number> {
   const { command, positional, flags, rest } = parseArgs(process.argv.slice(2));
 
+  // `--help` after a subcommand is a request for help, never a run of it.
+  //
+  // Only `ath --help` was one. After a subcommand the flag was ignored and the
+  // subcommand ran: `ath watch --help` streamed until killed and blocked a
+  // caller's two-minute tool call, and `ath new --help` CREATED a session.
+  // Agents try `--help` first. Anything after a bare `--` is the user's own
+  // command and never reaches `flags`, so `run x -- foo --help` is untouched.
+  if ('help' in flags || 'h' in flags) {
+    console.log(HELP);
+    return 0;
+  }
+
   switch (command) {
     case 'new':
     case 'create': {
