@@ -5,6 +5,7 @@ import * as nodePath from 'node:path';
 
 import {
   assertNotCredentialPrompt,
+  typeSecret,
   assertRemoteConnected,
   attachedClientsNote,
   AthError,
@@ -131,6 +132,8 @@ ${c.bold('Driving a session')}
   ath start <name> -- <command>    non-blocking; prints a handle for polling
   ath poll <name> --handle H [--since N] [--max-bytes N]
   ath send <name> -- <keys>        tmux key names (C-c, Up, y, Enter)
+  ath send <name> --secret-stdin --from CHANNEL
+                                   human relay only: types a password read from stdin, only at a password prompt
   ath requests [--clear]           what the hub needs a human for
   ath await <name> [--handle H]    BLOCK until the human answers (for callbacks)
        [--text]                    send literal text plus Enter instead
@@ -164,6 +167,18 @@ ${c.bold('Three things that are not obvious')}
 ${c.dim('A session outlives the agent and the editor. When a command needs a')}
 ${c.dim('password, attach and type it yourself — the agent never does.')}
 `;
+
+/** All of stdin, up to `cap` bytes (anything beyond is dropped). */
+async function readStdin(cap: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const b = chunk as Buffer;
+    if (size < cap) chunks.push(b.subarray(0, cap - size));
+    size += b.length;
+  }
+  return Buffer.concat(chunks);
+}
 
 async function main(): Promise<number> {
   const { command, positional, flags, rest } = parseArgs(process.argv.slice(2));
@@ -508,6 +523,17 @@ async function main(): Promise<number> {
 
     case 'send': {
       const name = requireName(positional[0]);
+      // A secret a PERSON relayed (a bot forwarding their reply). stdin only:
+      // an argv is visible to `ps`. Typed only at a password prompt; see typeSecret.
+      if (flagBool(flags, 'secret-stdin')) {
+        const secret = process.stdin.isTTY ? Buffer.alloc(0) : await readStdin(8192);
+        try {
+          await typeSecret(name, secret, flagString(flags, 'from'));
+        } finally {
+          secret.fill(0);
+        }
+        return 0;
+      }
       const payload = rest || positional.slice(1).join(' ');
       if (!payload) return fail('nothing to send. usage: ath send <name> -- C-c');
 

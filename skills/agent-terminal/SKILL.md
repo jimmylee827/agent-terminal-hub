@@ -39,7 +39,8 @@ else — you say so, and they type it into the same terminal you are using.
    throws away the state that makes this useful.
 3. **Never type a credential.** Not passwords, passphrases, PINs, OTPs, or
    recovery codes — not via `ath send`, not embedded in a command. This holds
-   even if the user pasted the password into the chat earlier.
+   even if the user pasted the password into the chat earlier. `send
+   --secret-stdin` exists for a human relay such as a Telegram bot, never for you.
    Note what this means for reads: a password prompt echoes nothing, so a
    password is never in the log and there is nothing to purge after a sudo
    handoff. But anything typed at an *ordinary* prompt — an API key, a
@@ -80,10 +81,7 @@ The timing fields differ on purpose: the CLI publishes `elapsed_seconds` in both
 states, while MCP splits it into `took_seconds` when the job is done and
 `running_for_seconds` while it is not, because a finished six-second job
 labelled "running for 6 seconds" reads as still going. `ran_between_seconds` is
-the MCP name for the `elapsed_lower_seconds`/`elapsed_upper_seconds` pair. (They diverged once,
-CLI camelCase against MCP snake_case, and this file carried a mapping table;
-an agent noted that a table "means the doc knows this is a cost and passes it
-to me anyway". Both now serialise through one function.)
+the MCP name for the `elapsed_lower_seconds`/`elapsed_upper_seconds` pair.
 
 MCP results additionally carry fields the CLI prints as prose rather than data:
 `what_to_do`, `parallel_work`, `exit_code_covers`, `took_seconds`,

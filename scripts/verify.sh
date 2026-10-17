@@ -300,6 +300,43 @@ hyg "no leaked start markers"       '<ATHS:'
 hyg "no leaked end markers"         '<ATHE:'
 hyg "no leaked tag acks"            '<ATHT:'
 
+# ---- a secret a person relayed (send --secret-stdin) -------------------------
+# Typed only at a password prompt, from stdin, never on an argv, never left in a
+# file. The prompt compares a checksum, so the secret is never typed as a command
+# and any copy of it found later came from the relay path. Its success marker is
+# computed, so the command line on screen never contains it. Runs here, after the
+# hygiene capture, on local and remote sessions alike: remote is where it goes
+# through ssh.
+SEC="athsec-$$-$RANDOM-x"; SCK=$(printf %s "$SEC" | cksum)
+sstate() { $ATH ls --json 2>/dev/null | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const s=JSON.parse(b).find(x=>x.name===process.argv[1]);process.stdout.write(s?s.state+":"+s.credential_prompt:"missing")})' "$S"; }
+await_state() { for _ in $(seq 1 30); do [ "$(sstate)" = "$1" ] && return 0; sleep 0.5; done; return 1; }
+relay() { printf '%s\n' "$1" | $ATH send "${2:-$S}" --secret-stdin --from test 2>&1 | grep -o '^\[[a-z_]*\]' | head -1; }
+pane_now() { tmux -L "${ATH_SOCKET:-ath}" capture-pane -p -t "ath-$S" 2>/dev/null; }
+p1=$(pane_now); r=$(relay "$SEC"); p2=$(pane_now)
+chk "relay: refused away from a password prompt" "[no_credential_prompt]" "$r"
+chk "relay: and nothing was typed"               "same" "$([ "$p1" = "$p2" ] && echo same || echo changed)"
+chk "relay: empty stdin is refused"              "[empty_secret]" "$(printf '' | $ATH send "$S" --secret-stdin --from test 2>&1 | grep -o '^\[[a-z_]*\]')"
+chk "relay: the channel must be named"           "[secret_from_required]" "$(printf 'x\n' | $ATH send "$S" --secret-stdin 2>&1 | grep -o '^\[[a-z_]*\]')"
+chk "relay: an unknown session is named so"      "[no_session]" "$(relay "$SEC" "nosuch$$")"
+PW=$(printf 'bash -c %q' "while :; do read -rs -p '[sudo] password for t: ' p; echo; [ \"\$(printf %s \"\$p\" | cksum)\" = '$SCK' ] && { echo ATH-SECRET-\$((40+2)); break; }; echo 'Sorry, try again.'; done")
+$ATH start "$S" -- "$PW" >/dev/null 2>&1; await_state "needs-input:true"
+chk "relay: a password prompt shows credential_prompt" "needs-input:true" "$(sstate)"
+chk "relay: send --text is still refused there"  "[credential_prompt]" "$($ATH send "$S" --text -- hello 2>&1 | grep -o '^\[[a-z_]*\]')"
+relay "wrong-$$" >/dev/null; sleep 2.5; await_state "needs-input:true"
+chk "relay: a wrong secret leaves it parked"     "needs-input:true" "$(sstate)"
+# Every tmux the right answer runs, logged by a stand-in: none may carry it.
+TW="$(mktemp -d)"; printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/argv"\nexec %s "$@"\n' "$TW" "$(type -P tmux)" > "$TW/tmux"; chmod +x "$TW/tmux"
+printf '%s\n' "$SEC" | ATH_TMUX="$TW/tmux" $ATH send "$S" --secret-stdin --from test >/dev/null 2>&1
+for _ in $(seq 1 20); do $ATH read "$S" --tail 8 2>/dev/null | grep -q ATH-SECRET-42 && break; sleep 0.5; done
+chk "relay: the right secret is accepted"        "1" "$($ATH read "$S" --tail 8 2>/dev/null | grep -c ATH-SECRET-42)"
+chk "relay: no tmux argv carried it"             "loaded:0" "$(grep -q load-buffer "$TW/argv" && echo loaded || echo unloaded):$(grep -c -- "$SEC" "$TW/argv")"
+await_state "idle:false"
+chk "relay: credential_prompt clears after"      "idle:false" "$(sstate)"
+$ATH start "$S" -- "bash -c 'read -r -p \"Enter API key: \" k; echo got-key'" >/dev/null 2>&1; await_state "needs-input:true"
+chk "relay: a prompt that echoes is caught"      "[secret_echoed]" "$(relay "$SEC")"
+chk "relay: and the secret is in no hub file"    "0" "$(grep -rl -- "$SEC" "${ATH_HOME:-$HOME/.ath}" 2>/dev/null | wc -l | tr -d ' ')"
+command rm -rf "$TW"
+
 # ---- a remote shell that exits, and a link that drops ------------------------
 # Remote sessions only. `exit` there ends the REMOTE shell and the pane falls
 # back to the local one, exactly as when the link drops: no end marker, nothing
@@ -5126,6 +5163,18 @@ check "a sibling directory is NOT contained" "false" "${11}"
 check "a parent directory is NOT contained" "false" "${12}"
 check "6 processes share ONE contest start line" "1" "${13}"
 check "a later joiner gets that same start line" "true" "${14}"
+# The race behind the check above, made deterministic: a marker caught empty,
+# between its writer's exclusive create and its write, must be waited for. It
+# was read as stale, deleted and replaced, so two windows held two start lines.
+MIDW="$(REPO="$REPO" node -e '
+const fs=require("fs"), path=require("path"), c=require(process.env.REPO+"/packages/core/dist/index.js");
+(async()=>{ const key="midwrite-"+process.pid; fs.mkdirSync(c.ELECTION_DIR,{recursive:true});
+  const file=path.join(c.ELECTION_DIR,key+".json"), fd=fs.openSync(file,"wx",0o600), w={openedAt:Date.now()-1000};
+  setTimeout(()=>{ fs.writeSync(fd,JSON.stringify(w)); fs.closeSync(fd); },50);
+  const seen=await c.openElection(key), disk=JSON.parse(fs.readFileSync(file,"utf8")).openedAt;
+  await c.releaseClaim(key); process.stdout.write(seen.openedAt===w.openedAt&&disk===w.openedAt?"waited":"replaced"); })();
+' 2>/dev/null)"
+check "an election marker caught mid-write is waited for" "waited" "$MIDW"
 check "releasing clears the contest marker too" "true" "${15}"
 check "the creator chain starts at this process" "true" "${16}"
 check "and reaches its real parent" "true" "${17}"

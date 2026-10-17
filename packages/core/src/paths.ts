@@ -18,6 +18,8 @@ export const RC_DIR = path.join(ATH_HOME, 'rc');
 export const HELPER_PATH = path.join(ATH_HOME, 'helper.sh');
 export const TMUX_CONF = path.join(ATH_HOME, 'tmux.conf');
 export const NOTIFY_LOG = path.join(ATH_HOME, 'notify.log');
+/** One line per secret a human relay typed: when, where, from which channel. Never the secret. */
+export const RELAY_AUDIT_LOG = path.join(ATH_HOME, 'relay-audit.log');
 
 /** Above this, a log is trimmed; below `LOG_KEEP_BYTES` is what survives. */
 export const LOG_MAX_BYTES = 32 * 1024 * 1024;
@@ -159,6 +161,14 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     purged: false,
     sensitive: true,
     bounded: 'rotated at 1 MiB, one generation kept as notify.log.1',
+  },
+  {
+    name: 'relay-audit.log',
+    absolute: RELAY_AUDIT_LOG,
+    holds: 'one line per secret a human relay typed: time, session, channel, outcome. Never the secret',
+    purged: false,
+    sensitive: false,
+    bounded: 'one line per relayed secret',
   },
   {
     name: 'helper.sh',

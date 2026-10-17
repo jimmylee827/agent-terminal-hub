@@ -97,6 +97,30 @@ export async function tmux(args: string[], opts: { allowFail?: boolean } = {}): 
   }
 }
 
+/**
+ * Run a tmux command that reads `input` on its stdin (`load-buffer -`).
+ *
+ * For data that must never appear on an argv, where `ps` shows it to every
+ * user on the machine: `send-keys -l <secret>` would. The input is written to
+ * the pipe and never echoed into an error.
+ */
+export async function tmuxInput(args: string[], input: Buffer): Promise<void> {
+  const bin = tmuxBin();
+  const { spawn } = await import('node:child_process');
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(bin, ['-u', '-L', SOCKET, '-f', TMUX_CONF, ...args], { stdio: ['pipe', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
+    child.on('error', (e: NodeJS.ErrnoException) =>
+      reject(e.code === 'ENOENT' ? new TmuxMissing(`could not execute "${bin}"`) : new Error(`tmux ${args[0]} failed`)),
+    );
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`tmux ${args[0]} failed: ${stderr.trim()}`)),
+    );
+    child.stdin.end(input);
+  });
+}
+
 function extractTarget(args: string[]): string | undefined {
   const i = args.indexOf('-t');
   if (i >= 0 && i + 1 < args.length) {

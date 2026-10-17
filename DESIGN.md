@@ -173,6 +173,22 @@ the credential dialog there, ignores typing and Ctrl-C, and never returns, so
 only killing the session ends it (PowerShell 7 asks in the console, and parks);
 and cmd is a command (`cmd /c "…"`), never the session shell.
 
+### A password a person relays
+
+`ath send <name> --secret-stdin --from <channel>` is the one path that types a
+secret, and it exists for a person answering through a relay (a chat bot that
+deletes their message), never for an agent: it is CLI-only, absent from the MCP
+tools, and `send --text` still refuses at the same prompts. The secret arrives
+on stdin and reaches tmux on stdin too (`load-buffer -`, then a paste from a
+buffer deleted at once), because an argv is visible to every user through `ps`.
+It is typed only when the pane's LAST line asks for a secret; looking further
+back would find a prompt already answered, with a shell below it that would echo
+the secret. Echo cannot be ruled out beforehand: a shell's line editor turns the
+tty's echo off just as a password prompt does, and some key prompts echo by
+design. So the call checks afterwards, and if the secret reached the screen it
+purges the transcript and scrollback and fails. `relay-audit.log` records each
+call, without the secret.
+
 ### Knowing a command ended when the shell it ran in is gone
 
 Three different situations, none of which write an end marker:

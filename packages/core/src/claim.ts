@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
 import { ATH_HOME } from './paths';
-import { pidAlive } from './util';
+import { pidAlive, sleep } from './util';
 
 export const CLAIM_DIR = path.join(ATH_HOME, 'claim');
 export const ELECTION_DIR = path.join(ATH_HOME, 'election');
@@ -256,7 +256,7 @@ export async function openElection(key: string): Promise<Election> {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
 
-    const existing = await readElection(file);
+    const existing = await settledElection(file);
     if (existing && Date.now() - existing.openedAt <= ELECTION_MAX_AGE_MS) return existing;
 
     // Stale or unreadable. Clear it and loop once to re-create; if another
@@ -265,6 +265,26 @@ export async function openElection(key: string): Promise<Election> {
   }
 
   return (await readElection(file)) ?? { openedAt: Date.now() };
+}
+
+/**
+ * The marker's contents, waiting out a writer caught between its exclusive
+ * create and its write.
+ *
+ * An empty marker was read as unreadable, so stale, and deleted, and the
+ * deleter wrote its own: two windows then held two start lines for one prompt,
+ * and the ranking the shared line exists for never got a say. Under load the
+ * gap was wide enough to hit (6 openers, 2 start lines). A young unreadable
+ * marker is being written, as `WRITE_GRACE_MS` already says for claims.
+ */
+async function settledElection(file: string): Promise<Election | undefined> {
+  for (;;) {
+    const election = await readElection(file);
+    if (election) return election;
+    const st = await fs.stat(file).catch(() => undefined);
+    if (!st || Date.now() - st.mtimeMs > WRITE_GRACE_MS) return undefined;
+    await sleep(20);
+  }
 }
 
 async function readElection(file: string): Promise<Election | undefined> {

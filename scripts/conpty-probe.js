@@ -847,6 +847,27 @@ async function probeHub(hasPwsh) {
       gate('hub: waiting on a command that exits its shell ends promptly, with the code', o.finished && o.exitCode === 4 && o.ended === 'remote-exited' && Date.now() - t0 < 12000, `${JSON.stringify(o)} after ${Date.now() - t0}ms`);
       await run('e2e-probe', 'Set-Location C:\\Windows');
     }
+    // A secret a person relays (send --secret-stdin): typed only at a password
+    // prompt, through ConPTY, and kept in no transcript. PowerShell compares a
+    // SHA-256, so the secret is never typed as a command, and prints a computed
+    // marker, so the command line itself never matches.
+    {
+      const secret = `athsec-${process.pid}-x`;
+      const hex = require('node:crypto').createHash('sha256').update(secret, 'utf8').digest('hex').toUpperCase();
+      const away = await a.typeSecret('e2e-probe', Buffer.from(`${secret}\n`), 'test').then(() => 'typed', (e) => e.code);
+      gate('hub: a relayed secret is refused away from a password prompt', away === 'no_credential_prompt', away);
+      const st = await a.start('e2e-probe', `$p = Read-Host -AsSecureString 'Password'; $b = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p)); if (([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($b))) -replace '-','') -eq '${hex}') { "ATH-SECRET-$(40+2)" } else { "ATH-SECRET-$(40+3)" }`);
+      for (let i = 0; i < 40 && !(await a.get('e2e-probe')).credentialPrompt; i++) await sleep(250);
+      gate('hub: a Read-Host -AsSecureString prompt is a credential prompt', (await a.get('e2e-probe')).credentialPrompt === true);
+      const typed = await a.typeSecret('e2e-probe', Buffer.from(`${secret}\n`), 'test').then(() => 'typed', (e) => e.code);
+      let out = '';
+      for (let i = 0; i < 40 && !/ATH-SECRET-4[23]/.test(out); i++) {
+        await sleep(250);
+        out = (await a.poll('e2e-probe', st.handle, st.offset).catch(() => ({ output: '' }))).output || '';
+      }
+      gate('hub: and typed there through ConPTY, it is the right secret', typed === 'typed' && /ATH-SECRET-42/.test(out), `${typed}, ${JSON.stringify(out.slice(-60))}`);
+      gate('hub: and it is in no transcript', !fs.readFileSync(a.logPath('e2e-probe')).includes(secret));
+    }
     // A dropped link: tear down the shared connection out from under the
     // session, then run. It must reconnect, come back in the same directory
     // with nothing typed to get there, and still report exact exit codes.

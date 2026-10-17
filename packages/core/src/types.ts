@@ -114,6 +114,12 @@ export interface Session {
    * the watcher can do staleness comparison without capturing a second time.
    */
   paneTail?: string;
+  /**
+   * The pane's last line is asking for a password, passphrase or other secret:
+   * where `send --text` refuses and a relayed secret (`send --secret-stdin`) may
+   * be typed. Present when the pane was captured.
+   */
+  credentialPrompt?: boolean;
   /** Pane width in columns, for wrap-aware prompt detection. */
   paneWidth?: number;
   /**

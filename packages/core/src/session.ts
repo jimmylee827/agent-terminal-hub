@@ -18,13 +18,15 @@ import {
   trimMarkPath,
   logicalName,
   tmuxName,
+  RELAY_AUDIT_LOG,
+  purgeLog,
 } from './paths';
 import { dialectFor, posixDialect } from './dialect';
 import { windowsGreetedLast, windowsShellOnScreen } from './powershell';
 import { ensureControlDir, ensureMaster, probeRemoteOs } from './ssh';
 import { clearRequest, listRequests } from './requests';
 import { classify, isNesting, isShell, looksLikeCredentialPrompt } from './state';
-import { FS, tmux } from './tmux';
+import { FS, tmux, tmuxInput } from './tmux';
 import type { CreateOptions, Session } from './types';
 import { ancestorPids, shellQuote, sleep, stripAnsi } from './util';
 import { reapOrphanClaims } from './claim';
@@ -97,6 +99,9 @@ function parseRow(line: string, paneTail: string): Session | undefined {
     name,
     tmuxName: tName,
     state: classify({ paneDead, currentCommand, paneTail, paneWidth: Number(parts[12] ?? '0') || 0 }),
+    // The test a relayed secret is typed on (`typeSecret`), so a relay can ask
+    // first instead of keeping its own copy of the patterns.
+    ...(paneTail ? { credentialPrompt: !paneDead && looksLikeCredentialPrompt(stripAnsi(paneTail)) } : {}),
     cwd: parts[3] ?? '',
     currentCommand,
     attached: Number(parts[1] ?? '0') || 0,
@@ -832,6 +837,105 @@ export async function assertRemoteConnected(name: string): Promise<void> {
       `machine's shell. Run any command on the session to reconnect it, or check it ` +
       `with "ath attach ${session.name}".`,
   );
+}
+
+/**
+ * Type a secret a PERSON relayed — a password answered from a phone through a
+ * bot — into a session parked at a password prompt.
+ *
+ * The one exception to "the hub never types credentials", and only for a human
+ * channel: the CLI takes it on stdin (`send --secret-stdin --from <channel>`),
+ * the MCP tools have no way to reach it, and `send --text` still refuses here.
+ *
+ * - Only at a prompt asking for a secret, judged on the LAST line, as the
+ *   `--text` refusal is. Looking further back would find a prompt already
+ *   answered, with a shell now below it that would echo the secret.
+ * - Never on an argv, where `ps` shows it: it reaches tmux on stdin
+ *   (`load-buffer -`) and is pasted from a buffer that is deleted at once.
+ * - Checked afterwards: some prompts that ask for a key echo what is typed
+ *   (`read -p "API key: "`), and no tty flag tells them apart beforehand — a
+ *   shell's line editor turns echo off too. If the secret reached the screen,
+ *   the transcript is purged and the call fails, so it stays in no file.
+ * - One audit line per call: time, session, channel, outcome. Never the secret.
+ */
+export async function typeSecret(name: string, raw: Buffer, from: string | undefined): Promise<void> {
+  if (!from || !/^[a-z][a-z0-9-]{0,31}$/.test(from)) {
+    throw new AthError(
+      'secret_from_required',
+      'A relayed secret must name the human channel it came from, e.g. --from telegram. ' +
+        'This path is for a person answering through a relay; agents never type credentials.',
+    );
+  }
+  let end = raw.length;
+  if (end > 0 && raw[end - 1] === 0x0a) end--;
+  if (end > 0 && raw[end - 1] === 0x0d) end--;
+  const secret = raw.subarray(0, end);
+  if (secret.length === 0) throw new AthError('empty_secret', 'Nothing was read on stdin, so nothing was typed.');
+  if (secret.includes(0x0a) || secret.includes(0x0d)) {
+    throw new AthError('multi_line_secret', 'The secret on stdin holds more than one line, so nothing was typed.');
+  }
+  if (secret.length > 4096) throw new AthError('secret_too_long', 'The secret on stdin is over 4 KiB, so nothing was typed.');
+
+  const clean = validateName(name);
+  const outcome = async (code: string): Promise<void> => {
+    const line = `${new Date().toISOString()} secret from ${from} for ${clean}: ${code}\n`;
+    await fs.appendFile(RELAY_AUDIT_LOG, line, { mode: 0o600 }).catch(() => undefined);
+  };
+  try {
+    await get(clean);
+  } catch (e) {
+    if (e instanceof SessionGone) {
+      await outcome('no_session');
+      throw new AthError('no_session', `There is no session "${clean}", so nothing was typed.`);
+    }
+    throw e;
+  }
+  try {
+    await assertRemoteConnected(clean);
+  } catch (e) {
+    await outcome('remote_disconnected');
+    throw e;
+  }
+  const target = tmuxName(clean);
+  await exitCopyMode(target);
+  if (!looksLikeCredentialPrompt(stripAnsi(await capturePane(clean, 6).catch(() => '')))) {
+    await outcome('no_credential_prompt');
+    throw new AthError(
+      'no_credential_prompt',
+      `"${clean}" is not at a password prompt, so nothing was typed: anywhere else the ` +
+        `secret could be shown on screen and kept in the transcript.`,
+    );
+  }
+
+  const before = await fs.stat(logPath(clean)).then((st) => st.size).catch(() => 0);
+  const buffer = `ath-secret-${randomToken()}`;
+  try {
+    await tmuxInput(['load-buffer', '-b', buffer, '-'], secret);
+    await tmux(['paste-buffer', '-d', '-b', buffer, '-t', target]);
+    await tmux(['send-keys', '-t', target, 'Enter']);
+  } finally {
+    await tmux(['delete-buffer', '-b', buffer], { allowFail: true });
+  }
+
+  // Did it reach the screen? Read what the pane printed since, and the screen.
+  await sleep(400);
+  const text = secret.toString('utf8');
+  const printed = await fs
+    .readFile(logPath(clean))
+    .then((b) => b.subarray(Math.min(before, b.length)))
+    .catch(() => Buffer.alloc(0));
+  const screen = stripAnsi(await capturePane(clean, 60).catch(() => ''));
+  if (printed.includes(secret) || screen.includes(text)) {
+    await purgeLog(clean).catch(() => undefined);
+    await tmux(['clear-history', '-t', target], { allowFail: true });
+    await outcome('secret_echoed');
+    throw new AthError(
+      'secret_echoed',
+      `The program in "${clean}" displayed what was typed, so the secret was on screen. ` +
+        `The transcript and scrollback were purged; treat that secret as exposed.`,
+    );
+  }
+  await outcome('typed');
 }
 
 export async function waitForShell(name: string, timeoutMs = 4000): Promise<boolean> {

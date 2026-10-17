@@ -54,6 +54,7 @@ export {
 } from './state';
 export {
   assertNotCredentialPrompt,
+  typeSecret,
   installHelper,
   assertRemoteConnected,
   capturePane,
