@@ -1,5 +1,8 @@
 export * from './types';
 export * from './errors';
+export { probeCompletion, waitCompletion, classifyCompletion, completionTimeoutNote, completionUnknownNote,
+  COMPLETION_DIR, COMPLETION_TTL_MS, DISPATCH_TTL_MS } from './completion';
+export type { CompletionStatus, CompletionOutcome, CompletionEvidence } from './completion';
 export {
   ATH_HOME,
   LOG_DIR,

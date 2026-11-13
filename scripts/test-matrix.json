@@ -12,6 +12,7 @@
         "NESTING",
         "CONTRACT",
         "REGRESSION",
+        "COMPLETION",
         "LOCAL"
       ],
       "how": "verify.sh --local",

@@ -310,6 +310,8 @@ export const TOOL_DEFINITIONS = [
       'second, which also tightens the duration bracket you get back.  It returns the moment the command finishes, is ' +
       'interrupted, or the session dies — and if nobody has answered within the (short) timeout ' +
       'it returns `outcome: "still_waiting"`, which is NOT a failure: the request stays open. ' +
+      'No wake subscription survives a timeout: wake_delivery is "none". A supporting host must ' +
+      'own a background metadata waiter if it should resume you automatically. ' +
       'Read the outcome field, not just the text; "interrupted" and "still_waiting" are not ' +
       'answers. Tell the user what you need BEFORE calling this. ' +
       // The advice above widened to "any started job"; without this sentence it

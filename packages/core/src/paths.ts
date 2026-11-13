@@ -111,6 +111,14 @@ export const ATH_ARTIFACTS: readonly AthArtifact[] = [
     bounded: 'older than 6h, swept when a session is next created',
   },
   {
+    name: 'completion/',
+    absolute: path.join(ATH_HOME, 'completion'),
+    holds: 'per-handle dispatch identity and completion metadata. No command text, output or credentials',
+    purged: false,
+    sensitive: true,
+    bounded: 'dispatch observation expires after 24h; completed results replay for 1h; files older than 48h swept on dispatch',
+  },
+  {
     name: 'requests/',
     absolute: path.join(ATH_HOME, 'requests'),
     holds: 'open and recently-answered human requests. The reason text QUOTES the command',

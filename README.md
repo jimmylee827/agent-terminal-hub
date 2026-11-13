@@ -166,6 +166,70 @@ up in practice.
 
 ---
 
+## Completion callbacks for client integrations
+
+An ordinary MCP `await_human` is bounded (45 seconds by default, at most 120).
+After a timeout it returns `wake_delivery: "none"`: no subscription survives the
+call. A timeout does **not** prove somebody still owes a password. Automatic
+continuation needs a supporting host to retain the command's owner and run a
+background waiter; MCP notifications must not be assumed to wake every client.
+Regular CLI, MCP and VS Code workflows do not opt into a new subscription.
+
+Before launching a metadata observer, probe the executable:
+
+```sh
+ath completion-protocol --json
+# {"schema_version":1,"metadata_only":true,"per_handle":true}
+ath await build --handle 012345abcdef --json --metadata-only --timeout-seconds 1800
+```
+
+**Require the capability response first.** Older versions ignore unknown flags
+on `await` and may print command output instead. The capability command itself
+never reads a session or transcript. The new waiter requires an explicit
+session and 12-hex command handle, emits exactly one allowlisted JSON object,
+and never emits command text, output, reasons, environment, paths or credentials.
+`--timeout-seconds 0` takes one bounded snapshot; `timeout` means an observer
+deadline, not command failure or a statement about human input.
+
+The v1 fields are `schema_version`, `session`, `handle`, `outcome`, `evidence`,
+`exit_code` (number or null), `next_offset` (number or null), `observed_at` (epoch
+milliseconds), and, when available, `completion_id`, `took_seconds`, `expires_at`,
+`replayed`, and a fixed `error_code`. The cursor is a session observation offset,
+not an exact end-of-command boundary; a separate, deliberate `poll` collects output.
+
+| Outcome | Evidence | Interpretation |
+|---|---|---|
+| `done` / `finished_nonzero` / `interrupted` | `end_marker` | Exit 0 / another code / 130 or 143. Exit 1 is ambiguous, including sudo trapping an interrupt. |
+| `shell_exited` | `shell_exit` | Shell ended; its status may be known. Not ordinary completion, even with exit 0. |
+| `remote_disconnected` | `remote_disconnect` | Transport ended; command status is null. |
+| `command_gone` | `command_gone` | Frame lost; no recoverable status. |
+| `session_gone` | `session_gone` | Original session no longer exists, including same-name replacement. |
+| `unknown_handle` / `outcome_unavailable` | `none` | No matching dispatch record / expired or unrecoverable evidence. Do not adopt the latest command. |
+| `timeout` / `observer_error` | `none` | Observer deadline / observation failure. Neither means “waiting for your password”. |
+
+In this opt-in JSON mode the **observer process** exits 0 for a valid observation,
+including command failure or timeout, 1 for an observation error, and 2 for bad
+arguments. The command's exit status is data, never the observer's exit status.
+Legacy text-mode `await` retains its command-exit-code convention; an unknown
+status is reported explicitly rather than converted to success.
+
+Dispatch records in local `~/.ath/completion/` bind each handle to its session
+incarnation. Pending observation expires after 24 hours. Once observed, terminal
+metadata is replayable for one hour, with a stable `completion_id` for deduplication,
+even after transcript purge or session removal. Expired evidence is explicit;
+records/tombstones older than 48 hours are swept on dispatch. This directory is
+independent of the six-hour `rc/` reaper and contains no command/output text.
+Handles dispatched by older builds return `unknown_handle` on this new surface.
+This is a bounded observation record, not a permanent audit log or a daemon:
+if nothing observes an ending before its terminal marker is lost, the hub cannot
+reconstruct it. A new agent dispatch harvests its predecessor before log rotation.
+
+The host owns durable routing, restart recovery and deduplication. Preserve the
+original conversation/session identity, queue rather than interrupt a busy agent,
+and never deliver an old callback to a replacement conversation after reset/stop.
+Timeouts may re-arm **observation of the same handle** without a model turn;
+no outcome automatically reruns a privileged command or proves password entry.
+
 ## What gets recorded, exactly
 
 Every session is written to `~/.ath/log/<name>.log` — the commands and their

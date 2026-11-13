@@ -580,7 +580,7 @@ chk "doctor --artifacts lists all ten" "10" \
 # Every directory the hub actually creates must appear in that enumeration.
 # This is the check the ATH_ARTIFACTS comment promises: the list is hand-written
 # beside the code that creates these paths, so nothing stops the two diverging.
-for d in log rc requests claim election lock ssh; do
+for d in log rc completion requests claim election lock ssh; do
   chk "artifact list covers $d/" "yes" \
       "$(printf '%s' "$DOUT" | grep -q "^  $d/" && echo yes || echo no)"
 done
@@ -6187,6 +6187,7 @@ fi
 if [ "$DO_LOCAL" = "1" ]; then
   echo "═══ REGRESSION SUITE ═══"
   guarded "REGRESSION" - bash "$0" --suite-only
+  guarded "COMPLETION" - node "$GATE_ROOT/scripts/completioncheck.js" "$(mktemp -d)"
   # The edge-case BATTERY is the expensive tail and the one part `--fast` drops.
   #
   # Measured, rather than guessed: NESTING 18s, CONTRACT 102s, REGRESSION 161s

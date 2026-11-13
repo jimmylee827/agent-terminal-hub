@@ -1,4 +1,11 @@
 import { execFile } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+const observerSignal = new AsyncLocalStorage<AbortSignal>();
+/** Scope cancellation to a metadata observer, never another caller's command. */
+export function withObserverSignal<T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> {
+  return observerSignal.run(signal, body);
+}
 import { existsSync } from 'node:fs';
 import { promisify } from 'node:util';
 
@@ -79,6 +86,7 @@ export async function tmux(args: string[], opts: { allowFail?: boolean } = {}): 
     const { stdout, stderr } = await execFileAsync(bin, full, {
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
+      signal: observerSignal.getStore(),
     });
     return { stdout, stderr };
   } catch (err) {

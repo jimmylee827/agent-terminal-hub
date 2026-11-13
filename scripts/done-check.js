@@ -286,7 +286,7 @@ function selftest() {
       fs.writeFileSync(path.join(dir, '.verify', 'runs', `r${n++}.tsv`), lines.join('\n') + '\n');
     };
     const clear = () => fs.rmSync(path.join(dir, '.verify', 'runs'), { recursive: true, force: true }) || fs.mkdirSync(path.join(dir, '.verify', 'runs'));
-    const local = ['NESTING\t-\tok', 'CONTRACT\t-\tok', 'REGRESSION\t-\tok', 'LOCAL\t-\tok'];
+    const local = ['NESTING\t-\tok', 'CONTRACT\t-\tok', 'REGRESSION\t-\tok', 'COMPLETION\t-\tok', 'LOCAL\t-\tok'];
     const code = () => check(dir, { quiet: true }).code;
 
     record([...local, 'REMOTE lin\tlin\tok', 'WINDOWS w11\tw11\tok', 'WINDOWS w10 (light)\tw10\tok']);

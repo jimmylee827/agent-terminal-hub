@@ -11,6 +11,9 @@ import {
   attachedClientsNote,
   AthError,
   commandOutcome,
+  classifyCompletion,
+  completionTimeoutNote,
+  waitCompletion,
   type CommandOutcome,
   compoundExitCaveat,
   create,
@@ -1270,6 +1273,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       if (!handle) {
         return json({
           outcome: 'nothing_pending',
+          wake_delivery: 'none',
           note:
             `Nothing in "${session}" has a command to wait on. If you started one with \`start\`, ` +
             `pass its handle.`,
@@ -1279,23 +1283,33 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       // tmux; if that stalls, an unguarded await sits inside it forever and the
       // deadline below is never even evaluated. Racing each attempt against the
       // remaining time means the tool always returns something.
-      const withDeadline = async <T>(p: Promise<T>): Promise<T | undefined> =>
-        Promise.race([
-          p.catch(() => undefined),
-          new Promise<undefined>((r) => setTimeout(() => r(undefined), Math.max(1000, deadline - Date.now()))),
-        ]);
+      const withDeadline = async <T>(p: Promise<T>): Promise<T | undefined> => {
+        let timer: NodeJS.Timeout | undefined;
+        try {
+          return await Promise.race([
+            p.catch(() => undefined),
+            new Promise<undefined>((r) => {
+              timer = setTimeout(() => r(undefined), Math.max(1, deadline - Date.now()));
+            }),
+          ]);
+        } finally { if (timer) clearTimeout(timer); }
+      };
 
       for (;;) {
-        const alive = (await withDeadline(get(session).then(() => true))) ?? false;
+        const snapshot = await withDeadline(get(session));
+        const alive = snapshot !== undefined;
         if (!alive && Date.now() < deadline) {
-          return json({ outcome: 'session_gone', note: 'The session died; any answer was lost.' });
+          // A saved terminal result outranks the later disappearance of its session.
+          const saved = await withDeadline(waitCompletion(session, handle, 0));
+          if (!saved) return json({ session, handle, outcome: 'observer_error', exit_code: null,
+            wake_delivery: 'none', note: completionTimeoutNote() });
+          return json({ ...saved,
+            ...(saved.outcome === 'unknown_handle' ? { outcome: 'session_gone', evidence: 'session_gone' } : {}),
+            wake_delivery: 'none' });
         }
         // Sampled every pass: a command that parks and is answered between two
         // polls leaves no trace in either the request list or the final result.
-        if (!parkedDuringWait) {
-          const st = await get(session).catch(() => undefined);
-          if (st?.state === 'needs-input') parkedDuringWait = true;
-        }
+        if (snapshot?.state === 'needs-input') parkedDuringWait = true;
         // max_bytes, because this is now recommended for ANY long job.
         //
         // Widening the advice without widening the contract is what broke here:
@@ -1314,7 +1328,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           ),
         );
         if (res?.done) {
-          const code = res.exitCode ?? 0;
+          const code = res.exitCode;
+          const classification = classifyCompletion(res);
           // Was a person ever actually needed here? Read BEFORE the resolved
           // requests are reaped, because reaping is what would erase the
           // evidence. `needsInput` catches the case where the command parked and
@@ -1329,10 +1344,11 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
           // so an interrupted credential prompt never shows 130/143. Only
           // exit 0 is safe to state positively.
           const interrupted = code === 130 || code === 143;
-          const answered = code === 0;
+          const answered = classification.outcome === 'done';
           return jsonWithOutput(
             {
-              outcome: answered ? 'done' : interrupted ? 'interrupted' : 'finished_nonzero',
+              ...classification,
+              wake_delivery: 'none',
               exit_code: code,
               // The resize a human caused by attaching, surfaced HERE.
               //
@@ -1432,11 +1448,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
             outcome: 'still_waiting',
             session,
             handle,
-            note:
-              'Nobody has answered yet — this is NOT a failure and the request is still open. ' +
-              'Tell the user what you need and stop. If you are resuming after they said they ' +
-              'answered, call this again, or check with the `poll` tool using this handle. Do ' +
-              'not call it repeatedly in a loop.',
+            wake_delivery: 'none',
+            note: completionTimeoutNote(),
           });
         }
         await new Promise((r) => setTimeout(r, 1000));

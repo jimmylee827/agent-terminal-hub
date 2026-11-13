@@ -15,6 +15,9 @@ import {
   SOCKET,
   TMUX_CONF,
   Watcher,
+  waitCompletion,
+  classifyCompletion,
+  completionUnknownNote,
   agentPrompt,
   commandFinished,
   create,
@@ -135,9 +138,10 @@ ${c.bold('Driving a session')}
   ath send <name> --secret-stdin --from CHANNEL
                                    human relay only: types a password read from stdin, only at a password prompt
   ath requests [--clear]           what the hub needs a human for
-  ath await <name> [--handle H]    BLOCK until the human answers (for callbacks)
-       [--text]                    send literal text plus Enter instead
+  ath await <name> [--handle H]    BLOCK until the command ends (for callbacks)
        [--timeout SEC]             default 1800; --timeout-seconds also accepted
+  ath await <name> --handle H --json --metadata-only [--timeout-seconds SEC]
+                                   one status-only JSON object; 0 seconds = snapshot
   ath read <name> [--tail N] [--since N] [--max-bytes N] [--json]
   ath wait <name> [--timeout SEC] [--handle H]
 
@@ -147,6 +151,7 @@ ${c.bold('Humans')}
   ath purge <name> | --all         wipe transcript + request records
   ath purge --dead                 DELETE transcripts of sessions that are gone
   ath watch [--json]               stream state changes
+  ath completion-protocol --json  advertise safe per-handle metadata observation
   ath doctor [--artifacts]         health checks, or everything left on disk
 
 ${c.bold('Exit codes for run')}
@@ -196,6 +201,13 @@ async function main(): Promise<number> {
   }
 
   switch (command) {
+    case 'completion-protocol': {
+      // Safe to probe on an old CLI: unknown commands never dispatch a terminal command.
+      if (!flagBool(flags, 'json') || positional.length || rest ||
+          Object.keys(flags).some((k) => k !== 'json')) return 2;
+      console.log(JSON.stringify({ schema_version: 1, metadata_only: true, per_handle: true }));
+      return 0;
+    }
     case 'new':
     case 'create': {
       const session = await create({
@@ -905,6 +917,26 @@ async function main(): Promise<number> {
     }
 
     case 'await': {
+      // Additive machine protocol. No command output ever crosses this branch.
+      if (flagBool(flags, 'json') || flagBool(flags, 'metadata-only')) {
+        const session = positional[0] ?? '';
+        const handle = flagString(flags, 'handle') ?? '';
+        const timeout = flags['timeout-seconds'] ?? flags.timeout ?? '1800';
+        if (!flagBool(flags, 'json') || !flagBool(flags, 'metadata-only') ||
+            !/^[A-Za-z0-9._-]{1,64}$/.test(session) || !/^[0-9a-f]{12}$/.test(handle) ||
+            typeof timeout !== 'string' || !Number.isFinite(Number(timeout)) || Number(timeout) < 0 ||
+            Object.keys(flags).some((k) => !['json', 'metadata-only', 'handle', 'timeout', 'timeout-seconds'].includes(k)) ||
+            positional.length !== 1 || rest) {
+          console.log(JSON.stringify({ schema_version: 1, session: '', handle: '',
+            outcome: 'observer_error', evidence: 'none', exit_code: null, next_offset: null,
+            observed_at: Date.now(), error_code: 'invalid_arguments' }));
+          return 2;
+        }
+        const result = await waitCompletion(session, handle, Number(timeout));
+        console.log(JSON.stringify(result));
+        // This process reports observation success; the COMMAND's status is data.
+        return result.outcome === 'observer_error' ? 1 : 0;
+      }
       // BLOCK until the human's answer lands, so a caller can be PUSHED to
       // rather than having to poll.
       //
@@ -1096,7 +1128,12 @@ async function main(): Promise<number> {
         }
         if (res?.done) {
           if (res.output) console.log(res.output);
-          const code = res.exitCode ?? 0;
+          const classification = classifyCompletion(res);
+          if (res.exitCode === null || res.remoteDisconnected || res.commandGone || res.shellExited) {
+            console.error(completionUnknownNote(name, classification.outcome, res.exitCode));
+            return res.exitCode ?? 3;
+          }
+          const code = res.exitCode;
           // "PROMPT ANSWERED" IS A CLAIM ABOUT A PERSON. Only make it when a
           // prompt actually existed.
           //

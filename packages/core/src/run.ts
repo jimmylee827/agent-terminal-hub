@@ -58,6 +58,7 @@ import {
 import { ensureControlDir, SSH_FAILED, sshExitIn } from './ssh';
 import { tmux } from './tmux';
 import { clearRequest, listRequests, requestHuman } from './requests';
+import { recordDispatch, readDispatch, recordCompletion, classifyCompletion } from './completion-store';
 import {
   INTERACTIVE_COMMANDS,
   classify,
@@ -348,7 +349,8 @@ async function dispatchedAt(
   }
 }
 
-async function markStarted(nonce: string, offset: number): Promise<void> {
+async function markStarted(nonce: string, offset: number, name?: string): Promise<void> {
+  if (name) await recordDispatch(name, nonce, offset);
   await fs.mkdir(RC_DIR, { recursive: true, mode: 0o700 }).catch(() => undefined);
   await fs
     .writeFile(path.join(RC_DIR, `${nonce}.t`), `${Date.now()} ${offset}`, { mode: 0o600 })
@@ -1338,7 +1340,15 @@ export async function run(
   return withSessionLock(
     clean,
     command,
-    () => runLocked(clean, command, timeoutMs, pollMs, options),
+    async () => {
+      const result = await runLocked(clean, command, timeoutMs, pollMs, options);
+      if (result.handle && !result.timedOut && !result.needsInput) {
+        await saveHandleCompletion(clean, result.handle, result, result.nextOffset ?? null).catch(() => {
+          result.warning = 'completion_metadata_unavailable: command result is valid, but background replay could not be recorded';
+        });
+      }
+      return result;
+    },
     { wait: options.waitForIdle, timeoutMs },
   );
 }
@@ -1371,6 +1381,7 @@ async function runLocked(
 ): Promise<RunResult> {
   const maxBytes = options.maxBytes ?? MAX_RETURN_BYTES;
   let session = await get(clean); // throws SessionGone if killed
+  await preservePreviousCompletion(clean);
 
   if (session.paneDead) {
     await respawn(clean, session.cwd);
@@ -1581,7 +1592,7 @@ async function runLocked(
   const framed = bare !== undefined && (await hooksActive(clean, session));
   // Where this frame begins, for a later `poll`/`wait` of a command that parked:
   // a PowerShell frame is read by replaying it from its start.
-  if (win) await markStarted(nonce, discarded + offset);
+  await markStarted(nonce, discarded + offset, clean);
   if (win) await setMeta(clean, 'wmark', `${nonce} ${startWidth}`).catch(() => undefined);
   let usedFraming = false;
   let enteredUnknownShell = false;
@@ -1722,6 +1733,7 @@ async function runLocked(
     }
     nonce = randomNonce();
     offset = await fileSize(log);
+    await markStarted(nonce, discarded + offset, clean);
     await sendLine(clean, `__ath ${nonce} ${await deliverCommand(clean, command)}`);
     completion = await waitForCompletion(
       clean, timeoutMs, pollMs, log, offset, nonce, outerCommand, baselineShells,
@@ -1795,6 +1807,7 @@ async function runLocked(
       state: 'dead',
       logOffset: discarded + offset,
       nextOffset: await nextOffsetNow(),
+      handle: nonce,
       ...(dropped
         ? { remoteDisconnected: true }
         : {
@@ -2677,6 +2690,7 @@ export async function start(name: string, command: string): Promise<StartResult>
 
   return withSessionLock(clean, command, async () => {
     let session = await get(clean);
+    await preservePreviousCompletion(clean);
     if (session.paneDead) {
       await respawn(clean, session.cwd);
       session = await get(clean);
@@ -2725,7 +2739,7 @@ export async function start(name: string, command: string): Promise<StartResult>
     // Logical, so `poll --since <this>` still resolves after a trim — a long
     // job is exactly the one that trims its own log out from under its handle.
     const offset = await logicalEnd(clean);
-    await markStarted(nonce, offset);
+    await markStarted(nonce, offset, clean);
     // Where the width stood as this job began, for `poll` (see `widthMark`).
     if (win) await setMeta(clean, 'wmark', `${nonce} ${await widthMark(clean, session.paneWidth)}`).catch(() => undefined);
 
@@ -3065,6 +3079,73 @@ async function endedWithoutMarker(
     : { exitCode: null, how: 'remote-dropped' };
 }
 
+/** Metadata observation never reads/replays output or consumes UI notices. */
+export async function handleEvidence(name: string, handle: string, offset: number): Promise<{
+  finished: boolean; exitCode: number | null; seconds?: number;
+  remoteDisconnected?: boolean; shellExited?: boolean; commandGone?: boolean;
+  nextOffset: number; outcomeUnavailable?: boolean;
+}> {
+  const clean = validateName(name);
+  const stat = await fs.stat(logPath(clean)).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return undefined;
+    throw err;
+  });
+  if (!stat) return { finished: false, exitCode: null, nextOffset: 0, outcomeUnavailable: true };
+  const end = await (await endReaderFor(clean))(logPath(clean), handle);
+  const nextOffset = await logicalEnd(clean);
+  if (end) return { finished: true, exitCode: end.code, seconds: end.measuredSeconds, nextOffset };
+  // Metadata only: unlike get()/poll(), this must not capture the pane or replay output.
+  const { stdout } = await tmux(['display-message', '-p', '-t', tmuxName(clean),
+    '#{pane_dead}\x1f#{pane_dead_status}\x1f#{pane_current_command}\x1f#{@ath_remote}\x1f#{@ath_ros}']);
+  const [dead, code, foreground, remote, ros] = stdout.trim().split('\x1f');
+  if (dead === '1') return { finished: true, exitCode: code && Number.isFinite(Number(code)) ? Number(code) : null,
+    shellExited: true, nextOffset };
+  if (remote && !isNesting(foreground ?? '')) {
+    const ended = await remoteShellEnd(clean, ros === 'windows');
+    if (!ended) return { finished: false, exitCode: null, nextOffset, outcomeUnavailable: true };
+    return { finished: true, exitCode: ended.code, nextOffset,
+      ...(ended.dropped ? { remoteDisconnected: true } : { shellExited: true }) };
+  }
+  const sent = await dispatchedAt(handle);
+  if (sent && Date.now() - sent.ms > 3000) {
+    // A foreground shell may be running a script/builtin. Its process NAME is
+    // not proof it returned to a prompt; require a new authenticated prompt frame.
+    const file = logPath(clean);
+    const size = await fileSize(file);
+    const start = Math.max(0, size - MARKER_SCAN_BYTES);
+    const raw = await readLogFrom(file, start);
+    const discarded = await discardedBytes(clean);
+    const agentStart = raw.lastIndexOf(startMarker(handle));
+    const re = /\x1e<ATHS:h[0-9]+>\x1e/g;
+    for (let m = re.exec(raw); m; m = re.exec(raw)) {
+      if (m.index > agentStart && discarded + start + Buffer.byteLength(raw.slice(0, m.index)) > offset) {
+        return { finished: true, exitCode: null, commandGone: true, nextOffset };
+      }
+    }
+  }
+  return { finished: false, exitCode: null, nextOffset };
+}
+
+async function preservePreviousCompletion(name: string): Promise<void> {
+  const handle = await readMeta(name, 'active_handle');
+  if (!/^[0-9a-f]{12}$/.test(handle)) return;
+  // Runtime import avoids a module initialization cycle: the observer uses the
+  // marker readers in this module, but dispatch only calls it after startup.
+  const { waitCompletion } = await import('./completion');
+  await waitCompletion(name, handle, 0);
+}
+
+async function saveHandleCompletion(name: string, handle: string, result: {
+  exitCode: number | null; remoteDisconnected?: boolean; shellExited?: boolean; commandGone?: boolean;
+  elapsedSeconds?: number;
+}, nextOffset: number | null): Promise<void> {
+  const record = await readDispatch(handle);
+  if (!record || record.session !== name) return;
+  await recordCompletion(record, { schema_version: 1, session: name, handle,
+    ...classifyCompletion(result), exit_code: result.exitCode, next_offset: nextOffset,
+    observed_at: Date.now(), ...(result.elapsedSeconds === undefined ? {} : { took_seconds: result.elapsedSeconds }) });
+}
+
 export async function commandFinished(name: string, handle: string): Promise<boolean> {
   return (await commandOutcome(name, handle)).finished;
 }
@@ -3342,6 +3423,10 @@ export async function poll(
   const widthMovedInJob = jobMoved ?? (win && widthChange !== undefined);
 
   const timing = await timingFor(handle, done, end?.measuredSeconds);
+  if (done) await saveHandleCompletion(clean, handle, {
+    exitCode, remoteDisconnected: remoteLost, shellExited: !!shellExited, commandGone: !!commandGone,
+    elapsedSeconds: end?.measuredSeconds,
+  }, at.logicalEnd).catch(() => undefined);
   // Offsets are per SESSION, so `since` from an earlier job is silently valid
   // and silently wrong: it re-reads the previous command's output, which a
   // caller may then attribute to this one. Nothing errored, so nothing warned.

@@ -436,37 +436,38 @@ Your job when it fires:
    you; nothing to poll inside your own turn.
 
    The MCP `await_human` tool is the same idea but **bounded**, because an MCP
-   call is synchronous: it waits a short while and, if nobody has answered yet,
-   returns `outcome: "still_waiting"`. That is NOT a failure and the request
-   stays open — say what you need and stop, rather than calling it again in a
-   loop. To check later whether an answer landed, `poll` the command's handle:
+   call is synchronous: it waits a short while and, without a confirmed outcome,
+   returns `outcome: "still_waiting"`, `wake_delivery: "none"`. No wake subscription
+   survives the call. This is NOT proof that the command is still running or that
+   somebody still owes a password. Say what you need and stop, rather than calling
+   it again in a model loop. To check later whether an answer landed, `poll` the command's handle:
    its exit code is the answer. `requests` listing nothing means none was ever
    filed, not that one was answered.
 
-   **If you have nothing to interleave, end your turn — that is the answer, not
-   a workaround.** A reviewer with plenty of parallel work noted they were only
-   fine because of it: "with nothing else to do I'd have had to choose between
-   stalling and breaking the no-loop rule." Neither. Report which session is
-   waiting and what for, and stop. Being re-invoked after the person answers
-   costs nothing; a burned turn spent looping costs the human a slower reply.
-   And if you have an ordinary shell tool alongside these MCP tools, you are not
-   restricted to the bounded form — run `ath await <session>` there as a
-   background job and let your harness notify you. Using the MCP surface for the
-   session does not mean you must wait through it.
+   **If you have nothing to interleave, end your turn — that is the answer.**
+   Report which session needs input. With an ordinary shell tool you are not
+   limited to the bounded form: run `ath await <session> --handle H` as a
+   background job and let your harness notify you. Without such a task or a
+   supporting host, do not promise automatic resumption.
 
-   Read the exit code, not just the text. `0` or the command's own code means
-   answered; `130`/`143` mean interrupted, NOT answered; `2` means nothing was
+   Integrations check `ath completion-protocol --json` for v1 first (an older CLI
+   ignores the new flags and prints raw output), then run
+   `ath await <session> --handle H --json --metadata-only --timeout-seconds 1800`
+   in the background. It emits one status-only JSON record. The host owns routing,
+   deduplication and re-arming after timeout; see README for outcomes and expiry.
+   Ordinary clients get no automatic wake.
+
+   On legacy text-mode `ath await`, read the exit code, not just the text. `0` or
+   the command's own code reports the command ended, NOT proof a human entered a
+   credential; `130`/`143` mean interrupted; `2` means nothing was
    pending to wait for; `3` means it is no longer waiting and the outcome
    cannot be proved from here — check with `ath read` before assuming either
    way. `3` is not a failure of the command you ran; treating it as one is how
    you end up asking a person to answer something twice.
 
-   Do NOT poll `ath requests` in a loop waiting for an answer. It is a pull-only
-   view: it tells you the state when you look, and looking repeatedly burns your
-   turn doing nothing. Arm the watch above instead — that is the whole point of
-   this step. (Resolved requests ARE retained for an hour with their exit code,
-   so a look after the fact does find them; an earlier version cleared them
-   immediately, which is why older advice says a loop waits forever.)
+   Do NOT poll `ath requests` in a model loop. It is pull-only; resolved records
+   are retained for an hour. Neither an empty listing nor `resolvedAt` proves
+   credential entry. Observe the command's handle, not the request's disappearance.
 
 1. **Relay it.** Say plainly which session is waiting and for what:
    *"`vpn` is waiting for your sudo password — `ath attach vpn`, type it, then
@@ -670,6 +671,7 @@ happened:
 | --- | --- |
 | `~/.ath/rc/` | exit codes and timings per command. No command text. Reaped after 6h |
 | `~/.ath/notify.log` | session names and request ids. Rotated at 1 MiB |
+| `~/.ath/completion/` | handle/session identity and status metadata only, no command/output/credential text. Pending expires after 24h, completed replay after 1h; files older than 48h swept on dispatch |
 
 `requests/` was on that list until it was fixed: purging the log while keeping
 a record that quotes the command back is the opposite of what the word means.
@@ -678,7 +680,7 @@ a record that quotes the command back is the opposite of what the word means.
 that no longer exist. `log/` is bounded per file, not in aggregate, so it is the
 one directory that otherwise only grows.
 
-`ath doctor --artifacts` prints the full list of ten, with sizes and what each
+`ath doctor --artifacts` prints the full list, with sizes and what each
 one is bounded by, plus what is left on a REMOTE host. Use it when the human
 asks what the hub left behind; do not guess from this table, which names only
 what survives.
