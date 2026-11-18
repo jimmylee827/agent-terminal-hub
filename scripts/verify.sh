@@ -335,6 +335,17 @@ chk "relay: credential_prompt clears after"      "idle:false" "$(sstate)"
 $ATH start "$S" -- "bash -c 'read -r -p \"Enter API key: \" k; echo got-key'" >/dev/null 2>&1; await_state "needs-input:true"
 chk "relay: a prompt that echoes is caught"      "[secret_echoed]" "$(relay "$SEC")"
 chk "relay: and the secret is in no hub file"    "0" "$(grep -rl -- "$SEC" "${ATH_HOME:-$HOME/.ath}" 2>/dev/null | wc -l | tr -d ' ')"
+await_state "idle:false"
+# Pre-existing pane text is not evidence of a new echo. Print the fixture in
+# two pieces so it appears in the output, not in the echoed command itself.
+STALE="relay-scroll-$$"
+$ATH run "$S" -- "printf '%s%s\\n' relay-scroll- '$$'" >/dev/null 2>&1
+$ATH start "$S" -- "bash -c 'read -rs -p \"Samba password (no echo): \" p; printf \"\\nrelay-complete\\n\"'" >/dev/null 2>&1; await_state "needs-input:true"
+chk "relay: old pane text is visible before send" "yes" "$(pane_now | grep -qF "$STALE" && echo yes || echo no)"
+chk "relay: old pane text is not a fresh echo" "typed" "$(printf '%s\n' "$STALE" | $ATH send "$S" --secret-stdin --from test >/dev/null 2>&1 && echo typed || echo failed)"
+await_state "idle:false"
+$ATH start "$S" -- "bash -c 'read -r -p \"Samba password (no echo): \" p; printf \"\\nrelay-complete\\n\"'" >/dev/null 2>&1; await_state "needs-input:true"
+chk "relay: a fresh echo is caught with old text" "[secret_echoed]" "$(relay "$STALE")"
 command rm -rf "$TW"
 
 # ---- a remote shell that exits, and a link that drops ------------------------

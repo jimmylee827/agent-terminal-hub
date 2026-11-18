@@ -898,7 +898,8 @@ export async function typeSecret(name: string, raw: Buffer, from: string | undef
   }
   const target = tmuxName(clean);
   await exitCopyMode(target);
-  if (!looksLikeCredentialPrompt(stripAnsi(await capturePane(clean, 6).catch(() => '')))) {
+  const screenBefore = await capturePane(clean, 60).catch(() => '');
+  if (!looksLikeCredentialPrompt(await capturePane(clean, 6).catch(() => ''))) {
     await outcome('no_credential_prompt');
     throw new AthError(
       'no_credential_prompt',
@@ -924,8 +925,12 @@ export async function typeSecret(name: string, raw: Buffer, from: string | undef
     .readFile(logPath(clean))
     .then((b) => b.subarray(Math.min(before, b.length)))
     .catch(() => Buffer.alloc(0));
-  const screen = stripAnsi(await capturePane(clean, 60).catch(() => ''));
-  if (printed.includes(secret) || screen.includes(text)) {
+  const screen = await capturePane(clean, 60).catch(() => '');
+  // Scrollback can already contain this text. Only a new occurrence is
+  // evidence from the pane; the raw log also catches fresh output if an old
+  // occurrence scrolls out while the new one scrolls in.
+  const newScreenMatch = screen.split(text).length > screenBefore.split(text).length;
+  if (printed.includes(secret) || newScreenMatch) {
     await purgeLog(clean).catch(() => undefined);
     await tmux(['clear-history', '-t', target], { allowFail: true });
     await outcome('secret_echoed');
